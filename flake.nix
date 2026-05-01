@@ -24,32 +24,32 @@
             zlib
             ncurses
             libxml2
+            python3
           ];
 
           profileScript = ''
             export PROJECT_ROOT="$(pwd)"
-            export MODULAR_HOME="$PROJECT_ROOT/.modular-home"
-            export PATH="$MODULAR_HOME/pkg/packages.modular.com_mojo/bin:$MODULAR_HOME/bin:$PATH"
+            export HOME="$PROJECT_ROOT/.hermetic_home"
+            export PATH="$HOME/.magic/bin:$PATH"
             export UV_PROJECT_ENVIRONMENT="$PROJECT_ROOT/.venv"
 
-            # Automated Bootstrapping: If Mojo isn't installed locally, install it
-            if [ ! -f "$MODULAR_HOME/pkg/packages.modular.com_mojo/bin/mojo" ]; then
-              echo "Mojo not found in local hermetic environment. Bootstrapping..."
+            mkdir -p "$HOME"
 
-              # Download and execute the modular installer script
-              curl -ssL https://magic.modular.com/b0a703d8-fb5a-47d0-a05d-e0cb20e3a6fa > install_mod.sh
-              chmod +x install_mod.sh
-              ./install_mod.sh
-              rm install_mod.sh
+            bootstrap_esper() {
+              echo "Bootstrapping Esper environment..."
+              # using bash to pipe curl stream
+              curl -ssL https://magic.modular.com | /usr/bin/env bash
+              export PATH="$HOME/.magic/bin:$PATH"
+              magic install mojo
+              echo "Esper Hermetic Environment Initialized."
+            }
 
-              # Use the newly installed modular CLI to install mojo
-              $MODULAR_HOME/bin/modular install mojo
-            fi
+            export -f bootstrap_esper
 
-            echo "Esper Hermetic Environment Initialized."
+            echo "Esper Environment Loaded."
+            echo "Run 'bootstrap_esper' to install Mojo and configure the environment."
           '';
 
-          # Determine the appropriate shell based on the OS
           shell = if pkgs.stdenv.isLinux then
             (pkgs.buildFHSUserEnv {
               name = "esper-fhs-env";
