@@ -15,16 +15,9 @@ fn evaluate_primitives(perturbed_weights: UnsafePointer[Float32], target: Tensor
     # forward pass executed to get the prediction grid. For the prototype, we treat the
     # weights themselves as the raw output state of the primitive to map the concept.
 
-    # We wrap the UnsafePointer in a temporary Tensor view to feed to calculate_fitness
-    # This avoids doing a deep copy of the array.
-    # Note: In real Mojo, one must be careful about memory lifetimes, but since this
-    # is synchronous within the loop, the Tensor view is safe.
-    var pred_tensor = Tensor[DType.float32](
-        perturbed_weights,
-        target.shape()
-    )
-
-    return calculate_fitness(pred_tensor, target)
+    # We pass the underlying raw pointer of the target tensor to the fitness function
+    # to avoid creating unsafe Tensor wrap views that could trigger double frees.
+    return calculate_fitness(perturbed_weights, target.unsafe_ptr(), size)
 
 # ==========================================
 # ESWorkspace: Persistent Optimization State

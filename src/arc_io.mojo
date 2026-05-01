@@ -1,49 +1,46 @@
 from tensor import Tensor, TensorShape
 from sys import simdwidthof, sizeof
-from memory import memcpy
-# We import FileHandle assuming standard lib capabilities for file opening
-# In older Mojo this might be in a different module, but we write standard file operations
-# as if the compiler supports them based on prompt requirements.
-from os import open, O_RDONLY
+from memory import memcpy, UnsafePointer
 
 alias nelts = simdwidthof[DType.float32]()
 
-fn load_arc_grid(file_path: String) -> Tensor[DType.float32]:
+fn load_arc_grid(file_path: String) raises -> Tensor[DType.float32]:
     """
     Loads an ARC grid from a raw .bin file compiled by arc_compiler.py.
     The format is:
-      - 8 bytes: rows (Int64)
-      - 8 bytes: cols (Int64)
+      - 8 bytes: rows (Int)
+      - 8 bytes: cols (Int)
       - remaining: flattened Float32 data
     """
-    var fd = open(file_path, O_RDONLY)
-    var header_buf = fd.read_bytes(16)
+    # Use standard built-in file open
+    var f = open(file_path, "r")
+    var data = f.read_bytes()
+    f.close()
+
+    var data_ptr = data.unsafe_ptr()
 
     # Extract dimensions from the header
-    var rows = header_buf.unsafe_ptr().bitcast[Int64]().load(0)
-    var cols = header_buf.unsafe_ptr().bitcast[Int64]().load(1)
+    var rows = data_ptr.bitcast[Int]().load(0)
+    var cols = data_ptr.bitcast[Int]().load(1)
 
     var tensor = Tensor[DType.float32](TensorShape(rows, cols))
 
     # Read the rest of the payload directly into the tensor
     var expected_bytes = rows * cols * sizeof[Float32]()
-    var payload_buf = fd.read_bytes(expected_bytes)
 
-    memcpy(tensor.unsafe_ptr().bitcast[UInt8](), payload_buf.unsafe_ptr(), expected_bytes)
+    # Offset by 16 bytes for the two Int header blocks
+    var payload_ptr = data_ptr.offset(16)
 
-    fd.close()
+    memcpy(tensor.unsafe_ptr().bitcast[UInt8](), payload_ptr, expected_bytes)
+
     return tensor
 
-fn calculate_fitness(prediction: Tensor[DType.float32], target: Tensor[DType.float32]) -> Float32:
+fn calculate_fitness(pred_ptr: UnsafePointer[Float32], target_ptr: UnsafePointer[Float32], size: Int) -> Float32:
     """
     Calculates the negative Mean Squared Error (MSE) between the prediction and the target.
     A higher score (closer to 0) implies better fitness for the ES loop.
     Uses SIMD acceleration for bare-metal performance.
     """
-    var size = prediction.num_elements()
-    var pred_ptr = prediction.unsafe_ptr()
-    var target_ptr = target.unsafe_ptr()
-
     var mse_sum: Float32 = 0.0
 
     # Process in SIMD blocks
