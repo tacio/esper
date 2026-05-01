@@ -7,7 +7,7 @@
 
   outputs = { self, nixpkgs }:
     let
-      supportedSystems = [ "x86_64-linux" "aarch64-linux" ];
+      supportedSystems = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
       forAllSystems = nixpkgs.lib.genAttrs supportedSystems;
       nixpkgsFor = forAllSystems (system: import nixpkgs { inherit system; });
     in
@@ -16,52 +16,54 @@
         let
           pkgs = nixpkgsFor.${system};
 
-          # Create a Filesystem Hierarchy Standard (FHS) chroot
-          # Required because Mojo provides pre-compiled ELF binaries that expect
-          # standard Linux paths (/lib64/ld-linux-x86-64.so.2, etc.)
-          esperEnv = pkgs.buildFHSUserEnv {
-            name = "esper-fhs-env";
+          commonPkgs = with pkgs; [
+            uv
+            curl
+            cacert
+            git
+            zlib
+            ncurses
+            libxml2
+          ];
 
-            # Target packages that the FHS environment will have access to
-            targetPkgs = pkgs: with pkgs; [
-              uv
-              curl
-              git
-              glibc
-              zlib
-              ncurses
-              libxml2
-            ];
+          profileScript = ''
+            export PROJECT_ROOT="$(pwd)"
+            export MODULAR_HOME="$PROJECT_ROOT/.modular-home"
+            export PATH="$MODULAR_HOME/pkg/packages.modular.com_mojo/bin:$MODULAR_HOME/bin:$PATH"
+            export UV_PROJECT_ENVIRONMENT="$PROJECT_ROOT/.venv"
 
-            # Initialization script runs inside the FHS chroot
-            profile = ''
-              export PROJECT_ROOT="$(pwd)"
-              export MODULAR_HOME="$PROJECT_ROOT/.modular-home"
-              export PATH="$MODULAR_HOME/pkg/packages.modular.com_mojo/bin:$MODULAR_HOME/bin:$PATH"
-              export UV_PROJECT_ENVIRONMENT="$PROJECT_ROOT/.venv"
+            # Automated Bootstrapping: If Mojo isn't installed locally, install it
+            if [ ! -f "$MODULAR_HOME/pkg/packages.modular.com_mojo/bin/mojo" ]; then
+              echo "Mojo not found in local hermetic environment. Bootstrapping..."
 
-              # Automated Bootstrapping: If Mojo isn't installed locally, install it
-              if [ ! -f "$MODULAR_HOME/pkg/packages.modular.com_mojo/bin/mojo" ]; then
-                echo "Mojo not found in local hermetic environment. Bootstrapping..."
+              # Download and execute the modular installer script
+              curl -ssL https://magic.modular.com/b0a703d8-fb5a-47d0-a05d-e0cb20e3a6fa > install_mod.sh
+              chmod +x install_mod.sh
+              ./install_mod.sh
+              rm install_mod.sh
 
-                # Download and execute the modular installer script
-                # (Assuming the installer does not implicitly use forbidden shell keywords)
-                curl -ssL https://magic.modular.com/b0a703d8-fb5a-47d0-a05d-e0cb20e3a6fa > install_mod.sh
-                chmod +x install_mod.sh
-                ./install_mod.sh
-                rm install_mod.sh
+              # Use the newly installed modular CLI to install mojo
+              $MODULAR_HOME/bin/modular install mojo
+            fi
 
-                # Use the newly installed modular CLI to install mojo
-                $MODULAR_HOME/bin/modular install mojo
-              fi
+            echo "Esper Hermetic Environment Initialized."
+          '';
 
-              echo "Esper Hermetic Environment Initialized."
-            '';
-          };
+          # Determine the appropriate shell based on the OS
+          shell = if pkgs.stdenv.isLinux then
+            (pkgs.buildFHSUserEnv {
+              name = "esper-fhs-env";
+              targetPkgs = pkgs: commonPkgs ++ [ pkgs.glibc ];
+              profile = profileScript;
+            }).env
+          else
+            pkgs.mkShell {
+              buildInputs = commonPkgs;
+              shellHook = profileScript;
+            };
         in
         {
-          # The default shell is simply executing the FHS environment
-          default = esperEnv.env;
+          default = shell;
         }
       );
     };
