@@ -1,143 +1,151 @@
-from memory import UnsafePointer, memset_zero
-from sys import simdwidthof, sizeof
-from math import fma
-from tensor import Tensor, TensorShape
+from std.memory import alloc, memset_zero, UnsafePointer
+from std.sys import simd_width_of, size_of
+from std.math import fma
+from std.random import randn_float64
 
-# Import the actual fitness calculator we built
+# The real fitness calculator (negative MSE).
 from arc_io import calculate_fitness
 
-# Define SIMD width based on the hardware target (e.g., AVX-512 = 16 float32s)
-alias nelts = simdwidthof[DType.float32]()
+comptime nelts = simd_width_of[DType.float32]()
 
-# Replaces the mock placeholder to actually evaluate using the imported function
-fn evaluate_primitives(perturbed_weights: UnsafePointer[Float32], target: Tensor[DType.float32], size: Int) -> Float32:
-    # In a full model, this perturbed pointer would be loaded into the Expert and a full
-    # forward pass executed to get the prediction grid. For the prototype, we treat the
-    # weights themselves as the raw output state of the primitive to map the concept.
 
-    # We pass the underlying raw pointer of the target tensor to the fitness function
-    # to avoid creating unsafe Tensor wrap views that could trigger double frees.
-    return calculate_fitness(perturbed_weights, target.unsafe_ptr(), size)
+# Map a candidate fast-weight vector to a fitness score. For this prototype the
+# perturbed weights are treated as the raw output state of the primitive and
+# scored directly against the target (an identity surrogate model). A full
+# implementation would load them into a HopeNode and run apply_primitive first.
+def evaluate_primitives(
+    perturbed_weights: UnsafePointer[Float32, MutAnyOrigin],
+    target: UnsafePointer[Float32, MutAnyOrigin],
+    size: Int,
+) -> Float32:
+    return calculate_fitness(perturbed_weights, target, size)
+
 
 # ==========================================
 # ESWorkspace: Persistent Optimization State
 # ==========================================
-struct ESWorkspace:
-    var grad_estimate: UnsafePointer[Float32]
-    var perturbed_weights: UnsafePointer[Float32]
-    var epsilon: UnsafePointer[Float32]
+# Pre-allocated, reusable scratch so the ES hot loop performs zero per-iteration
+# allocation. Owns three raw buffers; freed once in __del__.
+struct ESWorkspace(Movable):
+    var grad_estimate: UnsafePointer[Float32, MutAnyOrigin]
+    var epsilon: UnsafePointer[Float32, MutAnyOrigin]
+    var perturbed_weights: UnsafePointer[Float32, MutAnyOrigin]
     var size: Int
 
-    fn __init__(inout self, size: Int):
+    def __init__(out self, size: Int):
         self.size = size
-        self.grad_estimate = UnsafePointer[Float32].alloc(size)
-        self.perturbed_weights = UnsafePointer[Float32].alloc(size)
-        self.epsilon = UnsafePointer[Float32].alloc(size)
+        self.grad_estimate = alloc[Float32](size)
+        self.epsilon = alloc[Float32](size)
+        self.perturbed_weights = alloc[Float32](size)
 
-    # Move semantics to prevent double frees and safely transfer ownership
-    fn __moveinit__(inout self, owned existing: Self):
-        self.size = existing.size
-        self.grad_estimate = existing.grad_estimate
-        self.perturbed_weights = existing.perturbed_weights
-        self.epsilon = existing.epsilon
+    def __del__(deinit self):
+        # Consuming moves suppress the source destructor, so each buffer is live
+        # exactly once here — free unconditionally.
+        self.grad_estimate.free()
+        self.epsilon.free()
+        self.perturbed_weights.free()
 
-        # Nullify old pointers
-        existing.size = 0
-        existing.grad_estimate = UnsafePointer[Float32]()
-        existing.perturbed_weights = UnsafePointer[Float32]()
-        existing.epsilon = UnsafePointer[Float32]()
-
-    fn __del__(owned self):
-        if self.grad_estimate:
-            self.grad_estimate.free()
-        if self.perturbed_weights:
-            self.perturbed_weights.free()
-        if self.epsilon:
-            self.epsilon.free()
 
 # ==========================================
-# Zero-Allocation Execution Loop
+# Zero-Allocation Evolution Strategy Update
 # ==========================================
-fn evolve_fast_weights(
-    fast_weights: UnsafePointer[Float32],
-    inout workspace: ESWorkspace,
-    target: Tensor[DType.float32],
+def evolve_fast_weights(
+    fast_weights: UnsafePointer[Float32, MutAnyOrigin],
+    mut workspace: ESWorkspace,
+    target: UnsafePointer[Float32, MutAnyOrigin],
     N: Int,
     alpha: Float32,
-    sigma: Float32
+    sigma: Float32,
 ):
-    """
-    Derivative-free Evolution Strategy update for Fast Weights.
-    W_fast = W_fast + alpha * (1 / (N * sigma)) * sum(F_i * epsilon_i)
-    Reuses pre-allocated ESWorkspace to avoid dynamic allocation overhead.
+    """Derivative-free Evolution Strategy update for the fast weights.
+
+    Uses real Gaussian noise with antithetic (mirrored) sampling, which both
+    halves the estimator variance and centres the fitness (the +/- pair cancels
+    any baseline), so no separate fitness normalisation is required:
+
+        grad      = sum_i (F(w + sigma*eps_i) - F(w - sigma*eps_i)) * eps_i
+        W_fast   += alpha / (2*N*sigma) * grad
+
+    Reuses the pre-allocated ESWorkspace — no allocation in the loop.
     """
     var size = workspace.size
 
-    # Rapidly zero out the grad_estimate buffer using native byte clearing
-    memset_zero(workspace.grad_estimate.bitcast[UInt8](), size * sizeof[Float32]())
+    # Guard degenerate configurations that would divide by zero or do nothing.
+    if N <= 0 or size <= 0 or sigma == 0.0:
+        return
 
-    # Generate N perturbed weight vectors
-    for i in range(N):
-        # 1. Generate Noise and Perturb Weights
+    var remainder = size % nelts
+    var rem_start = size - remainder
+
+    # Zero the gradient accumulator.
+    memset_zero(workspace.grad_estimate, size)
+
+    for _ in range(N):
+        # 1. Draw fresh Gaussian noise. RNG is inherently scalar; the arithmetic
+        #    that follows stays vectorized + FMA.
+        for j in range(size):
+            workspace.epsilon[j] = Float32(randn_float64(0.0, 1.0))
+
+        # 2a. perturbed = w + sigma * eps, then evaluate F+.
+        var pos_sigma = SIMD[DType.float32, nelts](sigma)
         for j in range(0, size - nelts + 1, nelts):
             var w_vec = fast_weights.load[width=nelts](j)
-
-            # Mock RNG for epsilon (in practice, use a proper random normal generator)
-            var eps_vec = SIMD[DType.float32, nelts](0.1)
-            workspace.epsilon.store[width=nelts](j, eps_vec)
-
-            # Perturbed weights = w + sigma * epsilon
-            var perturbed_vec = fma(eps_vec, SIMD[DType.float32, nelts](sigma), w_vec)
-            workspace.perturbed_weights.store[width=nelts](j, perturbed_vec)
-
-        # Handle remainder for perturbation
-        var remainder = size % nelts
+            var eps_vec = workspace.epsilon.load[width=nelts](j)
+            workspace.perturbed_weights.store[width=nelts](
+                j, fma(eps_vec, pos_sigma, w_vec)
+            )
         if remainder > 0:
-            var start_idx = size - remainder
-            for j in range(start_idx, size):
-                var w_val = fast_weights.load(j)
-                var eps_val = Float32(0.1) # Mock noise
-                workspace.epsilon.store(j, eps_val)
-                workspace.perturbed_weights.store(j, fma(eps_val, sigma, w_val))
+            for j in range(rem_start, size):
+                workspace.perturbed_weights[j] = fma(
+                    workspace.epsilon[j], sigma, fast_weights[j]
+                )
+        var f_plus = evaluate_primitives(
+            workspace.perturbed_weights, target, size
+        )
 
-        # 2. Evaluate Fitness (F_i) using the actual MSE calculate_fitness function
-        var F_i = evaluate_primitives(workspace.perturbed_weights, target, size)
+        # 2b. perturbed = w - sigma * eps, then evaluate F-.
+        var neg_sigma = SIMD[DType.float32, nelts](-sigma)
+        for j in range(0, size - nelts + 1, nelts):
+            var w_vec = fast_weights.load[width=nelts](j)
+            var eps_vec = workspace.epsilon.load[width=nelts](j)
+            workspace.perturbed_weights.store[width=nelts](
+                j, fma(eps_vec, neg_sigma, w_vec)
+            )
+        if remainder > 0:
+            for j in range(rem_start, size):
+                workspace.perturbed_weights[j] = fma(
+                    workspace.epsilon[j], -sigma, fast_weights[j]
+                )
+        var f_minus = evaluate_primitives(
+            workspace.perturbed_weights, target, size
+        )
 
-        # 3. Accumulate: grad_estimate += F_i * epsilon_i
+        # 3. Accumulate the antithetic gradient: grad += (F+ - F-) * eps.
+        var coeff = f_plus - f_minus
+        var coeff_vec = SIMD[DType.float32, nelts](coeff)
         for j in range(0, size - nelts + 1, nelts):
             var grad_vec = workspace.grad_estimate.load[width=nelts](j)
             var eps_vec = workspace.epsilon.load[width=nelts](j)
-
-            # grad_vec + F_i * eps_vec
-            var new_grad_vec = fma(eps_vec, SIMD[DType.float32, nelts](F_i), grad_vec)
-            workspace.grad_estimate.store[width=nelts](j, new_grad_vec)
-
-        # Handle remainder for accumulation
+            workspace.grad_estimate.store[width=nelts](
+                j, fma(eps_vec, coeff_vec, grad_vec)
+            )
         if remainder > 0:
-            var start_idx = size - remainder
-            for j in range(start_idx, size):
-                var grad_val = workspace.grad_estimate.load(j)
-                var eps_val = workspace.epsilon.load(j)
-                workspace.grad_estimate.store(j, fma(eps_val, F_i, grad_val))
+            for j in range(rem_start, size):
+                workspace.grad_estimate[j] = fma(
+                    workspace.epsilon[j], coeff, workspace.grad_estimate[j]
+                )
 
-    # 4. Final Update Step
-    # update_factor = alpha / (N * sigma)
-    var update_factor = alpha / (Float32(N) * sigma)
-    var update_factor_simd = SIMD[DType.float32, nelts](update_factor)
-
+    # 4. Final step: W_fast += alpha / (2*N*sigma) * grad_estimate.
+    var update_factor = alpha / (2.0 * Float32(N) * sigma)
+    var update_factor_vec = SIMD[DType.float32, nelts](update_factor)
     for j in range(0, size - nelts + 1, nelts):
         var w_vec = fast_weights.load[width=nelts](j)
         var grad_vec = workspace.grad_estimate.load[width=nelts](j)
-
-        # W_fast = W_fast + update_factor * grad_estimate
-        var new_w_vec = fma(grad_vec, update_factor_simd, w_vec)
-        fast_weights.store[width=nelts](j, new_w_vec)
-
-    # Handle remainder for final update
-    var remainder = size % nelts
+        fast_weights.store[width=nelts](
+            j, fma(grad_vec, update_factor_vec, w_vec)
+        )
     if remainder > 0:
-        var start_idx = size - remainder
-        for j in range(start_idx, size):
-            var w_val = fast_weights.load(j)
-            var grad_val = workspace.grad_estimate.load(j)
-            fast_weights.store(j, fma(grad_val, update_factor, w_val))
+        for j in range(rem_start, size):
+            fast_weights[j] = fma(
+                workspace.grad_estimate[j], update_factor, fast_weights[j]
+            )
