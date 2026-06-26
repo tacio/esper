@@ -44,8 +44,8 @@
                 # Activate the environment
                 source .venv/bin/activate
 
-                # Install Mojo (Nightly) via the Modular wheel index
-                uv pip install mojo --index https://whl.modular.com/nightly/simple/ --prerelease allow
+                # Install Mojo 1.0 beta from PyPI (prerelease).
+                uv pip install "mojo==1.0.0b2" --prerelease allow
 
                 echo "Esper Hermetic Environment Initialized."
               else

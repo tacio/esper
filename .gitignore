@@ -1,0 +1,12 @@
+# Python / uv
+.venv/
+__pycache__/
+*.pyc
+
+# Mojo / build artifacts
+build/
+*.o
+.mojo_cache/
+
+# Compiled ARC data
+data_bin/

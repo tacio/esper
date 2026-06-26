@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python
+        run: uv venv
+
+      - name: Install Mojo 1.0 beta + numpy
+        run: |
+          source .venv/bin/activate
+          uv pip install "mojo==1.0.0b2" --prerelease allow numpy
+
+      - name: Check formatting
+        run: |
+          source .venv/bin/activate
+          mojo format src/*.mojo tests/*.mojo
+          if ! git diff --quiet; then
+            echo "::error::Mojo sources are not formatted. Run 'mojo format src/*.mojo tests/*.mojo'."
+            git --no-pager diff
+            exit 1
+          fi
+
+      - name: Run test suite
+        run: |
+          source .venv/bin/activate
+          ./run_tests.sh

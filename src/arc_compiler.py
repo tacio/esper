@@ -14,7 +14,8 @@ def compile_arc_json(json_path: str, output_dir: str):
     with open(json_path, 'r') as f:
         data = json.load(f)
 
-    base_name = os.path.basename(json_path).split('.')[0]
+    # Use splitext so task ids containing dots are not truncated.
+    base_name = os.path.splitext(os.path.basename(json_path))[0]
 
     # Process training pairs
     if 'train' in data:
