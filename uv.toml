@@ -1,0 +1,10 @@
+# The global uv config sets `exclude-newer = "30 days"`, which filters out the
+# pinned Mojo 1.0.0b2 toolchain (and its Modular deps), all published 2026-06-18.
+# Override the cutoff per-package so `uv pip install "mojo==1.0.0b2"` resolves
+# without extra flags. Bump these dates if the pin moves to a newer build.
+[exclude-newer-package]
+mojo = "2026-06-19"
+mojo-compiler = "2026-06-19"
+mojo-compiler-mojo-libs = "2026-06-19"
+mojo-lldb-libs = "2026-06-19"
+mblack = "2026-06-19"
