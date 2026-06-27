@@ -1,5 +1,6 @@
 from std.sys import simd_width_of, size_of
 from std.memory import memcpy, UnsafePointer
+from std.math import round
 from hope import ArcGrid
 
 comptime nelts = simd_width_of[DType.float32]()
@@ -63,3 +64,32 @@ def calculate_fitness(
             mse_sum += diff * diff
 
     return -(mse_sum / Float32(size))
+
+
+def exact_match(
+    pred_ptr: UnsafePointer[Float32, MutAnyOrigin],
+    target_ptr: UnsafePointer[Float32, MutAnyOrigin],
+    size: Int,
+) -> Float32:
+    """Discrete objective reward: fraction of cells that match exactly.
+
+    ARC grids hold integer colors (0-9) while the engine evolves continuous
+    weights, so each prediction is rounded to the nearest integer before
+    comparison. This mirrors ARC's all-or-nothing per-cell scoring and
+    complements the continuous negative-MSE signal from `calculate_fitness`.
+    Same SIMD main-loop + scalar-remainder shape as the rest of the hot path.
+    """
+    var matches = Float32(0.0)
+
+    for i in range(0, size - nelts + 1, nelts):
+        var p_vec = round(pred_ptr.load[width=nelts](i))
+        var t_vec = round(target_ptr.load[width=nelts](i))
+        matches += p_vec.eq(t_vec).cast[DType.float32]().reduce_add()
+
+    var remainder = size % nelts
+    if remainder > 0:
+        for i in range(size - remainder, size):
+            if round(pred_ptr[i]) == round(target_ptr[i]):
+                matches += 1.0
+
+    return matches / Float32(size)

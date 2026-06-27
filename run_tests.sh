@@ -26,4 +26,18 @@ done
 echo "Running src/main.mojo (end-to-end driver)..."
 mojo run -I src src/main.mojo
 
+# Objective-reward benchmark: generate a small deterministic task set, then fit
+# each target with the ES loop and report the aggregate solve rate.
+echo "Running objective-reward benchmark (src/benchmark.mojo)..."
+BENCH_DIR="$(mktemp -d)"
+trap 'rm -rf "$BENCH_DIR"' EXIT
+python - "$BENCH_DIR" <<'PY'
+import sys
+sys.path.insert(0, "src")
+from synth_tasks import generate_tasks
+generate_tasks("flip_h", sys.argv[1], count=4, rows=4, cols=4, seed=0)
+print("Generated benchmark tasks in", sys.argv[1])
+PY
+mojo run -I src src/benchmark.mojo "$BENCH_DIR"/flip_h_*_out.bin
+
 echo "All tests passed successfully."
