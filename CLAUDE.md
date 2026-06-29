@@ -10,6 +10,18 @@ Esper is a bare-metal, high-performance Neuro-Symbolic Reasoning Engine for logi
 2. **Fast Weights (Continuum Memory System)** — memory dynamically updated during the forward pass via a derivative-free Evolution Strategy (ES), not backprop.
 3. **HopeArena** — a strictly move-only, zero-overhead contiguous bump-pointer allocator that hosts POD `HopeNode`s and their weight slices.
 
+## Direction (active roadmap)
+
+The current learning path is deliberately a **placeholder being replaced**: `evaluate_primitives` is an identity surrogate (it memorizes the target grid) and `forward_with_learning` uses a constant gradient. The active roadmap makes the engine *genuinely learn*. The spine decision — which all future work must respect:
+
+- **Fast weights parameterize a *learned* grid→grid operator**, fit in-context by the ES on each task's demonstration pairs; the slow weights are the meta-learned prior (the existing L2 anchor). This unifies the two conflicting "fast weights" notions (op-params vs. one-weight-per-pixel) into a single, grid-size-independent operator parameter vector (`OP_DIM`).
+- **Never hand the engine a symbolic DSL.** Geometric/color transforms (flip/transpose/recolor) must *emerge* as fitted operator parameters; they live only in the offline `synth_tasks.py` generator as ground truth to rediscover. The north star is fully emergent (a general parametric memory); structured priors are removable "training wheels".
+- **Metric = held-out generalization** (fit on a task's train pairs, score the unseen test pair — uncheatable by memorization), not fitting a known target. `benchmark.mojo`'s memorization is being replaced by a generalization driver (`src/arc_solve.mojo`).
+
+Phase 2 then strips the structural priors toward an emergent self-modifying memory and lifts the grid/task abstraction to a domain interface so the same ES / two-timescale core serves other reasoning problems. (Full milestone plan: `~/.claude/plans/let-s-create-a-roadmap-ticklish-adleman.md`, user-local.)
+
+The theory behind the architecture (the "Nested Learning"/HOPE paper, <https://abehrouz.github.io/files/NL.pdf>) is distilled in **`docs/NL-summary.md`** — read that instead of fetching the 52-page PDF. It ends with a table mapping each paper concept onto Esper's `slow`/`fast` weights, ES optimizer, and CMS direction.
+
 ## Toolchain (important)
 
 Core/runtime code targets **Mojo 1.0.0b2** (1.0 beta). This is a hard pin: the 1.0 line removed `fn` (use `def`), renamed `alias`→`comptime`, requires `std.`-qualified stdlib imports, removed the stdlib `Tensor` type, and changed the `UnsafePointer`/argument conventions. Code written for older nightlies will not compile. Mojo is installed from **PyPI** (`uv pip install "mojo==1.0.0b2" --prerelease allow`), not the Modular wheel index.
@@ -29,6 +41,7 @@ Key 1.0 idioms used throughout (match these when extending):
 - **No dynamic allocation in hot loops.** Fast-weight updates must reuse pre-allocated workspaces (see `ESWorkspace` in `src/esper_evolution.mojo`) — allocate once, reuse via `UnsafePointer`, never `alloc`/`free` per-iteration.
 - **SIMD + FMA required.** Any vector math over weights/gradients must be vectorized using `simd_width_of[DType.float32]()` and `fma()`, with an explicit scalar remainder loop for sizes not divisible by the SIMD width. Follow the existing pattern in `update_fast_weights` / `evolve_fast_weights` / `calculate_fitness` exactly when adding similar loops.
 - **POD over the arena.** Structs placed into the `HopeArena` (e.g. `HopeNode`) must stay POD (raw pointers + integers + `InlineArray`, no owning members), so they can be `init_pointee_move`'d into bump-allocated memory without per-node heap allocation or leaks.
+- **Learn the transformation; never hand-code a DSL.** The engine must *learn* the grid→grid mapping in-context (fast weights = a learned operator fit by ES on demonstrations), not select among hand-written symbolic primitives. The existing `prim_*`/`apply_primitive` are being demoted; symbolic transforms belong only in the offline `synth_tasks.py` generator. See "Direction (active roadmap)".
 
 ## Development environment
 

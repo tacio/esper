@@ -10,3 +10,6 @@ build/
 
 # Compiled ARC data
 data_bin/
+
+# Paper (referenced by URL in docs/NL-summary.md, not tracked)
+NL.pdf

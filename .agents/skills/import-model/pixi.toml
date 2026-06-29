@@ -1,0 +1,75 @@
+[workspace]
+name = "import-model"
+version = "0.1.0"
+channels = ["https://conda.modular.com/max-nightly", "conda-forge"]
+platforms = ["linux-64"]
+
+[system-requirements]
+cuda = "13"
+
+[dependencies]
+# Use slim `max` instead of the `modular` metapackage. `modular` pulls in
+# `max-pipelines`, which hard-pins conda `transformers <5.3.0` — too old for
+# recent architectures (e.g. ones requiring transformers >=5.10). The
+# `max-pipelines` runtime deps we actually need are listed below so we can
+# serve without them.
+max = ">=26.3.0,<27"
+python = ">=3.12,<3.15"
+
+# Core HF / port toolchain
+huggingface_hub = ">=0.26"
+safetensors = ">=0.4"
+pytorch-gpu = ">=2.4"
+pydantic = ">=2.13.4,<3"
+
+# Runtime deps that `max-pipelines` would normally provide. Listed manually so
+# `transformers` can come from PyPI without max-pipelines fighting the upper
+# bound. Kept in tree-order from `pixi tree max-pipelines` for easy refresh.
+av = "*"
+click = "*"
+exceptiongroup = "*"
+gguf = "*"
+hf-transfer = "*"
+llguidance = "*"
+jinja2 = "*"
+pillow = "*"
+psutil = "*"
+pydantic-settings = "*"
+pyyaml = "*"
+requests = "*"
+sentencepiece = "*"
+taskgroup = "*"
+tiktoken = "*"
+tqdm = "*"
+uvicorn = "*"
+uvloop = "*"
+aiofiles = "*"
+asgiref = "*"
+fastapi = "*"
+httpx = "*"
+msgspec = "*"
+openai = "*"
+opentelemetry-api = "*"
+opentelemetry-exporter-otlp-proto-http = "*"
+opentelemetry-exporter-prometheus = "*"
+opentelemetry-sdk = "*"
+prometheus_client = "*"
+pyinstrument = "*"
+python-json-logger = "*"
+pyzmq = "*"
+regex = "*"
+scipy = "*"
+sse-starlette = "*"
+starlette = "*"
+
+[pypi-dependencies]
+transformers = ">=4.45,<6"
+# `device_map="cuda"` requires `accelerate` for HF reference workflows.
+accelerate = ">=0.30"
+
+[tasks]
+test-scripts = { cwd = "scripts", cmd = "python test_scripts.py" }
+inspect = { cwd = "scripts", cmd = "python inspect_hf.py" }
+list-keys = { cwd = "scripts", cmd = "python list_checkpoint_keys.py" }
+list-archs = { cwd = "scripts", cmd = "python list_native_archs.py" }
+check-walls = { cwd = "scripts", cmd = "python check_walls.py" }

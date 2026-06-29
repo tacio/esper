@@ -8,6 +8,13 @@ The system relies on **Nested Learning**:
 2. **Fast Weights (Continuum Memory System):** Memory dynamically updated during the forward pass utilizing a derivative-free Evolution Strategy.
 3. **HopeArena:** A strictly move-only, zero-overhead contiguous memory allocator driving hierarchical node generation.
 
+## Status & Roadmap
+The core infrastructure — the move-only `HopeArena`, POD `HopeNode`s, the SIMD/FMA antithetic-sampling Evolution Strategy, the L2-anchored fast-weight update, and validated `.bin` IO — is in place. The learning path is currently a **placeholder/surrogate** (it memorizes a target grid rather than learning a transformation); the active roadmap replaces it with genuine in-context learning.
+
+**Phase 1 — Learn ARC-AGI 2.** The fast weights are redefined as a *learned* grid→grid operator, fit in-context by the Evolution Strategy on each task's demonstration pairs; the slow weights are the meta-learned prior. The engine is **never handed a symbolic DSL** — geometric/color transforms must emerge as fitted parameters of a structured operator ("training wheels"), progressively stripped toward a fully general parametric memory. Success is measured by **held-out generalization**: fit on the train pairs, score the unseen test pair (uncheatable by memorization).
+
+**Phase 2 — Generalize.** Remove the structural priors toward an emergent self-modifying memory, and lift the grid/task abstraction to a domain interface so the same ES / two-timescale core serves other reasoning problems.
+
 ## Constraints & Requirements
 This project enforces a strict, bare-metal systems engineering ethos:
 * **Language:** Pure Mojo, targeting **Mojo 1.0.0b2** (1.0 beta).
