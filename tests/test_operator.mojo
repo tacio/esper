@@ -83,10 +83,10 @@ def main() raises:
             exp[r * cols + c] = inp[c * cols + r]
     check("transpose", out, exp, n)
 
-    # 4. recolor: cmap[c] = (c + 1) % 10, identity geometry.
+    # 4. recolor: cmap[c] = (c + 1) % 10 (stored normalized, /9), identity geometry.
     seed_identity_operator(weights)
     for c in range(COLOR_DIM):
-        weights[COLOR_OFF + c] = Float32((c + 1) % 10)
+        weights[COLOR_OFF + c] = Float32((c + 1) % 10) / Float32(COLOR_DIM - 1)
     apply_operator(weights, inp, out, rows, cols)
     for i in range(n):
         exp[i] = Float32((Int(inp[i]) + 1) % 10)

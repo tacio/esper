@@ -84,3 +84,59 @@ forward-learning, io, operator, plus the end-to-end driver.
 from demonstrations and generalizes to held-out inputs — the first real proof-of-learning.
 Next up: M5 task loader, M6 shape handling, M7 held-out generalization benchmark over the full
 expressible subset.
+
+**~19:40 — M5 done (task bundles + loader).** Chose **per-task binary bundles** (`.task`) over the
+roadmap's per-grid-files-plus-text-manifest, because Mojo is weak at both directory globbing and
+text parsing — the shell globs `*.task` into the driver's argv instead (like the old benchmark).
+`arc_compiler.py`: factored `_write_grid` out of `_save_grid`, added `_save_task`. `hope.mojo`:
+`ArcTask{train,test: List[ArcTaskPair]}`. `arc_io.mojo`: factored `_read_grid_block` (shared by
+`load_arc_grid`) + `load_arc_task`. `tests/test_task_loader.mojo` round-trips a fixture bundle.
+
+**~19:55 — M6 done (shape guard).** The operator is same-shape; `operator_fitness` now penalizes a
+demo whose output area differs from its input area (instead of an OOB compare), steering the ES
+away from inexpressible shape-changing tasks. `tests/test_shape.mojo` covers it.
+
+**20:36 — M7 convergence: two structural fixes before the benchmark.** Before wiring the benchmark
+I checked whether the flip_h-tuned schedule fits the *whole* expressible subset. flip_h/flip_v/
+transpose converged (~0.97–1.0, even transpose's four-param move), but **recolor failed (~0.18)**.
+Two distinct discoveries:
+
+1. *Parameter-scale mismatch → preconditioned ES.* The colour-LUT entries need to travel much
+   further than the affine entries, so one global step size can't serve both (small steps starve
+   colour; large steps destabilize geometry). Normalizing the colour LUT to ~unit scale flipped the
+   problem (then sigma was too coarse for the tight 1/9 palette spacing and scrambled colour). Real
+   fix: a **per-group step `scale`** in `ESWorkspace` (colour group gets `COLOR_SCALE`), applied to
+   both the ES perturbation and update — a diagonal preconditioner. Geometry went to a clean 1.0;
+   recolor improved but stuck at ~0.8.
+
+2. *Geometry↔colour coupling → colour-then-gather.* recolor's last two palette entries (8→9, 9→0,
+   the extreme/wrap colours) stayed wrong because the affine never settled to *exactly* identity, so
+   the bilinear gather blended neighbours and corrupted which palette entry each cell read.
+   Restructured `apply_operator` to **apply the colour LUT to the four integer input corners BEFORE
+   the bilinear blend** (instead of colouring the blended output). Now each LUT entry fits
+   independently of geometry precision, while the gather stays bilinear-smooth for the flips — and
+   it still needs no scratch (colour the corner reads inline). Result: **all four transforms reach
+   1.0 held-out with the default 4000-iter schedule.** Lesson: the operator's two sub-systems
+   (geometry, colour) must be decoupled in *both* the optimizer (per-group scale) and the forward
+   pass (colour before gather).
+
+Next: finish M7 — `generate_task_groups` (synth bundles), `arc_solve.mojo` (held-out solve rate +
+train/test gap), `test_generalization.mojo` (whole subset), wire into `run_tests.sh`.
+
+**20:47 — M7 done; Phase A (M1–M7) COMPLETE.** Built `generate_task_groups` (emits `.task`
+bundles), `src/arc_solve.mojo` (fits each task on train, scores held-out test, reports solve rate +
+train/test gap, raises on 0), and `tests/test_generalization.mojo` (self-contained whole-subset
+proof). One last fragility surfaced: **transpose was seed-dependent** — it converged in isolation
+but landed in a local optimum from some RNG states (5/6 across seeds), because all four affine
+params must move together (a 90° change). Fix: widen the shared exploration, `FIT_SIGMA0` 0.3 → 0.5
+— transpose went to 6/6 across seeds and the easy transforms were unaffected. Full suite green
+(~62s): the whole expressible subset {flip_h, flip_v, transpose, recolor} is learned to **held-out
+1.0 with train/test gap 0.0** — genuine generalization, no overfit. The suite is heavier now (ES
+fits in 3 tests + main + the driver); acceptable, trimmable later if needed.
+
+**Where Phase A stands:** the engine learns every transform it can express, purely from
+demonstrations, scored only on unseen inputs. Remaining roadmap: M8 (ingest real ARC-AGI 2 JSON →
+bundles + honest eval) and M9 (meta-learn the slow prior — the second timescale). The expressible
+subset is geometry+colour; real ARC-AGI 2 will mostly fall *outside* it (objects, counting,
+symmetry, shape change) — M8's honest number is expected to be low, and that's the point of the
+held-out metric.

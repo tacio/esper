@@ -6,17 +6,33 @@ from std.collections import List
 
 # The real fitness calculator (negative MSE) and the learned operator it scores.
 from arc_io import calculate_fitness
-from hope import ArcTaskPair, apply_operator, OP_DIM, HopeNode, ArcGrid
+from hope import (
+    ArcTaskPair,
+    apply_operator,
+    OP_DIM,
+    COLOR_OFF,
+    COLOR_DIM,
+    HopeNode,
+    ArcGrid,
+)
 
 # Default in-context fit schedule, shared by forward_with_learning and the solve
 # driver. Tuned so the annealed ES reliably fits the expressible transforms.
 comptime FIT_N = 128
 comptime FIT_ALPHA0 = Float32(0.1)
 comptime FIT_ALPHA1 = Float32(0.003)
-comptime FIT_SIGMA0 = Float32(0.3)
+comptime FIT_SIGMA0 = Float32(0.5)
 comptime FIT_SIGMA1 = Float32(0.01)
 comptime FIT_ITERS = 4000
 comptime FIT_REG = Float32(0.0001)
+
+# Per-group ES step scale (preconditioning). The colour-LUT parameters are stored
+# normalized (~unit scale) but with tight 1/9 spacing between palette entries, so
+# the global sigma that suits the affine would scramble them. Give the colour
+# group a smaller perturbation/step scale so a single annealed schedule fits both
+# geometry and colour. Applied to both the perturbation and the update, this is a
+# diagonal preconditioner (equivalent to running the ES on rescaled parameters).
+comptime COLOR_SCALE = Float32(0.6)
 
 comptime nelts = simd_width_of[DType.float32]()
 
@@ -44,11 +60,18 @@ def operator_fitness(
     for d in range(num):
         var rows = demos[d].input_grid.rows
         var cols = demos[d].input_grid.cols
+        var in_n = rows * cols
+        var out_n = demos[d].output_grid.rows * demos[d].output_grid.cols
+        # The operator is same-shape (output dims == input dims). If a demo's
+        # output area differs, it is inexpressible here: assign a heavy penalty
+        # instead of scoring (calling calculate_fitness on mismatched lengths
+        # would read out of bounds), steering the ES away from such tasks.
+        if in_n != out_n:
+            total += Float32(-1.0e9)
+            continue
         # Run the operator on the demo input, score against the demo output.
         apply_operator(weights, demos[d].input_grid.data, op_output, rows, cols)
-        total += calculate_fitness(
-            op_output, demos[d].output_grid.data, rows * cols
-        )
+        total += calculate_fitness(op_output, demos[d].output_grid.data, in_n)
     total = total / Float32(num)
 
     # L2 anchor: -reg_lambda * ||w - w_slow||^2 / OP_DIM. The slow weights are the
@@ -72,6 +95,7 @@ struct ESWorkspace(Movable):
     var grad_estimate: UnsafePointer[Float32, MutAnyOrigin]
     var epsilon: UnsafePointer[Float32, MutAnyOrigin]
     var perturbed_weights: UnsafePointer[Float32, MutAnyOrigin]
+    var scale: UnsafePointer[Float32, MutAnyOrigin]
     var op_output: UnsafePointer[Float32, MutAnyOrigin]
     var size: Int
     var grid_capacity: Int
@@ -82,7 +106,17 @@ struct ESWorkspace(Movable):
         self.grad_estimate = alloc[Float32](param_size)
         self.epsilon = alloc[Float32](param_size)
         self.perturbed_weights = alloc[Float32](param_size)
+        self.scale = alloc[Float32](param_size)
         self.op_output = alloc[Float32](grid_capacity)
+
+        # Per-parameter ES step scale: 1 everywhere, except the colour-LUT group
+        # gets COLOR_SCALE (only meaningful for the operator layout, param_size
+        # == OP_DIM; a plain uniform scale otherwise).
+        for i in range(param_size):
+            self.scale[i] = 1.0
+        if param_size == OP_DIM:
+            for c in range(COLOR_DIM):
+                self.scale[COLOR_OFF + c] = COLOR_SCALE
 
     def __del__(deinit self):
         # Consuming moves suppress the source destructor, so each buffer is live
@@ -90,6 +124,7 @@ struct ESWorkspace(Movable):
         self.grad_estimate.free()
         self.epsilon.free()
         self.perturbed_weights.free()
+        self.scale.free()
         self.op_output.free()
 
 
@@ -137,18 +172,22 @@ def evolve_fast_weights(
         for j in range(size):
             workspace.epsilon[j] = Float32(randn_float64(0.0, 1.0))
 
-        # 2a. perturbed = w + sigma * eps, then evaluate F+.
+        # 2a. perturbed = w + sigma * (scale ⊙ eps), then evaluate F+.
         var pos_sigma = SIMD[DType.float32, nelts](sigma)
         for j in range(0, size - nelts + 1, nelts):
             var w_vec = fast_weights.load[width=nelts](j)
-            var eps_vec = workspace.epsilon.load[width=nelts](j)
+            var seps = workspace.epsilon.load[width=nelts](
+                j
+            ) * workspace.scale.load[width=nelts](j)
             workspace.perturbed_weights.store[width=nelts](
-                j, fma(eps_vec, pos_sigma, w_vec)
+                j, fma(seps, pos_sigma, w_vec)
             )
         if remainder > 0:
             for j in range(rem_start, size):
                 workspace.perturbed_weights[j] = fma(
-                    workspace.epsilon[j], sigma, fast_weights[j]
+                    workspace.epsilon[j] * workspace.scale[j],
+                    sigma,
+                    fast_weights[j],
                 )
         var f_plus = operator_fitness(
             workspace.perturbed_weights,
@@ -158,18 +197,22 @@ def evolve_fast_weights(
             reg_lambda,
         )
 
-        # 2b. perturbed = w - sigma * eps, then evaluate F-.
+        # 2b. perturbed = w - sigma * (scale ⊙ eps), then evaluate F-.
         var neg_sigma = SIMD[DType.float32, nelts](-sigma)
         for j in range(0, size - nelts + 1, nelts):
             var w_vec = fast_weights.load[width=nelts](j)
-            var eps_vec = workspace.epsilon.load[width=nelts](j)
+            var seps = workspace.epsilon.load[width=nelts](
+                j
+            ) * workspace.scale.load[width=nelts](j)
             workspace.perturbed_weights.store[width=nelts](
-                j, fma(eps_vec, neg_sigma, w_vec)
+                j, fma(seps, neg_sigma, w_vec)
             )
         if remainder > 0:
             for j in range(rem_start, size):
                 workspace.perturbed_weights[j] = fma(
-                    workspace.epsilon[j], -sigma, fast_weights[j]
+                    workspace.epsilon[j] * workspace.scale[j],
+                    -sigma,
+                    fast_weights[j],
                 )
         var f_minus = operator_fitness(
             workspace.perturbed_weights,
@@ -194,19 +237,23 @@ def evolve_fast_weights(
                     workspace.epsilon[j], coeff, workspace.grad_estimate[j]
                 )
 
-    # 4. Final step: W_fast += alpha / (2*N*sigma) * grad_estimate.
+    # 4. Final step: W_fast += alpha / (2*N*sigma) * (scale ⊙ grad_estimate).
+    #    The same per-parameter scale used in the perturbation makes this a
+    #    consistent diagonal-preconditioned ES step.
     var update_factor = alpha / (2.0 * Float32(N) * sigma)
     var update_factor_vec = SIMD[DType.float32, nelts](update_factor)
     for j in range(0, size - nelts + 1, nelts):
         var w_vec = fast_weights.load[width=nelts](j)
-        var grad_vec = workspace.grad_estimate.load[width=nelts](j)
-        fast_weights.store[width=nelts](
-            j, fma(grad_vec, update_factor_vec, w_vec)
-        )
+        var sgrad = workspace.grad_estimate.load[width=nelts](
+            j
+        ) * workspace.scale.load[width=nelts](j)
+        fast_weights.store[width=nelts](j, fma(sgrad, update_factor_vec, w_vec))
     if remainder > 0:
         for j in range(rem_start, size):
             fast_weights[j] = fma(
-                workspace.grad_estimate[j], update_factor, fast_weights[j]
+                workspace.grad_estimate[j] * workspace.scale[j],
+                update_factor,
+                fast_weights[j],
             )
 
 

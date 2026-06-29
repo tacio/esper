@@ -225,8 +225,11 @@ def seed_identity_operator(weights: UnsafePointer[Float32, MutAnyOrigin]):
     weights[COORD_OFF + 3] = 1.0  # a3
     weights[COORD_OFF + 4] = 0.0  # t_r
     weights[COORD_OFF + 5] = 0.0  # t_c
+    # Colour LUT entries are stored NORMALIZED to ~unit scale (colour / 9) so the
+    # ES sees the same parameter scale for colours as for the affine (~1); the
+    # apply step multiplies back up to 0..9. Identity LUT: cmap[c] = c/9.
     for c in range(COLOR_DIM):
-        weights[COLOR_OFF + c] = Float32(c)
+        weights[COLOR_OFF + c] = Float32(c) / Float32(COLOR_DIM - 1)
 
 
 # Read cell (r, c) from a row-major grid, returning 0 for out-of-bounds (zero
@@ -243,23 +246,22 @@ def _cell_or_zero(
     return Float32(0.0)
 
 
-# Map a continuous sampled colour `s` through the learned colour LUT (10 entries
-# at integer colours 0..9), LINEARLY interpolated. Smooth in both `s` and the LUT
-# weights, and exact when `s` is an integer colour: lut[s].
-def _color_lerp(
-    weights: UnsafePointer[Float32, MutAnyOrigin], s: Float32
+# Map an input colour `x` through the learned colour LUT (10 NORMALIZED entries),
+# scaled back to the 0..9 range: 9 * cmap[x]. Linear in the LUT weights (smooth ES
+# gradient); `x` is a constant input cell value, so rounding it to a palette index
+# is exact. Colour is applied to the (integer) INPUT cells before the gather (see
+# apply_operator), so each LUT entry fits independently of the geometry's
+# precision — the normalized storage also keeps colour parameters at the affine's
+# ~unit scale so one ES step size serves both groups.
+def _color_of(
+    weights: UnsafePointer[Float32, MutAnyOrigin], x: Float32
 ) -> Float32:
-    if s <= 0.0:
-        return weights[COLOR_OFF + 0]
-    if s >= Float32(COLOR_DIM - 1):
-        return weights[COLOR_OFF + (COLOR_DIM - 1)]
-    var i0 = Int(floor(s))
-    var f = s - Float32(i0)
-    return fma(
-        f,
-        weights[COLOR_OFF + i0 + 1] - weights[COLOR_OFF + i0],
-        weights[COLOR_OFF + i0],
-    )
+    var idx = Int(round(x))
+    if idx < 0:
+        idx = 0
+    elif idx > COLOR_DIM - 1:
+        idx = COLOR_DIM - 1
+    return Float32(COLOR_DIM - 1) * weights[COLOR_OFF + idx]
 
 
 # Run the operator encoded in `weights` over `in_data`, writing `out_data`
@@ -267,15 +269,18 @@ def _color_lerp(
 # in_data, so there is no aliasing and no scratch copy is needed.
 #
 # Per output cell: compute a continuous source `(sr, sc) = A * centered_coord +
-# center + translation`, BILINEARLY sample `in_data` there (zero fill OOB), then
-# map the sampled colour through the linearly-interpolated colour LUT. Both the
-# gather and the LUT are smooth, so the ES fitness landscape has a real gradient
-# everywhere (nearest-neighbour rounding instead creates flat plateaus where the
-# ES random-walks and diverges). Integer-valued parameters still reproduce the
-# transforms exactly (the sample lands on a cell, the LUT lands on an entry), so
-# `exact_match` is reachable. This is an inherently gather-style kernel, so it is
-# scalar per cell; the SIMD/FMA hot paths (calculate_fitness, the ES weight
-# update) are untouched.
+# center + translation`, then BILINEARLY gather from `in_data` there (zero fill
+# OOB) — but each of the four corner INPUT cells is mapped through the colour LUT
+# (`_color_of`) FIRST, so colour is applied to the exact integer input values and
+# then blended spatially. Colour-then-gather (rather than colour the blended
+# output) decouples the colour-LUT fit from the geometry's precision: a slightly
+# imperfect affine only blends already-correctly-recoloured neighbours, instead of
+# corrupting which palette entry each cell reads. The bilinear gather stays smooth
+# so the ES has a real geometry gradient everywhere (nearest-neighbour rounding
+# instead creates flat plateaus where the ES random-walks and diverges).
+# Integer-valued parameters reproduce the transforms exactly, so `exact_match` is
+# reachable. This is an inherently gather-style kernel, so it is scalar per cell;
+# the SIMD/FMA hot paths (calculate_fitness, the ES weight update) are untouched.
 def apply_operator(
     weights: UnsafePointer[Float32, MutAnyOrigin],
     in_data: UnsafePointer[Float32, MutAnyOrigin],
@@ -301,20 +306,27 @@ def apply_operator(
             var sr = fma(a0, vr, fma(a1, vc, cr + t_r))
             var sc = fma(a2, vr, fma(a3, vc, cc + t_c))
 
-            # Bilinear gather at (sr, sc) with zero-fill out of bounds.
+            # Bilinear gather at (sr, sc) with zero-fill out of bounds; each
+            # corner input cell is recoloured through the LUT before blending.
             var r0 = Int(floor(sr))
             var c0 = Int(floor(sc))
             var fr = sr - Float32(r0)
             var fc = sc - Float32(c0)
-            var v00 = _cell_or_zero(in_data, rows, cols, r0, c0)
-            var v01 = _cell_or_zero(in_data, rows, cols, r0, c0 + 1)
-            var v10 = _cell_or_zero(in_data, rows, cols, r0 + 1, c0)
-            var v11 = _cell_or_zero(in_data, rows, cols, r0 + 1, c0 + 1)
+            var v00 = _color_of(
+                weights, _cell_or_zero(in_data, rows, cols, r0, c0)
+            )
+            var v01 = _color_of(
+                weights, _cell_or_zero(in_data, rows, cols, r0, c0 + 1)
+            )
+            var v10 = _color_of(
+                weights, _cell_or_zero(in_data, rows, cols, r0 + 1, c0)
+            )
+            var v11 = _color_of(
+                weights, _cell_or_zero(in_data, rows, cols, r0 + 1, c0 + 1)
+            )
             var top = fma(fc, v01 - v00, v00)
             var bot = fma(fc, v11 - v10, v10)
-            var sampled = fma(fr, bot - top, top)
-
-            out_data[r * cols + c] = _color_lerp(weights, sampled)
+            out_data[r * cols + c] = fma(fr, bot - top, top)
 
 
 # ==========================================
@@ -366,6 +378,19 @@ struct ArcTaskPair(Movable):
     def __init__(out self, var input_grid: ArcGrid, var output_grid: ArcGrid):
         self.input_grid = input_grid^
         self.output_grid = output_grid^
+
+
+# A full task: training demonstrations plus held-out test pairs. `test` is a List
+# because ARC tasks may have more than one test pair (solved iff all match).
+struct ArcTask(Movable):
+    var train: List[ArcTaskPair]
+    var test: List[ArcTaskPair]
+
+    def __init__(
+        out self, var train: List[ArcTaskPair], var test: List[ArcTaskPair]
+    ):
+        self.train = train^
+        self.test = test^
 
 
 # NOTE: `forward_with_learning` now lives in `esper_evolution.mojo` — it drives

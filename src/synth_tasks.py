@@ -24,9 +24,9 @@ import argparse
 import os
 import random as _random
 
-# Reuse the canonical .bin writer so the on-disk format cannot drift from the
+# Reuse the canonical writers so the on-disk formats cannot drift from the
 # compiler / engine contract.
-from arc_compiler import _save_grid
+from arc_compiler import _save_grid, _save_task
 
 # ARC grids use integer "colors" 0-9.
 NUM_COLORS = 10
@@ -109,6 +109,43 @@ def generate_tasks(transform, out_dir, count, rows, cols, seed):
         pairs.append((in_path, out_path))
 
     return pairs
+
+
+def generate_task_groups(transform, out_dir, num_tasks, n_train, rows, cols, seed):
+    """
+    Emit `num_tasks` ARC-shaped *task bundles* for `transform`, one `.task` file
+    each (written by `arc_compiler._save_task`). A task = `n_train` random
+    (input, transform(input)) demonstration pairs plus one DISTINCT held-out test
+    pair. This feeds the held-out generalization driver (`src/arc_solve.mojo`):
+    the engine fits the operator on the train pairs and is scored on the unseen
+    test pair. Returns the list of bundle paths written.
+    """
+    if transform not in TRANSFORMS:
+        raise ValueError(
+            "Unknown transform %r; choose from %s"
+            % (transform, ", ".join(sorted(TRANSFORMS)))
+        )
+    if transform == "transpose" and rows != cols:
+        raise ValueError("transpose requires a square grid (rows == cols)")
+
+    os.makedirs(out_dir, exist_ok=True)
+    fn = TRANSFORMS[transform]
+    rng = _random.Random(seed)
+
+    paths = []
+    for t in range(num_tasks):
+        train = []
+        for _ in range(n_train):
+            grid_in = _random_grid(rows, cols, rng)
+            train.append((grid_in, fn(grid_in)))
+        test_in = _random_grid(rows, cols, rng)
+        test = [(test_in, fn(test_in))]
+
+        path = os.path.join(out_dir, "%s_%d.task" % (transform, t))
+        _save_task(train, test, path)
+        paths.append(path)
+
+    return paths
 
 
 def _parse_args():
