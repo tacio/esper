@@ -22,22 +22,15 @@ for test_file in tests/test_*.mojo; do
     mojo run -I src "${test_file}"
 done
 
-# The driver must also build and run end-to-end.
+# The driver must also build and run end-to-end (learns flip_h in-context and
+# reports held-out generalization).
 echo "Running src/main.mojo (end-to-end driver)..."
 mojo run -I src src/main.mojo
 
-# Objective-reward benchmark: generate a small deterministic task set, then fit
-# each target with the ES loop and report the aggregate solve rate.
-echo "Running objective-reward benchmark (src/benchmark.mojo)..."
-BENCH_DIR="$(mktemp -d)"
-trap 'rm -rf "$BENCH_DIR"' EXIT
-python - "$BENCH_DIR" <<'PY'
-import sys
-sys.path.insert(0, "src")
-from synth_tasks import generate_tasks
-generate_tasks("flip_h", sys.argv[1], count=4, rows=4, cols=4, seed=0)
-print("Generated benchmark tasks in", sys.argv[1])
-PY
-mojo run -I src src/benchmark.mojo "$BENCH_DIR"/flip_h_*_out.bin
+# NOTE: the old objective-reward benchmark (src/benchmark.mojo) fit a known
+# target grid directly — pure memorization. It is replaced by the held-out
+# generalization driver (src/arc_solve.mojo) landing at milestone M7; until then
+# tests/test_demo_fitness.mojo and tests/test_forward_learning.mojo cover the
+# real learn-and-generalize path.
 
 echo "All tests passed successfully."

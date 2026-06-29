@@ -9,11 +9,13 @@ The system relies on **Nested Learning**:
 3. **HopeArena:** A strictly move-only, zero-overhead contiguous memory allocator driving hierarchical node generation.
 
 ## Status & Roadmap
-The core infrastructure — the move-only `HopeArena`, POD `HopeNode`s, the SIMD/FMA antithetic-sampling Evolution Strategy, the L2-anchored fast-weight update, and validated `.bin` IO — is in place. The learning path is currently a **placeholder/surrogate** (it memorizes a target grid rather than learning a transformation); the active roadmap replaces it with genuine in-context learning.
+The core infrastructure — the move-only `HopeArena`, POD `HopeNode`s, the SIMD/FMA antithetic-sampling Evolution Strategy, and validated `.bin` IO — is in place, and the **foundational learning loop now works**: the fast weights are a *learned* grid→grid operator (a smooth, bilinear, structured operator of fixed size) fit in-context by an annealed Evolution Strategy on demonstration pairs, anchored to the slow weights as a meta-learned prior. The engine learns a transformation purely from examples and **generalizes to held-out inputs** (e.g. it learns `flip_h` to ~0.99 held-out exact match) — no hand-coded DSL, no target memorization.
 
-**Phase 1 — Learn ARC-AGI 2.** The fast weights are redefined as a *learned* grid→grid operator, fit in-context by the Evolution Strategy on each task's demonstration pairs; the slow weights are the meta-learned prior. The engine is **never handed a symbolic DSL** — geometric/color transforms must emerge as fitted parameters of a structured operator ("training wheels"), progressively stripped toward a fully general parametric memory. Success is measured by **held-out generalization**: fit on the train pairs, score the unseen test pair (uncheatable by memorization).
+**Phase 1 — Learn ARC-AGI 2 (in progress).** Done: the learned-operator forward pass, the demonstration-driven fitness, and end-to-end held-out generalization on the expressible transform subset. Remaining: a task loader, variable-shape handling, a held-out generalization benchmark over the full subset, real ARC-AGI 2 ingest, and meta-learning the slow prior. Geometric/color transforms must **emerge** as fitted parameters ("training wheels"), progressively stripped toward a fully general parametric memory. Success is measured by **held-out generalization** — fit on the train pairs, score the unseen test pair (uncheatable by memorization).
 
 **Phase 2 — Generalize.** Remove the structural priors toward an emergent self-modifying memory, and lift the grid/task abstraction to a domain interface so the same ES / two-timescale core serves other reasoning problems.
+
+See `docs/JOURNAL.md` for the development narrative and `docs/NL-summary.md` for the architecture's theoretical basis.
 
 ## Constraints & Requirements
 This project enforces a strict, bare-metal systems engineering ethos:

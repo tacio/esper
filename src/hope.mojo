@@ -1,6 +1,6 @@
 from std.memory import alloc, memset_zero, memcpy, UnsafePointer
 from std.sys import simd_width_of, size_of
-from std.math import fma
+from std.math import fma, round, floor
 from std.collections import List, InlineArray
 
 # Configure SIMD width based on the target architecture (e.g. AVX-512 = 16 float32s).
@@ -197,6 +197,127 @@ def apply_primitive(
 
 
 # ==========================================
+# Phase 3: The Structured Learned Operator
+# ==========================================
+# The fast weights parameterize a learned grid->grid operator of fixed, GRID-SIZE
+# INDEPENDENT length OP_DIM. It is *learned* (fit in-context by the ES on demo
+# pairs), never a hand-coded DSL: geometric/colour transforms emerge as fitted
+# parameter settings. Two slots (training wheels; a local-conv residual is a later
+# additive extension at CONV_OFF = OP_DIM):
+#   * a centered affine on coordinates (6 floats): A = [[a0,a1],[a2,a3]] + (t_r,t_c).
+#     Integer-valued A reproduces identity / flip_h / flip_v / transpose exactly.
+#   * a per-colour lookup table (10 floats), one entry per ARC colour 0..9.
+#     Reproduces recolor exactly (including the 9->0 wrap).
+comptime COORD_DIM = 6
+comptime COLOR_DIM = 10
+comptime OP_DIM = COORD_DIM + COLOR_DIM
+comptime COORD_OFF = 0
+comptime COLOR_OFF = COORD_DIM
+
+
+# Seed a weight slice to the identity operator: A = I, no translation, identity
+# colour LUT (cmap[c] = c). Used for the slow-weight prior/anchor and the fast
+# init, so an un-fitted operator is a no-op and the ES departs from it.
+def seed_identity_operator(weights: UnsafePointer[Float32, MutAnyOrigin]):
+    weights[COORD_OFF + 0] = 1.0  # a0
+    weights[COORD_OFF + 1] = 0.0  # a1
+    weights[COORD_OFF + 2] = 0.0  # a2
+    weights[COORD_OFF + 3] = 1.0  # a3
+    weights[COORD_OFF + 4] = 0.0  # t_r
+    weights[COORD_OFF + 5] = 0.0  # t_c
+    for c in range(COLOR_DIM):
+        weights[COLOR_OFF + c] = Float32(c)
+
+
+# Read cell (r, c) from a row-major grid, returning 0 for out-of-bounds (zero
+# fill). Used by the bilinear gather below.
+def _cell_or_zero(
+    data: UnsafePointer[Float32, MutAnyOrigin],
+    rows: Int,
+    cols: Int,
+    r: Int,
+    c: Int,
+) -> Float32:
+    if r >= 0 and r < rows and c >= 0 and c < cols:
+        return data[r * cols + c]
+    return Float32(0.0)
+
+
+# Map a continuous sampled colour `s` through the learned colour LUT (10 entries
+# at integer colours 0..9), LINEARLY interpolated. Smooth in both `s` and the LUT
+# weights, and exact when `s` is an integer colour: lut[s].
+def _color_lerp(
+    weights: UnsafePointer[Float32, MutAnyOrigin], s: Float32
+) -> Float32:
+    if s <= 0.0:
+        return weights[COLOR_OFF + 0]
+    if s >= Float32(COLOR_DIM - 1):
+        return weights[COLOR_OFF + (COLOR_DIM - 1)]
+    var i0 = Int(floor(s))
+    var f = s - Float32(i0)
+    return fma(
+        f,
+        weights[COLOR_OFF + i0 + 1] - weights[COLOR_OFF + i0],
+        weights[COLOR_OFF + i0],
+    )
+
+
+# Run the operator encoded in `weights` over `in_data`, writing `out_data`
+# (row-major, rows*cols cells each). out_data is a SEPARATE buffer read from
+# in_data, so there is no aliasing and no scratch copy is needed.
+#
+# Per output cell: compute a continuous source `(sr, sc) = A * centered_coord +
+# center + translation`, BILINEARLY sample `in_data` there (zero fill OOB), then
+# map the sampled colour through the linearly-interpolated colour LUT. Both the
+# gather and the LUT are smooth, so the ES fitness landscape has a real gradient
+# everywhere (nearest-neighbour rounding instead creates flat plateaus where the
+# ES random-walks and diverges). Integer-valued parameters still reproduce the
+# transforms exactly (the sample lands on a cell, the LUT lands on an entry), so
+# `exact_match` is reachable. This is an inherently gather-style kernel, so it is
+# scalar per cell; the SIMD/FMA hot paths (calculate_fitness, the ES weight
+# update) are untouched.
+def apply_operator(
+    weights: UnsafePointer[Float32, MutAnyOrigin],
+    in_data: UnsafePointer[Float32, MutAnyOrigin],
+    out_data: UnsafePointer[Float32, MutAnyOrigin],
+    rows: Int,
+    cols: Int,
+):
+    # Hoist the affine parameters (read once, reused per cell).
+    var a0 = weights[COORD_OFF + 0]
+    var a1 = weights[COORD_OFF + 1]
+    var a2 = weights[COORD_OFF + 2]
+    var a3 = weights[COORD_OFF + 3]
+    var t_r = weights[COORD_OFF + 4]
+    var t_c = weights[COORD_OFF + 5]
+    var cr = Float32(rows - 1) * Float32(0.5)
+    var cc = Float32(cols - 1) * Float32(0.5)
+
+    for r in range(rows):
+        var vr = Float32(r) - cr
+        for c in range(cols):
+            var vc = Float32(c) - cc
+            # source = A * (centered coord) + center + translation
+            var sr = fma(a0, vr, fma(a1, vc, cr + t_r))
+            var sc = fma(a2, vr, fma(a3, vc, cc + t_c))
+
+            # Bilinear gather at (sr, sc) with zero-fill out of bounds.
+            var r0 = Int(floor(sr))
+            var c0 = Int(floor(sc))
+            var fr = sr - Float32(r0)
+            var fc = sc - Float32(c0)
+            var v00 = _cell_or_zero(in_data, rows, cols, r0, c0)
+            var v01 = _cell_or_zero(in_data, rows, cols, r0, c0 + 1)
+            var v10 = _cell_or_zero(in_data, rows, cols, r0 + 1, c0)
+            var v11 = _cell_or_zero(in_data, rows, cols, r0 + 1, c0 + 1)
+            var top = fma(fc, v01 - v00, v00)
+            var bot = fma(fc, v11 - v10, v10)
+            var sampled = fma(fr, bot - top, top)
+
+            out_data[r * cols + c] = _color_lerp(weights, sampled)
+
+
+# ==========================================
 # Phase 2.3: Vectorized Fast-Weight Update
 # ==========================================
 # W_fast = W_fast - alpha * (grad + lambda * W_slow)
@@ -247,36 +368,7 @@ struct ArcTaskPair(Movable):
         self.output_grid = output_grid^
 
 
-# Nested optimization: a learning phase adapts the node's fast weights over the
-# demonstrations (reusing a single gradient workspace — no per-iteration alloc),
-# then an evaluation phase runs a real primitive forward pass on the test input.
-def forward_with_learning(
-    node: UnsafePointer[HopeNode, MutAnyOrigin],
-    demonstrations: List[ArcTaskPair],
-    test_input: ArcGrid,
-    op: Int,
-) raises -> ArcGrid:
-    var learning_rate = Float32(0.1)
-    var reg_lambda = Float32(0.01)
-    var size = node[].fast_dim
-
-    # 1. Learning phase. The gradient buffer is allocated ONCE and reused.
-    var gradients = alloc[Float32](size)
-    for d in range(len(demonstrations)):
-        # Placeholder error signal derived from the demonstration index; a full
-        # implementation would backprop-free estimate this from the routed pair.
-        var signal = Float32(0.5)
-        for g in range(size):
-            gradients[g] = signal
-        update_fast_weights(
-            node[].fast, node[].slow, gradients, learning_rate, reg_lambda, size
-        )
-    gradients.free()
-
-    # 2. Evaluation phase. Apply the selected primitive to the test input using
-    #    the (now adapted) fast weights as the primitive parameters.
-    var result = ArcGrid(test_input.rows, test_input.cols)
-    for i in range(test_input.size()):
-        result.data[i] = test_input.data[i]
-    apply_primitive(op, result.data, result.rows, result.cols, node[].fast)
-    return result^
+# NOTE: `forward_with_learning` now lives in `esper_evolution.mojo` — it drives
+# the ES (fit_operator) over the demonstrations and applies the learned operator,
+# so it belongs with the learning code (keeping it here would cycle the imports
+# hope -> esper_evolution -> hope).

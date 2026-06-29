@@ -1,42 +1,88 @@
 from std.memory import alloc, memset_zero, UnsafePointer
 from std.sys import simd_width_of, size_of
-from std.math import fma
+from std.math import fma, exp, log
 from std.random import randn_float64
+from std.collections import List
 
-# The real fitness calculator (negative MSE).
+# The real fitness calculator (negative MSE) and the learned operator it scores.
 from arc_io import calculate_fitness
+from hope import ArcTaskPair, apply_operator, OP_DIM, HopeNode, ArcGrid
+
+# Default in-context fit schedule, shared by forward_with_learning and the solve
+# driver. Tuned so the annealed ES reliably fits the expressible transforms.
+comptime FIT_N = 128
+comptime FIT_ALPHA0 = Float32(0.1)
+comptime FIT_ALPHA1 = Float32(0.003)
+comptime FIT_SIGMA0 = Float32(0.3)
+comptime FIT_SIGMA1 = Float32(0.01)
+comptime FIT_ITERS = 4000
+comptime FIT_REG = Float32(0.0001)
 
 comptime nelts = simd_width_of[DType.float32]()
 
 
-# Map a candidate fast-weight vector to a fitness score. For this prototype the
-# perturbed weights are treated as the raw output state of the primitive and
-# scored directly against the target (an identity surrogate model). A full
-# implementation would load them into a HopeNode and run apply_primitive first.
-def evaluate_primitives(
-    perturbed_weights: UnsafePointer[Float32, MutAnyOrigin],
-    target: UnsafePointer[Float32, MutAnyOrigin],
-    size: Int,
+# ==========================================
+# Demonstration-driven operator fitness
+# ==========================================
+# Score a candidate operator (the fast-weight vector) on the train demos: run it
+# on each demo INPUT and measure negative MSE against that demo's OUTPUT, then
+# subtract an L2 anchor pulling the fast weights toward the slow prior. This is
+# the real learning signal — it replaces the old identity surrogate that scored
+# the weights directly against a known target grid (pure memorization).
+def operator_fitness(
+    weights: UnsafePointer[Float32, MutAnyOrigin],
+    slow: UnsafePointer[Float32, MutAnyOrigin],
+    demos: List[ArcTaskPair],
+    op_output: UnsafePointer[Float32, MutAnyOrigin],
+    reg_lambda: Float32,
 ) -> Float32:
-    return calculate_fitness(perturbed_weights, target, size)
+    var num = len(demos)
+    if num == 0:
+        return 0.0
+
+    var total = Float32(0.0)
+    for d in range(num):
+        var rows = demos[d].input_grid.rows
+        var cols = demos[d].input_grid.cols
+        # Run the operator on the demo input, score against the demo output.
+        apply_operator(weights, demos[d].input_grid.data, op_output, rows, cols)
+        total += calculate_fitness(
+            op_output, demos[d].output_grid.data, rows * cols
+        )
+    total = total / Float32(num)
+
+    # L2 anchor: -reg_lambda * ||w - w_slow||^2 / OP_DIM. The slow weights are the
+    # meta-learned prior; this folds HOPE's anchor straight into the ES objective.
+    var anchor = Float32(0.0)
+    for i in range(OP_DIM):
+        var diff = weights[i] - slow[i]
+        anchor += diff * diff
+    return total - reg_lambda * anchor / Float32(OP_DIM)
 
 
 # ==========================================
 # ESWorkspace: Persistent Optimization State
 # ==========================================
 # Pre-allocated, reusable scratch so the ES hot loop performs zero per-iteration
-# allocation. Owns three raw buffers; freed once in __del__.
+# allocation. Two size notions resolve the pixels-vs-params seam: the ES vectors
+# are PARAM-sized (OP_DIM, the operator's parameter count), while `op_output` is
+# GRID-sized (worst-case cell area) to hold each operator forward pass. All four
+# buffers are owned and freed once in __del__.
 struct ESWorkspace(Movable):
     var grad_estimate: UnsafePointer[Float32, MutAnyOrigin]
     var epsilon: UnsafePointer[Float32, MutAnyOrigin]
     var perturbed_weights: UnsafePointer[Float32, MutAnyOrigin]
+    var op_output: UnsafePointer[Float32, MutAnyOrigin]
     var size: Int
+    var grid_capacity: Int
 
-    def __init__(out self, size: Int):
-        self.size = size
-        self.grad_estimate = alloc[Float32](size)
-        self.epsilon = alloc[Float32](size)
-        self.perturbed_weights = alloc[Float32](size)
+    def __init__(out self, param_size: Int, grid_capacity: Int):
+        self.size = param_size
+        self.grid_capacity = grid_capacity
+        self.grad_estimate = alloc[Float32](param_size)
+        self.epsilon = alloc[Float32](param_size)
+        self.perturbed_weights = alloc[Float32](param_size)
+        self.op_output = alloc[Float32](grid_capacity)
 
     def __del__(deinit self):
         # Consuming moves suppress the source destructor, so each buffer is live
@@ -44,6 +90,7 @@ struct ESWorkspace(Movable):
         self.grad_estimate.free()
         self.epsilon.free()
         self.perturbed_weights.free()
+        self.op_output.free()
 
 
 # ==========================================
@@ -52,12 +99,14 @@ struct ESWorkspace(Movable):
 def evolve_fast_weights(
     fast_weights: UnsafePointer[Float32, MutAnyOrigin],
     mut workspace: ESWorkspace,
-    target: UnsafePointer[Float32, MutAnyOrigin],
+    slow_weights: UnsafePointer[Float32, MutAnyOrigin],
+    demos: List[ArcTaskPair],
     N: Int,
     alpha: Float32,
     sigma: Float32,
+    reg_lambda: Float32,
 ):
-    """Derivative-free Evolution Strategy update for the fast weights.
+    """Derivative-free Evolution Strategy update for the operator's fast weights.
 
     Uses real Gaussian noise with antithetic (mirrored) sampling, which both
     halves the estimator variance and centres the fitness (the +/- pair cancels
@@ -66,7 +115,9 @@ def evolve_fast_weights(
         grad      = sum_i (F(w + sigma*eps_i) - F(w - sigma*eps_i)) * eps_i
         W_fast   += alpha / (2*N*sigma) * grad
 
-    Reuses the pre-allocated ESWorkspace — no allocation in the loop.
+    Here F is `operator_fitness` over the demonstrations — the candidate operator
+    is run on each demo input and scored against its output. Reuses the
+    pre-allocated ESWorkspace — no allocation in the loop.
     """
     var size = workspace.size
 
@@ -99,8 +150,12 @@ def evolve_fast_weights(
                 workspace.perturbed_weights[j] = fma(
                     workspace.epsilon[j], sigma, fast_weights[j]
                 )
-        var f_plus = evaluate_primitives(
-            workspace.perturbed_weights, target, size
+        var f_plus = operator_fitness(
+            workspace.perturbed_weights,
+            slow_weights,
+            demos,
+            workspace.op_output,
+            reg_lambda,
         )
 
         # 2b. perturbed = w - sigma * eps, then evaluate F-.
@@ -116,8 +171,12 @@ def evolve_fast_weights(
                 workspace.perturbed_weights[j] = fma(
                     workspace.epsilon[j], -sigma, fast_weights[j]
                 )
-        var f_minus = evaluate_primitives(
-            workspace.perturbed_weights, target, size
+        var f_minus = operator_fitness(
+            workspace.perturbed_weights,
+            slow_weights,
+            demos,
+            workspace.op_output,
+            reg_lambda,
         )
 
         # 3. Accumulate the antithetic gradient: grad += (F+ - F-) * eps.
@@ -149,3 +208,95 @@ def evolve_fast_weights(
             fast_weights[j] = fma(
                 workspace.grad_estimate[j], update_factor, fast_weights[j]
             )
+
+
+# ==========================================
+# In-context operator fit (the learning phase)
+# ==========================================
+# Fit the operator's fast weights to the demonstrations with ANNEALED Evolution
+# Strategy: alpha and sigma decay geometrically from (alpha0, sigma0) to
+# (alpha1, sigma1) over `iters` steps. The wide early sigma is essential — the
+# operator's bilinear gather is locally smooth but globally has shallow basins,
+# so the search must explore broadly before settling; the shrinking sigma then
+# pins the parameters onto the integer values that reproduce a transform exactly.
+# This is the shared recipe for every caller (forward_with_learning, the solve
+# driver, the tests), so the schedule lives in one place.
+def fit_operator(
+    fast_weights: UnsafePointer[Float32, MutAnyOrigin],
+    mut workspace: ESWorkspace,
+    slow_weights: UnsafePointer[Float32, MutAnyOrigin],
+    demos: List[ArcTaskPair],
+    N: Int,
+    alpha0: Float32,
+    alpha1: Float32,
+    sigma0: Float32,
+    sigma1: Float32,
+    iters: Int,
+    reg_lambda: Float32,
+):
+    if iters <= 0:
+        return
+    var alpha_rate = log(alpha1 / alpha0) / Float32(iters)
+    var sigma_rate = log(sigma1 / sigma0) / Float32(iters)
+    for t in range(iters):
+        var alpha = alpha0 * exp(alpha_rate * Float32(t))
+        var sigma = sigma0 * exp(sigma_rate * Float32(t))
+        evolve_fast_weights(
+            fast_weights,
+            workspace,
+            slow_weights,
+            demos,
+            N,
+            alpha,
+            sigma,
+            reg_lambda,
+        )
+
+
+# ==========================================
+# Nested-learning forward pass
+# ==========================================
+# Two-timescale forward pass: the fast weights (the in-context memory) are fit to
+# the demonstrations by the annealed ES, anchored to the slow weights (the
+# meta-learned prior); then the learned operator is run on the held-out test
+# input. The node's fast weights carry an OP_DIM operator parameter vector.
+def forward_with_learning(
+    node: UnsafePointer[HopeNode, MutAnyOrigin],
+    demonstrations: List[ArcTaskPair],
+    test_input: ArcGrid,
+) raises -> ArcGrid:
+    # Worst-case grid area over the demos + test (apply produces same-shape
+    # output) sizes the operator-output scratch once.
+    var capacity = test_input.size()
+    for d in range(len(demonstrations)):
+        var in_area = demonstrations[d].input_grid.size()
+        if in_area > capacity:
+            capacity = in_area
+        var out_area = demonstrations[d].output_grid.size()
+        if out_area > capacity:
+            capacity = out_area
+
+    var workspace = ESWorkspace(OP_DIM, capacity)
+    fit_operator(
+        node[].fast,
+        workspace,
+        node[].slow,
+        demonstrations,
+        FIT_N,
+        FIT_ALPHA0,
+        FIT_ALPHA1,
+        FIT_SIGMA0,
+        FIT_SIGMA1,
+        FIT_ITERS,
+        FIT_REG,
+    )
+
+    var result = ArcGrid(test_input.rows, test_input.cols)
+    apply_operator(
+        node[].fast,
+        test_input.data,
+        result.data,
+        test_input.rows,
+        test_input.cols,
+    )
+    return result^
