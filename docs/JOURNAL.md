@@ -140,3 +140,42 @@ bundles + honest eval) and M9 (meta-learn the slow prior — the second timescal
 subset is geometry+colour; real ARC-AGI 2 will mostly fall *outside* it (objects, counting,
 symmetry, shape change) — M8's honest number is expected to be low, and that's the point of the
 held-out metric.
+
+**21:34 — M8 done: real ARC-AGI 2 ingest + the honest held-out number.** User cloned the
+ARC-AGI-2 repo and symlinked its `data/` into the repo (`arg-agi-2-data` → training/ 1000 +
+evaluation/ 120 task JSONs, both splits ship the test output, so held-out scoring is real). Added a
+batch ingest to `arc_compiler.py`: `compile_task_to_bundle` (one task JSON → one `.task` bundle via
+the existing `_save_task`; drops a task that has no scorable test output) + `compile_arc_dir`
+(directory → `{task_id}.task`) + a `__main__` CLI (`python src/arc_compiler.py <json_dir>
+<out_dir>`). Compiled both splits (0 skipped — the corpus has outputs).
+
+Two fixes the synth subset never exercised:
+- *Shape-change OOB guard in `arc_solve.mojo`.* The operator is same-shape, but real ARC is often
+  not (only 680/1000 training tasks are fully same-shape). The driver scored
+  `exact_match(pred, test.output, rows*cols)` using the **input** dims — on a shrinking task that
+  reads past the (smaller) output buffer. Guard: a test/train pair whose output area ≠ input area
+  honestly scores 0 (skip the compare) instead of crashing. This is where the honest number stays
+  low, by construction.
+- *`--report` honest-eval mode.* The driver `raise`s on 0 solved as a CI regression signal for the
+  synth bundles (which MUST solve some). On the real corpus 0 solved is a legitimate honest result,
+  not a crash — `--report` (first arg) suppresses the raise. `run_tests.sh`'s synth path is
+  unchanged (no flag → still raises).
+
+**The honest ARC-AGI-2 evaluation number (120 public-eval tasks, fit on train / scored on the
+unseen test):**
+
+    Solved (held-out >= 0.99):  0 / 120   (0.0%)
+    mean held-out exact-match:  0.033
+    held-out >= 0.5:   2 tasks      0 < held-out < 0.5:  19 tasks      held-out == 0:  99 tasks
+
+`exact_match` is *fraction of cells correct*, not all-or-nothing — so the mean 0.033 with **0
+tasks fully solved** is the truthful reading: the engine never reproduces a whole held-out grid.
+The two outliers are honest non-solves, not near-misses: `5545f144` (held 0.91 / train 0.0 / gap
+−0.91) is a near-identity *test* pair the seeded identity operator matches by luck while failing
+its own demos; `7c66cb00` (held 0.59, gap 0.036) is the closest thing to a genuine in-subset task.
+9 tasks overfit (train fit > 0.3, held-out < 0.1) — the ES finds an affine/colour that fits the
+demos but doesn't transfer. ~7s/task; the full eval ran in ~14 min, no crashes across all 120
+(the shape guard held). This is exactly the predicted outcome: ARC-AGI-2 is almost entirely
+outside the geometry+colour subset, and the held-out metric reports that with no inflation.
+Raw dump: `scratch/arc2_eval_results.txt` (gitignored, reproducible). Next: M9 (meta-learn the
+slow prior — the second timescale) and Phase B (strip the structural priors).

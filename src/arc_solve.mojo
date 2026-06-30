@@ -82,21 +82,31 @@ def solve_task(task_path: String) raises -> Float32:
 
     var pred = alloc[Float32](capacity)
 
-    # Held-out: minimum exact-match over all test pairs.
+    # Held-out: minimum exact-match over all test pairs. The operator is
+    # same-shape, so a test pair whose output dims differ from its input dims is
+    # inexpressible — it honestly scores 0 (and skipping the compare avoids an
+    # out-of-bounds read across the mismatched buffers). Real ARC-AGI tasks are
+    # often shape-changing; this is where the honest number stays low.
     var held_out = Float32(1.0)
     for i in range(len(task.test)):
         var rows = task.test[i].input_grid.rows
         var cols = task.test[i].input_grid.cols
+        if task.test[i].output_grid.size() != rows * cols:
+            held_out = 0.0
+            continue
         apply_operator(fast, task.test[i].input_grid.data, pred, rows, cols)
         var m = exact_match(pred, task.test[i].output_grid.data, rows * cols)
         if m < held_out:
             held_out = m
 
-    # Train fit (how well the fitted operator reproduces the demos it saw).
+    # Train fit (how well the fitted operator reproduces the demos it saw). Same
+    # same-shape guard as the held-out scoring above.
     var train_sum = Float32(0.0)
     for i in range(len(task.train)):
         var rows = task.train[i].input_grid.rows
         var cols = task.train[i].input_grid.cols
+        if task.train[i].output_grid.size() != rows * cols:
+            continue
         apply_operator(fast, task.train[i].input_grid.data, pred, rows, cols)
         train_sum += exact_match(
             pred, task.train[i].output_grid.data, rows * cols
@@ -124,21 +134,32 @@ def main() raises:
     seed(0)
 
     var args = argv()
-    if len(args) < 2:
+
+    # `--report` (honest-eval mode) suppresses the raise-on-zero: a 0% solve
+    # rate on the real ARC-AGI corpus is a legitimate honest result, not a CI
+    # regression. Without the flag (the synth-bundle path in run_tests.sh, where
+    # some tasks MUST solve) a 0 solve rate raises loudly. The flag must be the
+    # first argument; the rest are `.task` paths.
+    var report_only = len(args) > 1 and String(args[1]) == "--report"
+    var first = 2 if report_only else 1
+
+    if len(args) <= first:
         print(
-            "Usage: mojo run -I src src/arc_solve.mojo <task.task> [more ...]"
+            "Usage: mojo run -I src src/arc_solve.mojo [--report] <task.task>"
+            " [more ...]"
         )
         print(
-            "Generate task bundles first via synth_tasks.generate_task_groups."
+            "Generate task bundles first via synth_tasks.generate_task_groups,"
+            " or arc_compiler.py for real ARC."
         )
         return
 
-    var total = len(args) - 1
+    var total = len(args) - first
     var solved = 0
     var held_sum = Float32(0.0)
 
     print("Esper held-out generalization over", total, "task(s)")
-    for idx in range(1, len(args)):
+    for idx in range(first, len(args)):
         var held_out = solve_task(String(args[idx]))
         held_sum += held_out
         if held_out >= SOLVE_THRESHOLD:
@@ -158,8 +179,9 @@ def main() raises:
         ")",
     )
 
-    # Non-zero exit (raised error) if nothing generalized, so CI fails loudly.
-    if solved == 0:
+    # Non-zero exit (raised error) if nothing generalized, so CI fails loudly —
+    # unless `--report` (honest real-ARC eval, where 0% is an honest number).
+    if solved == 0 and not report_only:
         raise Error(
             "ERROR: 0 tasks solved on held-out inputs; the engine is not"
             " generalizing."

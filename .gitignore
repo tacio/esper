@@ -11,5 +11,11 @@ build/
 # Compiled ARC data
 data_bin/
 
+# Scratch / eval result dumps (reproducible)
+scratch/
+
+# Local symlink to the ARC-AGI-2 corpus (cloned separately)
+arg-agi-2-data
+
 # Paper (referenced by URL in docs/NL-summary.md, not tracked)
 NL.pdf
