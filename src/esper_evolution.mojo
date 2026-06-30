@@ -4,18 +4,12 @@ from std.math import fma, exp, log
 from std.random import randn_float64
 from std.collections import List
 
-# The real fitness calculator (negative MSE) and the learned operator it scores.
-from arc_io import calculate_fitness
-from hope import (
-    ArcTaskPair,
-    ArcTask,
-    apply_operator,
-    OP_DIM,
-    COLOR_OFF,
-    COLOR_DIM,
-    HopeNode,
-    ArcGrid,
-)
+# The learning core is generic over a Memory (what the ES fits) whose associated
+# Dom is a Domain (the Example type + metrics). It consumes generic ExamplePair/
+# Task containers so the same fitness loop serves any domain. The concrete
+# OperatorMemory + ArcGrid are used only by the grid convenience wrapper below.
+from memory import Memory, OperatorMemory
+from hope import ExamplePair, Task, ArcTaskPair, HopeNode, ArcGrid
 
 # Default in-context fit schedule, shared by forward_with_learning and the solve
 # driver. Tuned so the annealed ES reliably fits the expressible transforms.
@@ -26,14 +20,6 @@ comptime FIT_SIGMA0 = Float32(0.5)
 comptime FIT_SIGMA1 = Float32(0.01)
 comptime FIT_ITERS = 4000
 comptime FIT_REG = Float32(0.0001)
-
-# Per-group ES step scale (preconditioning). The colour-LUT parameters are stored
-# normalized (~unit scale) but with tight 1/9 spacing between palette entries, so
-# the global sigma that suits the affine would scramble them. Give the colour
-# group a smaller perturbation/step scale so a single annealed schedule fits both
-# geometry and colour. Applied to both the perturbation and the update, this is a
-# diagonal preconditioner (equivalent to running the ES on rescaled parameters).
-comptime COLOR_SCALE = Float32(0.6)
 
 # Outer (slow-timescale) meta-learning schedule. The slow weights are nudged
 # toward each task's fitted fast solution (Reptile averaging); the inner fit
@@ -66,10 +52,12 @@ comptime nelts = simd_width_of[DType.float32]()
 # subtract an L2 anchor pulling the fast weights toward the slow prior. This is
 # the real learning signal — it replaces the old identity surrogate that scored
 # the weights directly against a known target grid (pure memorization).
-def operator_fitness(
+def fitness[
+    M: Memory
+](
     weights: UnsafePointer[Float32, MutAnyOrigin],
     slow: UnsafePointer[Float32, MutAnyOrigin],
-    demos: List[ArcTaskPair],
+    demos: List[ExamplePair[M.Dom.Example]],
     op_output: UnsafePointer[Float32, MutAnyOrigin],
     reg_lambda: Float32,
 ) -> Float32:
@@ -79,29 +67,29 @@ def operator_fitness(
 
     var total = Float32(0.0)
     for d in range(num):
-        var rows = demos[d].input_grid.rows
-        var cols = demos[d].input_grid.cols
-        var in_n = rows * cols
-        var out_n = demos[d].output_grid.rows * demos[d].output_grid.cols
-        # The operator is same-shape (output dims == input dims). If a demo's
+        var in_n = M.Dom.capacity(demos[d].input_grid)
+        var out_n = M.Dom.capacity(demos[d].output_grid)
+        # The memory is same-shape (output dims == input dims). If a demo's
         # output area differs, it is inexpressible here: assign a heavy penalty
-        # instead of scoring (calling calculate_fitness on mismatched lengths
-        # would read out of bounds), steering the ES away from such tasks.
+        # instead of scoring (calling the metric on mismatched lengths would read
+        # out of bounds), steering the ES away from such tasks.
         if in_n != out_n:
             total += Float32(-1.0e9)
             continue
-        # Run the operator on the demo input, score against the demo output.
-        apply_operator(weights, demos[d].input_grid.data, op_output, rows, cols)
-        total += calculate_fitness(op_output, demos[d].output_grid.data, in_n)
+        # Run the memory on the demo input, score against the demo output via the
+        # Domain's continuous metric.
+        M.apply(weights, demos[d].input_grid, op_output)
+        total += M.Dom.distance(op_output, demos[d].output_grid, in_n)
     total = total / Float32(num)
 
-    # L2 anchor: -reg_lambda * ||w - w_slow||^2 / OP_DIM. The slow weights are the
-    # meta-learned prior; this folds HOPE's anchor straight into the ES objective.
+    # L2 anchor: -reg_lambda * ||w - w_slow||^2 / param_dim. The slow weights are
+    # the meta-learned prior; this folds HOPE's anchor into the ES objective.
+    var pdim = M.param_dim()
     var anchor = Float32(0.0)
-    for i in range(OP_DIM):
+    for i in range(pdim):
         var diff = weights[i] - slow[i]
         anchor += diff * diff
-    return total - reg_lambda * anchor / Float32(OP_DIM)
+    return total - reg_lambda * anchor / Float32(pdim)
 
 
 # ==========================================
@@ -109,10 +97,13 @@ def operator_fitness(
 # ==========================================
 # Pre-allocated, reusable scratch so the ES hot loop performs zero per-iteration
 # allocation. Two size notions resolve the pixels-vs-params seam: the ES vectors
-# are PARAM-sized (OP_DIM, the operator's parameter count), while `op_output` is
-# GRID-sized (worst-case cell area) to hold each operator forward pass. All four
-# buffers are owned and freed once in __del__.
-struct ESWorkspace(Movable):
+# are PARAM-sized (the memory's `param_dim`), while `op_output` is EXAMPLE-sized
+# (worst-case flat capacity) to hold each memory forward pass. Generic over the
+# Memory `M`: the per-parameter ES preconditioner `scale` is filled by
+# `M.fill_scale` (so each memory owns its own preconditioner — the operator's
+# colour group, a uniform scale for an MLP, etc.). All buffers freed once in
+# __del__.
+struct ESWorkspace[M: Memory](Movable):
     var grad_estimate: UnsafePointer[Float32, MutAnyOrigin]
     var epsilon: UnsafePointer[Float32, MutAnyOrigin]
     var perturbed_weights: UnsafePointer[Float32, MutAnyOrigin]
@@ -121,7 +112,8 @@ struct ESWorkspace(Movable):
     var size: Int
     var grid_capacity: Int
 
-    def __init__(out self, param_size: Int, grid_capacity: Int):
+    def __init__(out self, grid_capacity: Int):
+        var param_size = Self.M.param_dim()
         self.size = param_size
         self.grid_capacity = grid_capacity
         self.grad_estimate = alloc[Float32](param_size)
@@ -130,14 +122,8 @@ struct ESWorkspace(Movable):
         self.scale = alloc[Float32](param_size)
         self.op_output = alloc[Float32](grid_capacity)
 
-        # Per-parameter ES step scale: 1 everywhere, except the colour-LUT group
-        # gets COLOR_SCALE (only meaningful for the operator layout, param_size
-        # == OP_DIM; a plain uniform scale otherwise).
-        for i in range(param_size):
-            self.scale[i] = 1.0
-        if param_size == OP_DIM:
-            for c in range(COLOR_DIM):
-                self.scale[COLOR_OFF + c] = COLOR_SCALE
+        # The memory owns its per-parameter ES preconditioner.
+        Self.M.fill_scale(self.scale, param_size)
 
     def __del__(deinit self):
         # Consuming moves suppress the source destructor, so each buffer is live
@@ -152,17 +138,19 @@ struct ESWorkspace(Movable):
 # ==========================================
 # Zero-Allocation Evolution Strategy Update
 # ==========================================
-def evolve_fast_weights(
+def evolve_fast_weights[
+    M: Memory
+](
     fast_weights: UnsafePointer[Float32, MutAnyOrigin],
-    mut workspace: ESWorkspace,
+    mut workspace: ESWorkspace[M],
     slow_weights: UnsafePointer[Float32, MutAnyOrigin],
-    demos: List[ArcTaskPair],
+    demos: List[ExamplePair[M.Dom.Example]],
     N: Int,
     alpha: Float32,
     sigma: Float32,
     reg_lambda: Float32,
 ):
-    """Derivative-free Evolution Strategy update for the operator's fast weights.
+    """Derivative-free Evolution Strategy update for a memory's fast weights.
 
     Uses real Gaussian noise with antithetic (mirrored) sampling, which both
     halves the estimator variance and centres the fitness (the +/- pair cancels
@@ -171,9 +159,9 @@ def evolve_fast_weights(
         grad      = sum_i (F(w + sigma*eps_i) - F(w - sigma*eps_i)) * eps_i
         W_fast   += alpha / (2*N*sigma) * grad
 
-    Here F is `operator_fitness` over the demonstrations — the candidate operator
-    is run on each demo input and scored against its output. Reuses the
-    pre-allocated ESWorkspace — no allocation in the loop.
+    Here F is `fitness[M]` over the demonstrations — the candidate memory is run
+    on each demo input and scored against its output via the Domain metric.
+    Reuses the pre-allocated ESWorkspace — no allocation in the loop.
     """
     var size = workspace.size
 
@@ -210,7 +198,7 @@ def evolve_fast_weights(
                     sigma,
                     fast_weights[j],
                 )
-        var f_plus = operator_fitness(
+        var f_plus = fitness[M](
             workspace.perturbed_weights,
             slow_weights,
             demos,
@@ -235,7 +223,7 @@ def evolve_fast_weights(
                     -sigma,
                     fast_weights[j],
                 )
-        var f_minus = operator_fitness(
+        var f_minus = fitness[M](
             workspace.perturbed_weights,
             slow_weights,
             demos,
@@ -289,11 +277,13 @@ def evolve_fast_weights(
 # pins the parameters onto the integer values that reproduce a transform exactly.
 # This is the shared recipe for every caller (forward_with_learning, the solve
 # driver, the tests), so the schedule lives in one place.
-def fit_operator(
+def fit_operator[
+    M: Memory
+](
     fast_weights: UnsafePointer[Float32, MutAnyOrigin],
-    mut workspace: ESWorkspace,
+    mut workspace: ESWorkspace[M],
     slow_weights: UnsafePointer[Float32, MutAnyOrigin],
-    demos: List[ArcTaskPair],
+    demos: List[ExamplePair[M.Dom.Example]],
     N: Int,
     alpha0: Float32,
     alpha1: Float32,
@@ -309,7 +299,7 @@ def fit_operator(
     for t in range(iters):
         var alpha = alpha0 * exp(alpha_rate * Float32(t))
         var sigma = sigma0 * exp(sigma_rate * Float32(t))
-        evolve_fast_weights(
+        evolve_fast_weights[M](
             fast_weights,
             workspace,
             slow_weights,
@@ -327,14 +317,18 @@ def fit_operator(
 # Two-timescale forward pass: the fast weights (the in-context memory) are fit to
 # the demonstrations by the annealed ES, anchored to the slow weights (the
 # meta-learned prior); then the learned operator is run on the held-out test
-# input. The node's fast weights carry an OP_DIM operator parameter vector.
+# input. This is the grid + OperatorMemory convenience wrapper (used by main and
+# the forward-learning test); it constructs an ArcGrid result, so it stays
+# concrete (a fully domain-generic forward needs a Domain-provided output
+# constructor — deferred to when a second domain lands). The generic core it
+# calls (ESWorkspace/fit_operator) is what carries Phase B.
 def forward_with_learning(
     node: UnsafePointer[HopeNode, MutAnyOrigin],
     demonstrations: List[ArcTaskPair],
     test_input: ArcGrid,
 ) raises -> ArcGrid:
     # Worst-case grid area over the demos + test (apply produces same-shape
-    # output) sizes the operator-output scratch once.
+    # output) sizes the memory-output scratch once.
     var capacity = test_input.size()
     for d in range(len(demonstrations)):
         var in_area = demonstrations[d].input_grid.size()
@@ -344,8 +338,8 @@ def forward_with_learning(
         if out_area > capacity:
             capacity = out_area
 
-    var workspace = ESWorkspace(OP_DIM, capacity)
-    fit_operator(
+    var workspace = ESWorkspace[OperatorMemory](capacity)
+    fit_operator[OperatorMemory](
         node[].fast,
         workspace,
         node[].slow,
@@ -360,13 +354,7 @@ def forward_with_learning(
     )
 
     var result = ArcGrid(test_input.rows, test_input.cols)
-    apply_operator(
-        node[].fast,
-        test_input.data,
-        result.data,
-        test_input.rows,
-        test_input.cols,
-    )
+    OperatorMemory.apply(node[].fast, test_input, result.data)
     return result^
 
 
@@ -413,10 +401,12 @@ def reptile_update(
 # owns the (pre-sized) ESWorkspace, and the single `fast` buffer is allocated once
 # here — no per-iteration heap allocation. After meta-training, a fresh task of
 # the same family fits faster from `slow` than from a cold identity prior.
-def reptile_meta_train(
+def reptile_meta_train[
+    M: Memory
+](
     slow: UnsafePointer[Float32, MutAnyOrigin],
-    meta_tasks: List[ArcTask],
-    mut workspace: ESWorkspace,
+    meta_tasks: List[Task[M.Dom.Example]],
+    mut workspace: ESWorkspace[M],
     n_iters: Int,
     inner_iters: Int,
     meta_lr: Float32,
@@ -425,12 +415,13 @@ def reptile_meta_train(
     if num == 0 or n_iters <= 0:
         return
 
-    var fast = alloc[Float32](OP_DIM)
+    var pdim = M.param_dim()
+    var fast = alloc[Float32](pdim)
     for t in range(n_iters):
         # Cycle deterministically through the meta-train tasks.
         ref task = meta_tasks[t % num]
-        copy_weights(fast, slow, OP_DIM)
-        fit_operator(
+        copy_weights(fast, slow, pdim)
+        fit_operator[M](
             fast,
             workspace,
             slow,
@@ -443,5 +434,5 @@ def reptile_meta_train(
             inner_iters,
             FIT_REG,
         )
-        reptile_update(slow, fast, OP_DIM, meta_lr)
+        reptile_update(slow, fast, pdim, meta_lr)
     fast.free()

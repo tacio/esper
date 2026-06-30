@@ -10,7 +10,8 @@ from hope import (
     apply_operator,
     seed_identity_operator,
 )
-from esper_evolution import ESWorkspace, fit_operator, operator_fitness
+from memory import OperatorMemory
+from esper_evolution import ESWorkspace, fit_operator, fitness
 from arc_io import exact_match
 
 # ==========================================================================
@@ -62,14 +63,14 @@ def main() raises:
     seed_identity_operator(fast)
     seed_identity_operator(slow)
 
-    var workspace = ESWorkspace(OP_DIM, n)
+    var workspace = ESWorkspace[OperatorMemory](n)
 
-    var init_fit = operator_fitness(
+    var init_fit = fitness[OperatorMemory](
         fast, slow, demos, workspace.op_output, Float32(0.0001)
     )
 
     # Annealed in-context fit (the shared recipe).
-    fit_operator(
+    fit_operator[OperatorMemory](
         fast,
         workspace,
         slow,
@@ -83,7 +84,7 @@ def main() raises:
         Float32(0.0001),  # reg_lambda
     )
 
-    var final_fit = operator_fitness(
+    var final_fit = fitness[OperatorMemory](
         fast, slow, demos, workspace.op_output, Float32(0.0001)
     )
 

@@ -3,7 +3,8 @@ from std.collections import List
 
 # Run from the project root: `mojo run -I src tests/test_shape.mojo`.
 from hope import ArcGrid, ArcTaskPair, OP_DIM, seed_identity_operator
-from esper_evolution import operator_fitness
+from memory import OperatorMemory
+from esper_evolution import fitness
 
 # ==========================================================================
 # Shape-handling guard test. The structured operator is same-shape (output dims
@@ -29,7 +30,9 @@ def main() raises:
         a_in.data[k] = Float32(k % 10)
         a_out.data[k] = Float32(k % 10)
     same.append(ArcTaskPair(a_in^, a_out^))
-    var f_same = operator_fitness(weights, slow, same, op_output, Float32(0.0))
+    var f_same = fitness[OperatorMemory](
+        weights, slow, same, op_output, Float32(0.0)
+    )
     if f_same < -0.001:
         raise Error(
             "same-shape identity demo should score ~0, got " + String(f_same)
@@ -45,7 +48,9 @@ def main() raises:
     for k in range(18):
         b_out.data[k] = Float32(k % 10)
     diff.append(ArcTaskPair(b_in^, b_out^))
-    var f_diff = operator_fitness(weights, slow, diff, op_output, Float32(0.0))
+    var f_diff = fitness[OperatorMemory](
+        weights, slow, diff, op_output, Float32(0.0)
+    )
     if f_diff > -1.0e6:
         raise Error(
             "shape-changing demo should be heavily penalized, got "

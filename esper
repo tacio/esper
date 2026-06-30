@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# Dev harness for Esper: one entrypoint so you never cd / activate the venv /
+# spell out `mojo run -I src` by hand. Activates the project venv and runs from
+# the repo root regardless of where it's invoked.
+#
+# Usage:
+#   ./esper run <file.mojo>      # mojo run -I src <file>
+#   ./esper test <name>          # run tests/test_<name>.mojo  (or a path/glob)
+#   ./esper test                 # run every tests/test_*.mojo
+#   ./esper main                 # run src/main.mojo
+#   ./esper solve <glob...>      # arc_solve.mojo over .task bundles (adds --report)
+#   ./esper fmt [files...]       # mojo format (defaults to src + tests)
+#   ./esper suite                # ./run_tests.sh (full suite + format gate)
+#   ./esper mojo <args...>       # raw mojo passthrough (with venv active)
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$ROOT"
+
+# Activate the project venv (where mojo lives) if not already on PATH.
+if [[ -f .venv/bin/activate ]]; then
+    # shellcheck disable=SC1091
+    source .venv/bin/activate
+fi
+
+cmd="${1:-}"
+shift || true
+
+case "$cmd" in
+run)
+    mojo run -I src "$@"
+    ;;
+test)
+    if [[ $# -eq 0 ]]; then
+        for f in tests/test_*.mojo; do
+            echo "== $f =="
+            mojo run -I src "$f"
+        done
+    else
+        for name in "$@"; do
+            if [[ -f "$name" ]]; then
+                f="$name"
+            else
+                f="tests/test_${name}.mojo"
+            fi
+            echo "== $f =="
+            mojo run -I src "$f"
+        done
+    fi
+    ;;
+main)
+    mojo run -I src src/main.mojo
+    ;;
+solve)
+    mojo run -I src src/arc_solve.mojo --report "$@"
+    ;;
+fmt)
+    if [[ $# -eq 0 ]]; then
+        mojo format src tests
+    else
+        mojo format "$@"
+    fi
+    ;;
+suite)
+    ./run_tests.sh
+    ;;
+mojo)
+    mojo "$@"
+    ;;
+*)
+    echo "usage: ./esper {run|test|main|solve|fmt|suite|mojo} ..." >&2
+    echo "  see the header of $ROOT/esper for details" >&2
+    exit 2
+    ;;
+esac

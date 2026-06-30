@@ -268,3 +268,63 @@ The **same 5 tasks** solve as the overnight sequential run (`0d3d703e`, `67a3c6a
 solves, not an artifact of one lucky seed. The means shifted slightly (different RNG stream); the
 headline (5/1000, 0/120) is unchanged and now reproducible regardless of worker count. Re-run with
 `./eval_parallel.sh data_bin/arc2_train` (or `…/arc2_eval`).
+
+**11:47 — Phase B / B1 begins: probed Mojo 1.0 trait mechanics before refactoring.** B1 lifts the
+ES core onto `Domain` + `Memory` abstractions, so first I probed what Mojo 1.0.0b2 actually supports
+(four throwaway scratch probes, since deleted). Findings that shaped the design:
+- **`fn` is fully removed** — `def` everywhere, including trait methods and generic functions. `alias`
+  is deprecated → `comptime`. A parameter cannot be named `out` (reserved by `def __init__(out self)`).
+- Traits support **associated types** (`comptime Example: Movable`), **static methods**, and **nested
+  associated access** (`M.Dom.Example`). Generic functions `def f[M: Memory](...)` and generic
+  **structs** `struct ESWorkspace[M: Memory]` work (struct params referenced as `Self.M`).
+- **Trait declarations do NOT take parameters** — `trait Memory[D: Domain]` is rejected. So the planned
+  dual-parameter `[D: Domain, M: Memory[D]]` is impossible. Resolved it *better*: `Memory` carries its
+  domain as an **associated type** (`comptime Dom: Domain`), so the ES core is single-parameter
+  `[M: Memory]` and reaches the domain via `M.Dom` (`M.Dom.Example`, `M.Dom.distance(...)`). Cleaner
+  than dual params. Validated end-to-end with a probe (generic `fit[M]` + generic `ESWorkspace[M]`
+  calling `M.fill_scale` in `__init__`). Proceeding to the refactor (operator wrapped as
+  `OperatorMemory`, suite must stay green) then the emergent `MLPMemory`.
+
+**14:37 — B1 DONE: the Memory/Domain seam + the first emergent memory.** Lifted the ES /
+two-timescale core onto two traits so it never names ARC specifics:
+- `Domain` (in `arc_io.mojo`): associated `Example` type + `distance`/`score`/`capacity` (GridDomain
+  wraps ArcGrid + the existing metrics).
+- `Memory` (new `src/memory.mojo`): `param_dim`/`seed`/`fill_scale`/`apply`, with an associated
+  `comptime Dom: Domain` reached as `M.Dom` (traits can't take parameters, so the domain is an
+  associated type, not `Memory[D]`). The ES core is single-parameter generic `[M: Memory]` — static
+  dispatch, zero overhead.
+The demo containers became generic too (`ExamplePair[E]`, `Task[E]` in `hope.mojo`, with
+`ArcTaskPair`/`ArcTask` as grid `comptime` aliases): Mojo type-checks generic bodies *eagerly*, so a
+concrete `ArcGrid` can't be passed where the abstract `M.Dom.Example` is expected — the containers
+must carry the abstract type. `ESWorkspace` → `ESWorkspace[M]` (fills the preconditioner via
+`M.fill_scale`, retiring the hardcoded `COLOR_SCALE` branch); `OP_DIM` → `M.param_dim()` throughout;
+`forward_with_learning` stays a concrete grid+operator wrapper (a fully generic forward needs a
+Domain-provided output constructor — deferred). **`OperatorMemory` wraps the existing operator with
+zero behaviour change — the whole suite stays green through the generic path** (held-out 1.0
+everywhere, meta-prior gap 1.0, synth 3/3, real ARC unaffected).
+
+**`MLPMemory` — the first training-wheel removal (emergent recolor, no LUT).** A per-cell 1->H->1
+tanh MLP over the centre cell (K=1, H=16, 49 params): `x = in/9`, a fixed steep-tanh basis (W1=20)
+tiling the colour range, output layer (W2,b2) fit by the *same* annealed ES, squashed to [0,9].
+Learns recolor `(c+1)%10` to **held-out 1.0** — the colour permutation emerges from data, nothing
+symbolic given. `tests/test_mlp_memory.mojo`.
+
+**DISCOVERY — three landscape fixes, each found by `scratch/probe_mlp.mojo` (per-colour readout):**
+1. *Unbounded output diverges.* A raw linear MLP output is unbounded, so a large W2 explodes the MSE
+   and the ES blows up (held-out 0.0). The operator never has this — its gather output is always a
+   bounded input value. Fix: squash the output (bounded MSE → stable ES).
+2. *Basis resolution.* Gentle ramps (W1≈4) span ~0.25 in x, wider than the 1/9≈0.11 colour spacing,
+   so adjacent colours aren't separable. Steep ramps (W1=20, near a soft lookup table) fixed it; the
+   tiling also extends just past [0,1] so the edge colours sit inside the basis.
+3. *Squash range must be EXACTLY [0,9] (the subtle one).* I first widened it to [-2,11] reasoning the
+   extremes shouldn't sit at tanh's tails — but that makes a *saturated* output land on -2/11, which
+   round to invalid colours that never match. With [0,9] a saturated output lands on a valid extreme
+   colour (0 or 9), and the exact-match ±0.5 tolerance covers it. This also makes the 9->0 recolor
+   **wrap fit for free**: colour 9 saturates the squash low, which is exactly 0. With [0,9], all ten
+   colours (wrap included) land at the standard 4000 iters.
+
+Honest scope: the MLP is a *local* memory (K=1) — it cannot express global geometry (flip/transpose
+are coordinate permutations); that's B3's emergent-global-addressing memory. There is no
+memory-selector — `OperatorMemory` and `MLPMemory` are compile-time choices, each measured on the
+subset it expresses. Also added a dev harness `./esper` (run/test/main/solve/fmt/suite) so commands
+don't need cd + venv-activate + `mojo run -I src`. Full suite green (~72s).

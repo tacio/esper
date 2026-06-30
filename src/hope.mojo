@@ -370,27 +370,40 @@ def update_fast_weights(
 # ==========================================
 # Phase 2: Execution Loop
 # ==========================================
-# A demonstration pair (input -> output) for in-context learning.
-struct ArcTaskPair(Movable):
-    var input_grid: ArcGrid
-    var output_grid: ArcGrid
+# A demonstration pair (input -> output) for in-context learning, GENERIC over
+# the example type `E` (Phase B). The learning core is generic over a Memory `M`,
+# so it consumes pairs of `M.Dom.Example`; making the pair generic lets the same
+# fitness loop serve any domain. `ArcTaskPair` is the grid specialization.
+# (Field names keep `_grid` for now to bound churn; a non-grid domain still uses
+# them as the input/output example slots.)
+struct ExamplePair[E: Movable & ImplicitlyDeletable](Movable):
+    var input_grid: Self.E
+    var output_grid: Self.E
 
-    def __init__(out self, var input_grid: ArcGrid, var output_grid: ArcGrid):
+    def __init__(out self, var input_grid: Self.E, var output_grid: Self.E):
         self.input_grid = input_grid^
         self.output_grid = output_grid^
 
 
-# A full task: training demonstrations plus held-out test pairs. `test` is a List
-# because ARC tasks may have more than one test pair (solved iff all match).
-struct ArcTask(Movable):
-    var train: List[ArcTaskPair]
-    var test: List[ArcTaskPair]
+# A full task: training demonstrations plus held-out test pairs (a List because a
+# task may have >1 test pair, solved iff all match). Generic over the example
+# type; `ArcTask` is the grid specialization.
+struct Task[E: Movable & ImplicitlyDeletable](Movable):
+    var train: List[ExamplePair[Self.E]]
+    var test: List[ExamplePair[Self.E]]
 
     def __init__(
-        out self, var train: List[ArcTaskPair], var test: List[ArcTaskPair]
+        out self,
+        var train: List[ExamplePair[Self.E]],
+        var test: List[ExamplePair[Self.E]],
     ):
         self.train = train^
         self.test = test^
+
+
+# Grid specializations — the names the rest of the (grid) codebase uses.
+comptime ArcTaskPair = ExamplePair[ArcGrid]
+comptime ArcTask = Task[ArcGrid]
 
 
 # NOTE: `forward_with_learning` now lives in `esper_evolution.mojo` — it drives

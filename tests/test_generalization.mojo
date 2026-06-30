@@ -10,6 +10,7 @@ from hope import (
     apply_operator,
     seed_identity_operator,
 )
+from memory import OperatorMemory
 from esper_evolution import (
     ESWorkspace,
     fit_operator,
@@ -71,8 +72,8 @@ def learn_and_eval(name: String, rows: Int, cols: Int) raises -> Float32:
     var slow = alloc[Float32](OP_DIM)
     seed_identity_operator(fast)
     seed_identity_operator(slow)
-    var ws = ESWorkspace(OP_DIM, n)
-    fit_operator(
+    var ws = ESWorkspace[OperatorMemory](n)
+    fit_operator[OperatorMemory](
         fast,
         ws,
         slow,

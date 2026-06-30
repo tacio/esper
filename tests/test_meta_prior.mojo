@@ -11,6 +11,7 @@ from hope import (
     apply_operator,
     seed_identity_operator,
 )
+from memory import OperatorMemory
 from esper_evolution import (
     ESWorkspace,
     fit_operator,
@@ -88,11 +89,11 @@ def fit_and_eval(
     demos: List[ArcTaskPair],
     test_in: ArcGrid,
     test_out: ArcGrid,
-    mut ws: ESWorkspace,
+    mut ws: ESWorkspace[OperatorMemory],
 ) raises -> Float32:
     var fast = alloc[Float32](OP_DIM)
     copy_weights(fast, slow, OP_DIM)
-    fit_operator(
+    fit_operator[OperatorMemory](
         fast,
         ws,
         slow,
@@ -118,7 +119,7 @@ def main() raises:
     seed(0)
 
     var capacity = ROWS * COLS
-    var ws = ESWorkspace(OP_DIM, capacity)
+    var ws = ESWorkspace[OperatorMemory](capacity)
 
     # --- Meta-train the slow prior on a family of flip_h tasks. ---
     var meta_tasks = List[ArcTask]()
@@ -127,7 +128,7 @@ def main() raises:
 
     var slow_meta = alloc[Float32](OP_DIM)
     seed_identity_operator(slow_meta)
-    reptile_meta_train(
+    reptile_meta_train[OperatorMemory](
         slow_meta, meta_tasks, ws, META_ITERS, META_FIT_ITERS, META_LR
     )
 

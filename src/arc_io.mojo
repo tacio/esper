@@ -146,3 +146,63 @@ def exact_match(
                 matches += 1.0
 
     return matches / Float32(size)
+
+
+# ==========================================
+# Domain abstraction (Phase B)
+# ==========================================
+# A reasoning Domain is (an Example type, a continuous fitness metric for the ES,
+# a discrete held-out score, and the flat length of an Example for scratch
+# sizing). The ES/two-timescale core is generic over a `Memory` whose associated
+# `Dom` is a Domain (see src/memory.mojo) — so the core only ever touches a flat
+# Float32 prediction buffer + the Domain's metrics, never ARC specifics. ArcGrid
+# is the first Example; a non-grid Domain (B2) plugs in by conforming here.
+trait Domain:
+    comptime Example: Movable & ImplicitlyDeletable
+
+    @staticmethod
+    def distance(
+        pred: UnsafePointer[Float32, MutAnyOrigin],
+        target: Self.Example,
+        n: Int,
+    ) -> Float32:
+        ...
+
+    @staticmethod
+    def score(
+        pred: UnsafePointer[Float32, MutAnyOrigin],
+        target: Self.Example,
+        n: Int,
+    ) -> Float32:
+        ...
+
+    @staticmethod
+    def capacity(ex: Self.Example) -> Int:
+        ...
+
+
+# The ARC grid domain: Example = ArcGrid, metrics = the SIMD negative-MSE /
+# exact-match above, capacity = cell area. The prediction is a flat Float32
+# buffer (the memory's apply target); the target is the demo/test output grid.
+struct GridDomain(Domain):
+    comptime Example = ArcGrid
+
+    @staticmethod
+    def distance(
+        pred: UnsafePointer[Float32, MutAnyOrigin],
+        target: ArcGrid,
+        n: Int,
+    ) -> Float32:
+        return calculate_fitness(pred, target.data, n)
+
+    @staticmethod
+    def score(
+        pred: UnsafePointer[Float32, MutAnyOrigin],
+        target: ArcGrid,
+        n: Int,
+    ) -> Float32:
+        return exact_match(pred, target.data, n)
+
+    @staticmethod
+    def capacity(ex: ArcGrid) -> Int:
+        return ex.size()

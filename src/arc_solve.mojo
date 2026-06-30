@@ -3,6 +3,7 @@ from std.memory import alloc, UnsafePointer
 from std.random import seed
 
 from hope import OP_DIM, apply_operator, seed_identity_operator
+from memory import OperatorMemory
 from esper_evolution import (
     ESWorkspace,
     fit_operator,
@@ -75,8 +76,8 @@ def solve_task(task_path: String) raises -> Float32:
     seed_identity_operator(fast)
     seed_identity_operator(slow)
 
-    var workspace = ESWorkspace(OP_DIM, capacity)
-    fit_operator(
+    var workspace = ESWorkspace[OperatorMemory](capacity)
+    fit_operator[OperatorMemory](
         fast,
         workspace,
         slow,
