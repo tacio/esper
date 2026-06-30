@@ -432,3 +432,35 @@ the memory generating its own update/sharpening dynamics) or a fundamentally cle
 more scaffolding. Reverted all combined-memory code (`GridMemory`, `fit_staged`, residual colour,
 `_mlp_z`/base-offset refactor); shipped the clean geometry-only `AttnGatherMemory`. `OperatorMemory`
 remains the honest geometry+colour baseline. **B3 = emergent global addressing for geometry, DONE.**
+
+**23:03 — Compute scaling, phase 1: parallelized the ES inner loop across CPU cores (numerically
+identical, ~3.5× on the heavy attention fit).** B3's O(N²) attention pushed the suite to ~116s and the
+user wanted a higher training budget. Investigated GPU first: the RTX 2060 Mobile (compute 7.5) is
+present, but the **pinned slim `mojo` 1.0.0b2 wheel ships only `std` + `layout` — the Mojo GPU API
+(`gpu.host.DeviceContext`, kernels) lives in the MAX packages, not installed.** GPU would mean
+migrating off the hard version pin to MAX, and a 2060 Mobile wouldn't beat 6–12 CPU cores on these
+tiny kernels anyway. `std.algorithm.parallelize`, by contrast, IS in-toolchain and runs across cores.
+Decision (user): **phased — CPU now, GPU/MAX later** (revisit when batching many tasks or scaling N
+huge).
+
+The ES does **2·N independent fitness evals per iteration** — embarrassingly parallel. Restructured
+`evolve_fast_weights` into serial → parallel → serial: (1) draw all N epsilons up front in the exact
+sequential RNG order; (2) `parallelize[sample](N)` — each sample builds its ±perturbation and
+evaluates F+/F− in its **own disjoint workspace stripe** (`ESWorkspace` now holds `n_samples`× the
+`eps`/`perturbed`/`op_output` buffers + a `coeff` array; `n_samples` defaults to `FIT_N`, so all 8
+construction sites are unchanged); (3) reduce `grad = Σ coeff[s]·eps[s]` serially in sample order. The
+SIMD/FMA bodies and `fitness[M]` are reused verbatim.
+
+**Bit-identical by construction** — same epsilons (serial RNG), deterministic per-sample fitness,
+same serial reduction order → same `grad` → same weights. Verified: the whole suite stays green with
+the SAME numbers, including `main`'s exact float dump `4.0731115 9.093359 0.92952275 0.91821253`
+unchanged. So this is pure throughput, not behaviour.
+
+Results: **`test_attn_memory` 54.9s → 15.5s (3.5×)**; full suite ~116s → ~87s (`user` 7m52s ≫ `real`
+87s confirms heavy parallel use). The feared cheap-fit regression (parallelize dispatch overhead on
+4000 trivial-eval iterations) **did not materialise** — even the operator/MLP fits net-sped-up — so
+**no work-size gate was needed** (kept the code simple; revisit only if a future cheap memory
+regresses). Only blast-radius fix: `test_demo_fitness` poked `workspace.op_output` directly (renamed
+to `op_output_all`; its base pointer is still a valid capacity-sized scratch). Pure Mojo, no new
+deps, no hot-loop alloc (per-sample buffers pre-allocated once), SIMD/FMA preserved. **Phase 2 (GPU
+via MAX) deferred** — documented in the plan; out of scope until the workload outgrows 12 cores.

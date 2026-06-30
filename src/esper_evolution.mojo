@@ -3,6 +3,7 @@ from std.sys import simd_width_of, size_of
 from std.math import fma, exp, log
 from std.random import randn_float64
 from std.collections import List
+from std.algorithm import parallelize
 
 # The learning core is generic over a Memory (what the ES fits) whose associated
 # Dom is a Domain (the Example type + metrics). It consumes generic ExamplePair/
@@ -97,30 +98,41 @@ def fitness[
 # ==========================================
 # Pre-allocated, reusable scratch so the ES hot loop performs zero per-iteration
 # allocation. Two size notions resolve the pixels-vs-params seam: the ES vectors
-# are PARAM-sized (the memory's `param_dim`), while `op_output` is EXAMPLE-sized
-# (worst-case flat capacity) to hold each memory forward pass. Generic over the
-# Memory `M`: the per-parameter ES preconditioner `scale` is filled by
-# `M.fill_scale` (so each memory owns its own preconditioner — the operator's
-# colour group, a uniform scale for an MLP, etc.). All buffers freed once in
-# __del__.
+# are PARAM-sized (the memory's `param_dim`), while the forward scratch is
+# EXAMPLE-sized (worst-case flat capacity). Generic over the Memory `M`: the
+# per-parameter ES preconditioner `scale` is filled by `M.fill_scale` (so each
+# memory owns its own preconditioner — the operator's colour group, a uniform scale
+# for an MLP, etc.).
+#
+# PARALLELISM: the ES inner loop's 2*N fitness evaluations are independent, so they
+# run across cores (see evolve_fast_weights). For that, the per-sample scratch must
+# be DISJOINT — `eps_all`, `perturbed_all`, `op_output_all` are sized `n_samples` ×
+# (param or capacity), so sample s touches only its own stripe and threads never
+# share mutable state. `coeff` holds each sample's (F+ - F-). `n_samples` defaults
+# to FIT_N (every construction site fits with N = FIT_N), so callers are unchanged.
+# All buffers alloc-once / free-once — no hot-loop allocation.
 struct ESWorkspace[M: Memory](Movable):
     var grad_estimate: UnsafePointer[Float32, MutAnyOrigin]
-    var epsilon: UnsafePointer[Float32, MutAnyOrigin]
-    var perturbed_weights: UnsafePointer[Float32, MutAnyOrigin]
+    var eps_all: UnsafePointer[Float32, MutAnyOrigin]
+    var perturbed_all: UnsafePointer[Float32, MutAnyOrigin]
     var scale: UnsafePointer[Float32, MutAnyOrigin]
-    var op_output: UnsafePointer[Float32, MutAnyOrigin]
+    var op_output_all: UnsafePointer[Float32, MutAnyOrigin]
+    var coeff: UnsafePointer[Float32, MutAnyOrigin]
     var size: Int
     var grid_capacity: Int
+    var n_samples: Int
 
-    def __init__(out self, grid_capacity: Int):
+    def __init__(out self, grid_capacity: Int, n_samples: Int = FIT_N):
         var param_size = Self.M.param_dim()
         self.size = param_size
         self.grid_capacity = grid_capacity
+        self.n_samples = n_samples
         self.grad_estimate = alloc[Float32](param_size)
-        self.epsilon = alloc[Float32](param_size)
-        self.perturbed_weights = alloc[Float32](param_size)
+        self.eps_all = alloc[Float32](n_samples * param_size)
+        self.perturbed_all = alloc[Float32](n_samples * param_size)
         self.scale = alloc[Float32](param_size)
-        self.op_output = alloc[Float32](grid_capacity)
+        self.op_output_all = alloc[Float32](n_samples * grid_capacity)
+        self.coeff = alloc[Float32](n_samples)
 
         # The memory owns its per-parameter ES preconditioner.
         Self.M.fill_scale(self.scale, param_size)
@@ -129,10 +141,11 @@ struct ESWorkspace[M: Memory](Movable):
         # Consuming moves suppress the source destructor, so each buffer is live
         # exactly once here — free unconditionally.
         self.grad_estimate.free()
-        self.epsilon.free()
-        self.perturbed_weights.free()
+        self.eps_all.free()
+        self.perturbed_all.free()
         self.scale.free()
-        self.op_output.free()
+        self.op_output_all.free()
+        self.coeff.free()
 
 
 # ==========================================
@@ -161,89 +174,91 @@ def evolve_fast_weights[
 
     Here F is `fitness[M]` over the demonstrations — the candidate memory is run
     on each demo input and scored against its output via the Domain metric.
-    Reuses the pre-allocated ESWorkspace — no allocation in the loop.
+
+    The 2*N fitness evaluations are INDEPENDENT, so they run across cores: the N
+    epsilons are drawn serially up front (preserving the exact RNG stream, so the
+    result is reproducible and bit-identical to a sequential run), the per-sample
+    evaluations run in parallel into disjoint workspace stripes, and the gradient is
+    reduced serially in sample order (same float summation order). Reuses the
+    pre-allocated ESWorkspace — no allocation in the loop.
     """
     var size = workspace.size
 
     # Guard degenerate configurations that would divide by zero or do nothing.
-    if N <= 0 or size <= 0 or sigma == 0.0:
+    # N must not exceed the workspace's per-sample buffers (sized to n_samples).
+    if N <= 0 or size <= 0 or sigma == 0.0 or N > workspace.n_samples:
         return
 
     var remainder = size % nelts
     var rem_start = size - remainder
+    var cap = workspace.grid_capacity
 
-    # Zero the gradient accumulator.
-    memset_zero(workspace.grad_estimate, size)
-
-    for _ in range(N):
-        # 1. Draw fresh Gaussian noise. RNG is inherently scalar; the arithmetic
-        #    that follows stays vectorized + FMA.
+    # 1. Serial: draw all N epsilon vectors up front, in the same order a sequential
+    #    loop would (sample 0's `size` draws, then sample 1's, ...). RNG is scalar
+    #    and stays serial, so the stream — and the result — are reproducible.
+    for s in range(N):
+        var eps_s = workspace.eps_all + s * size
         for j in range(size):
-            workspace.epsilon[j] = Float32(randn_float64(0.0, 1.0))
+            eps_s[j] = Float32(randn_float64(0.0, 1.0))
 
-        # 2a. perturbed = w + sigma * (scale ⊙ eps), then evaluate F+.
+    # Local pointers captured by the parallel closure (the pointer is copied, not the
+    # data; each sample indexes its own disjoint stripe, so no shared mutable state).
+    var eps_all = workspace.eps_all
+    var perturbed_all = workspace.perturbed_all
+    var op_output_all = workspace.op_output_all
+    var coeff = workspace.coeff
+    var scale = workspace.scale
+
+    # 2. Parallel: each sample builds w +/- sigma*(scale ⊙ eps) in its own perturbed
+    #    stripe (SIMD/FMA), evaluates F+ and F- in its own forward scratch, and writes
+    #    its antithetic coefficient. fitness/apply are pure reads of the (shared)
+    #    weights and demos, so this is data-race free.
+    @parameter
+    def sample(s: Int):
+        var eps_s = eps_all + s * size
+        var pert_s = perturbed_all + s * size
+        var out_s = op_output_all + s * cap
+
         var pos_sigma = SIMD[DType.float32, nelts](sigma)
         for j in range(0, size - nelts + 1, nelts):
             var w_vec = fast_weights.load[width=nelts](j)
-            var seps = workspace.epsilon.load[width=nelts](
-                j
-            ) * workspace.scale.load[width=nelts](j)
-            workspace.perturbed_weights.store[width=nelts](
-                j, fma(seps, pos_sigma, w_vec)
-            )
+            var seps = eps_s.load[width=nelts](j) * scale.load[width=nelts](j)
+            pert_s.store[width=nelts](j, fma(seps, pos_sigma, w_vec))
         if remainder > 0:
             for j in range(rem_start, size):
-                workspace.perturbed_weights[j] = fma(
-                    workspace.epsilon[j] * workspace.scale[j],
-                    sigma,
-                    fast_weights[j],
-                )
-        var f_plus = fitness[M](
-            workspace.perturbed_weights,
-            slow_weights,
-            demos,
-            workspace.op_output,
-            reg_lambda,
-        )
+                pert_s[j] = fma(eps_s[j] * scale[j], sigma, fast_weights[j])
+        var f_plus = fitness[M](pert_s, slow_weights, demos, out_s, reg_lambda)
 
-        # 2b. perturbed = w - sigma * (scale ⊙ eps), then evaluate F-.
         var neg_sigma = SIMD[DType.float32, nelts](-sigma)
         for j in range(0, size - nelts + 1, nelts):
             var w_vec = fast_weights.load[width=nelts](j)
-            var seps = workspace.epsilon.load[width=nelts](
-                j
-            ) * workspace.scale.load[width=nelts](j)
-            workspace.perturbed_weights.store[width=nelts](
-                j, fma(seps, neg_sigma, w_vec)
-            )
+            var seps = eps_s.load[width=nelts](j) * scale.load[width=nelts](j)
+            pert_s.store[width=nelts](j, fma(seps, neg_sigma, w_vec))
         if remainder > 0:
             for j in range(rem_start, size):
-                workspace.perturbed_weights[j] = fma(
-                    workspace.epsilon[j] * workspace.scale[j],
-                    -sigma,
-                    fast_weights[j],
-                )
-        var f_minus = fitness[M](
-            workspace.perturbed_weights,
-            slow_weights,
-            demos,
-            workspace.op_output,
-            reg_lambda,
-        )
+                pert_s[j] = fma(eps_s[j] * scale[j], -sigma, fast_weights[j])
+        var f_minus = fitness[M](pert_s, slow_weights, demos, out_s, reg_lambda)
 
-        # 3. Accumulate the antithetic gradient: grad += (F+ - F-) * eps.
-        var coeff = f_plus - f_minus
-        var coeff_vec = SIMD[DType.float32, nelts](coeff)
+        coeff[s] = f_plus - f_minus
+
+    parallelize[sample](N)
+
+    # 3. Serial: reduce the antithetic gradient grad += sum_s (F+ - F-)_s * eps_s, in
+    #    sample order (identical float summation to the sequential loop).
+    memset_zero(workspace.grad_estimate, size)
+    for s in range(N):
+        var eps_s = workspace.eps_all + s * size
+        var coeff_vec = SIMD[DType.float32, nelts](coeff[s])
         for j in range(0, size - nelts + 1, nelts):
             var grad_vec = workspace.grad_estimate.load[width=nelts](j)
-            var eps_vec = workspace.epsilon.load[width=nelts](j)
+            var eps_vec = eps_s.load[width=nelts](j)
             workspace.grad_estimate.store[width=nelts](
                 j, fma(eps_vec, coeff_vec, grad_vec)
             )
         if remainder > 0:
             for j in range(rem_start, size):
                 workspace.grad_estimate[j] = fma(
-                    workspace.epsilon[j], coeff, workspace.grad_estimate[j]
+                    eps_s[j], coeff[s], workspace.grad_estimate[j]
                 )
 
     # 4. Final step: W_fast += alpha / (2*N*sigma) * (scale ⊙ grad_estimate).

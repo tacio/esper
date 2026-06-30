@@ -66,7 +66,7 @@ def main() raises:
     var workspace = ESWorkspace[OperatorMemory](n)
 
     var init_fit = fitness[OperatorMemory](
-        fast, slow, demos, workspace.op_output, Float32(0.0001)
+        fast, slow, demos, workspace.op_output_all, Float32(0.0001)
     )
 
     # Annealed in-context fit (the shared recipe).
@@ -85,7 +85,7 @@ def main() raises:
     )
 
     var final_fit = fitness[OperatorMemory](
-        fast, slow, demos, workspace.op_output, Float32(0.0001)
+        fast, slow, demos, workspace.op_output_all, Float32(0.0001)
     )
 
     # Held-out generalization: grids the operator never trained on.
