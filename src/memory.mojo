@@ -1,14 +1,15 @@
 from std.memory import UnsafePointer
-from std.math import tanh, fma
+from std.math import tanh, fma, floor, round
 from hope import (
     ArcGrid,
+    Sequence,
     OP_DIM,
     COLOR_OFF,
     COLOR_DIM,
     seed_identity_operator,
     apply_operator,
 )
-from arc_io import Domain, GridDomain
+from arc_io import Domain, GridDomain, SeqDomain
 
 # Per-group ES step scale for the structured operator (a diagonal preconditioner).
 # The colour-LUT parameters are normalized to ~unit scale but with tight 1/9
@@ -124,6 +125,23 @@ comptime MLP_OUT_LO = Float32(0.0)
 comptime MLP_OUT_HI = Float32(9.0)
 
 
+# The per-element MLP forward (shared by MLPMemory over a grid and SeqMLPMemory
+# over a sequence — both are purely per-cell, so the math lives once here): map a
+# raw token value through x = v/9; z = W2 . tanh(W1*x + b1) + b2; squash to [0,9].
+def _mlp_cell(
+    weights: UnsafePointer[Float32, MutAnyOrigin], x_raw: Float32
+) -> Float32:
+    var x = x_raw / 9.0
+    var z = weights[MLP_B2_OFF]
+    for h in range(MLP_HIDDEN):
+        var a = tanh(fma(weights[MLP_W1_OFF + h], x, weights[MLP_B1_OFF + h]))
+        z = fma(weights[MLP_W2_OFF + h], a, z)
+    # Squash to [MLP_OUT_LO, MLP_OUT_HI] (bounded output -> bounded MSE -> stable
+    # ES; the [0,9] range means a saturated output lands on a valid extreme
+    # colour, which rounds correctly under exact_match's tolerance).
+    return MLP_OUT_LO + (MLP_OUT_HI - MLP_OUT_LO) * 0.5 * (tanh(z) + 1.0)
+
+
 struct MLPMemory(Memory):
     comptime Dom = GridDomain
 
@@ -170,17 +188,135 @@ struct MLPMemory(Memory):
         inp: ArcGrid,
         dst: UnsafePointer[Float32, MutAnyOrigin],
     ):
-        var b2 = weights[MLP_B2_OFF]
         for i in range(inp.rows * inp.cols):
-            var x = inp.data[i] / 9.0
-            var z = b2
-            for h in range(MLP_HIDDEN):
-                var a = tanh(
-                    fma(weights[MLP_W1_OFF + h], x, weights[MLP_B1_OFF + h])
-                )
-                z = fma(weights[MLP_W2_OFF + h], a, z)
-            # Squash to [MLP_OUT_LO, MLP_OUT_HI] (bounded output -> bounded MSE ->
-            # stable ES; range wider than [0,9] so colours fit off tanh's tails).
-            dst[i] = MLP_OUT_LO + (MLP_OUT_HI - MLP_OUT_LO) * 0.5 * (
-                tanh(z) + 1.0
+            dst[i] = _mlp_cell(weights, inp.data[i])
+
+
+# ==========================================
+# Second domain (Phase B / B2): sequence memories
+# ==========================================
+# These two memories prove the Domain seam carries cross-domain: both conform to
+# the SAME Memory trait with Dom = SeqDomain (a non-grid domain) and are fit by the
+# UNCHANGED ES core. SeqOperatorMemory is the structured 1-D analog of
+# OperatorMemory (a position affine + value LUT); SeqMLPMemory is the emergent
+# per-element analog of MLPMemory (it reuses the exact same MLP layout + _mlp_cell).
+
+# 1-D structured operator layout (grid-size-independent, the analog of OP_DIM):
+# a 2-param centered affine on position (scale a, translation t) + a 10-entry value
+# LUT over tokens 0..9, normalized /9 to keep it at the affine's ~unit scale.
+comptime SEQ_COORD_DIM = 2
+comptime SEQ_VALUE_DIM = 10
+comptime SEQ_DIM = SEQ_COORD_DIM + SEQ_VALUE_DIM
+comptime SEQ_A_OFF = 0
+comptime SEQ_T_OFF = 1
+comptime SEQ_VALUE_OFF = SEQ_COORD_DIM
+# The value group needs a smaller ES step than the affine (tight 1/9 spacing) — a
+# diagonal preconditioner, exactly the 1-D analog of the operator's COLOR_SCALE.
+comptime SEQ_VALUE_SCALE = Float32(0.6)
+
+
+# Value-LUT lookup (the 1-D analog of _color_of): round to the nearest token, clamp
+# to [0,9], read the (normalized) LUT entry and rescale to the 0..9 range.
+def _seq_value_of(
+    weights: UnsafePointer[Float32, MutAnyOrigin], x: Float32
+) -> Float32:
+    var idx = Int(round(x))
+    if idx < 0:
+        idx = 0
+    elif idx > SEQ_VALUE_DIM - 1:
+        idx = SEQ_VALUE_DIM - 1
+    return Float32(SEQ_VALUE_DIM - 1) * weights[SEQ_VALUE_OFF + idx]
+
+
+# Read a sequence cell with zero-fill out of bounds (the 1-D analog of
+# _cell_or_zero) — the search can sample OOB but the optima never do.
+def _seq_cell_or_zero(
+    data: UnsafePointer[Float32, MutAnyOrigin], length: Int, i: Int
+) -> Float32:
+    if i < 0 or i >= length:
+        return 0.0
+    return data[i]
+
+
+# The structured sequence operator. Per output position p (over `length`), centered
+# cp = p - (L-1)/2; source sp = a*cp + (L-1)/2 + t. VALUE-then-gather: the two
+# integer source cells are mapped through the value LUT BEFORE the 1-D linear
+# interpolation (the 1-D case of the grid's bilinear colour-then-gather — it
+# decouples the value fit from the affine's precision, and the linear blend keeps a
+# smooth ES landscape). Output stays continuous; exact_match rounds only at scoring.
+# Integer params reproduce reverse (a=-1, t=0), shift-k (a=1, t=k) and increment
+# (value LUT (v+1)%10) exactly.
+struct SeqOperatorMemory(Memory):
+    comptime Dom = SeqDomain
+
+    @staticmethod
+    def param_dim() -> Int:
+        return SEQ_DIM
+
+    @staticmethod
+    def seed(weights: UnsafePointer[Float32, MutAnyOrigin]):
+        weights[SEQ_A_OFF] = 1.0  # identity position map
+        weights[SEQ_T_OFF] = 0.0
+        for v in range(SEQ_VALUE_DIM):
+            weights[SEQ_VALUE_OFF + v] = Float32(v) / Float32(SEQ_VALUE_DIM - 1)
+
+    @staticmethod
+    def fill_scale(scale: UnsafePointer[Float32, MutAnyOrigin], n: Int):
+        for i in range(n):
+            scale[i] = 1.0
+        # The value group gets the smaller step (diagonal preconditioner).
+        for v in range(SEQ_VALUE_DIM):
+            scale[SEQ_VALUE_OFF + v] = SEQ_VALUE_SCALE
+
+    @staticmethod
+    def apply(
+        weights: UnsafePointer[Float32, MutAnyOrigin],
+        inp: Sequence,
+        dst: UnsafePointer[Float32, MutAnyOrigin],
+    ):
+        var a = weights[SEQ_A_OFF]
+        var t = weights[SEQ_T_OFF]
+        var center = Float32(inp.length - 1) * Float32(0.5)
+        for p in range(inp.length):
+            var cp = Float32(p) - center
+            var sp = fma(a, cp, center + t)
+            var i0 = Int(floor(sp))
+            var f = sp - Float32(i0)
+            var v0 = _seq_value_of(
+                weights, _seq_cell_or_zero(inp.data, inp.length, i0)
             )
+            var v1 = _seq_value_of(
+                weights, _seq_cell_or_zero(inp.data, inp.length, i0 + 1)
+            )
+            dst[p] = fma(f, v1 - v0, v0)
+
+
+# The emergent per-element sequence memory: the SAME 1->H->1 tanh MLP as MLPMemory
+# (it reuses MLP_DIM/seed/fill_scale and the shared _mlp_cell forward verbatim),
+# applied over the sequence instead of the grid. Expresses element-wise maps only
+# (e.g. increment) — NO hand-coded value structure; cannot do reverse/shift (a
+# position permutation; that is B3's emergent global addressing). This shows the
+# emergent path transfers to the new domain unchanged.
+struct SeqMLPMemory(Memory):
+    comptime Dom = SeqDomain
+
+    @staticmethod
+    def param_dim() -> Int:
+        return MLP_DIM
+
+    @staticmethod
+    def seed(weights: UnsafePointer[Float32, MutAnyOrigin]):
+        MLPMemory.seed(weights)
+
+    @staticmethod
+    def fill_scale(scale: UnsafePointer[Float32, MutAnyOrigin], n: Int):
+        MLPMemory.fill_scale(scale, n)
+
+    @staticmethod
+    def apply(
+        weights: UnsafePointer[Float32, MutAnyOrigin],
+        inp: Sequence,
+        dst: UnsafePointer[Float32, MutAnyOrigin],
+    ):
+        for i in range(inp.length):
+            dst[i] = _mlp_cell(weights, inp.data[i])

@@ -2,7 +2,7 @@ from std.sys import simd_width_of, size_of
 from std.memory import memcpy, UnsafePointer
 from std.math import round
 from std.collections import List
-from hope import ArcGrid, ArcTaskPair, ArcTask
+from hope import ArcGrid, ArcTaskPair, ArcTask, Sequence
 
 comptime nelts = simd_width_of[DType.float32]()
 
@@ -206,3 +206,32 @@ struct GridDomain(Domain):
     @staticmethod
     def capacity(ex: ArcGrid) -> Int:
         return ex.size()
+
+
+# The sequence domain (Phase B / B2): the first NON-grid Domain, proving the seam
+# carries cross-domain. Example = Sequence (a 1-D Float32 array). The metrics are
+# the SAME SIMD negative-MSE / exact-match used by GridDomain — they take a flat
+# (ptr, ptr, n), so they are shape-agnostic and transfer with zero new code
+# (the "honest metric transfer" B2 demonstrates). capacity = sequence length.
+struct SeqDomain(Domain):
+    comptime Example = Sequence
+
+    @staticmethod
+    def distance(
+        pred: UnsafePointer[Float32, MutAnyOrigin],
+        target: Sequence,
+        n: Int,
+    ) -> Float32:
+        return calculate_fitness(pred, target.data, n)
+
+    @staticmethod
+    def score(
+        pred: UnsafePointer[Float32, MutAnyOrigin],
+        target: Sequence,
+        n: Int,
+    ) -> Float32:
+        return exact_match(pred, target.data, n)
+
+    @staticmethod
+    def capacity(ex: Sequence) -> Int:
+        return ex.length

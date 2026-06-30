@@ -328,3 +328,35 @@ are coordinate permutations); that's B3's emergent-global-addressing memory. The
 memory-selector — `OperatorMemory` and `MLPMemory` are compile-time choices, each measured on the
 subset it expresses. Also added a dev harness `./esper` (run/test/main/solve/fmt/suite) so commands
 don't need cd + venv-activate + `mojo run -I src`. Full suite green (~72s).
+
+**18:39 — B2 DONE: the second (non-grid) domain — the Domain seam carries cross-domain.** Plugged a
+1-D integer-sequence domain into the B1 seam and proved the **ES / two-timescale core is unchanged**:
+`src/esper_evolution.mojo` was not touched at all — the whole of B2 is additive. That non-change *is*
+the proof the abstraction isn't secretly grid-coupled.
+
+- New Example type `Sequence` (`src/hope.mojo`, next to `ArcGrid`): an owned 1-D Float32 array,
+  same lifecycle (alloc+zero / unconditional free), `Movable`+implicitly-deletable so it slots into
+  the existing generic `ExamplePair[E]`/`Task[E]` containers with no container changes.
+- `SeqDomain` (`src/arc_io.mojo`, next to `GridDomain`): metrics delegate to the **same**
+  `calculate_fitness`/`exact_match` — they already take a flat `(ptr, ptr, n)`, so the sequence
+  domain reuses them with **zero new metric code** (the "honest metric transfer" B2 set out to show).
+- Two memories (`src/memory.mojo`), both `Dom = SeqDomain`, fit by the unchanged ES: `SeqOperatorMemory`
+  (structured, the 1-D analog of `OperatorMemory` — a 2-param centered position affine + a 10-entry
+  value LUT, value-then-gather with 1-D linear interpolation; reverse=`a=-1,t=0`, shift=`a=1,t=k`,
+  increment via the LUT, all exact at integer params) and `SeqMLPMemory` (emergent, the per-element
+  MLP — reuses `MLP_DIM`/`seed`/`fill_scale` and a factored-out shared `_mlp_cell` forward verbatim,
+  iterating the sequence instead of the grid).
+- `tests/test_seq_domain.mojo` (self-contained, mirrors `test_mlp_memory`): fit on random sequences,
+  score on **held-out** ones. **All three reach held-out 1.0** — `SeqOperatorMemory` reverse (a
+  genuinely new 1-D *geometry* the local MLP can't express) and increment, and `SeqMLPMemory`
+  increment (emergent, no LUT).
+
+Two implementation notes. (1) The generic test helper `held_out[M]` must take
+`List[ExamplePair[M.Dom.Example]]` and score via `M.Dom.score(pred, target, n)`, **not** touch
+`.data` — Mojo type-checks generic bodies eagerly, so inside `[M]` the abstract `M.Dom.Example`
+exposes no fields; reaching the data only through the Domain seam is exactly the point (and the first
+caught-by-the-compiler reminder that the core never names the concrete type). (2) No new ES tuning was
+needed: reverse's `a:1→−1` is the same through-zero sign flip as grid `flip_h`, and increment mirrors
+recolor, so the proven `FIT_*` schedule fit both off the shelf. Both the structured and the emergent
+paths transfer to a new domain unchanged. Full suite green (the grid suite is untouched — held-out 1.0
+everywhere, synth 3/3, meta-prior gap 1.0).

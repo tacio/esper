@@ -44,6 +44,34 @@ struct ArcGrid(Movable):
 
 
 # ==========================================
+# 1b. Sequence (Phase B / B2 — the second domain's Example type)
+# ==========================================
+# Owned, contiguous 1-D Float32 array — the Example type for the non-grid sequence
+# domain (SeqDomain in arc_io.mojo). Token values (0-9) are stored as Float32 so
+# the same SIMD metric kernels (calculate_fitness/exact_match) that score grids
+# serve sequences unchanged. Lifecycle mirrors ArcGrid exactly (alloc + zero in
+# __init__, unconditional free in __del__ — UnsafePointer is non-null by design),
+# and being Movable + implicitly deletable lets it slot into the generic
+# ExamplePair[E]/Task[E] containers with no container changes.
+struct Sequence(Movable):
+    var data: UnsafePointer[Float32, MutAnyOrigin]
+    var length: Int
+
+    def __init__(out self, length: Int):
+        self.length = length
+        self.data = alloc[Float32](length)
+        memset_zero(self.data, length)
+
+    def __del__(deinit self):
+        # A moved-from sequence is consumed, so its destructor never runs and the
+        # live buffer is always valid here — free unconditionally.
+        self.data.free()
+
+    def size(self) -> Int:
+        return self.length
+
+
+# ==========================================
 # Phase 2.1: The HopeArena Allocator
 # ==========================================
 # A move-only, zero-overhead contiguous bump-pointer allocator. It hands out raw,
