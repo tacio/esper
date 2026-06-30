@@ -360,3 +360,75 @@ needed: reverse's `a:1→−1` is the same through-zero sign flip as grid `flip_
 recolor, so the proven `FIT_*` schedule fit both off the shelf. Both the structured and the emergent
 paths transfer to a new domain unchanged. Full suite green (the grid suite is untouched — held-out 1.0
 everywhere, synth 3/3, meta-prior gap 1.0).
+
+**19:10 — B3 DONE: emergent global addressing — geometry re-earned with NO hand-coded affine.** The
+per-cell MLP (B1) is local and provably can't express geometry; only `OperatorMemory`'s hand-coded
+affine could, by computing one source address and gathering exactly there. B3 replaces that explicit
+single-address gather with a learned **global read** — a position-attention gather — and rediscovers
+flip_h/flip_v/transpose through it. Additive once more: only `src/memory.mojo` + a new test;
+`esper_evolution.mojo`/`hope.mojo`/`arc_io.mojo` untouched (B1/B2/B3 all extend capability with zero
+core changes — the genericity holds).
+
+- `AttnGatherMemory` (`src/memory.mojo`, `Dom = GridDomain`, **7 params**): a 2×2 coordinate
+  projection `M`, translation `t`, and a learned temperature β. Each output cell `i` (centered coord
+  `v_i`) reads from **all** input cells `j` weighted by `softmax_j(-β·‖M·v_i + t − v_j‖²)` — a
+  two-pass streaming softmax (max-subtract for stability, then weighted gather; no per-cell buffer, no
+  hot-loop alloc). As β grows the softmax → one-hot at the cell nearest `M·v_i + t`, so an integer `M`
+  reproduces a permutation exactly (flip_h `[[1,0],[0,-1]]`, flip_v `[[-1,0],[0,1]]`, transpose
+  `[[0,1],[1,0]]`). Scalar-per-cell like `apply_operator`; the SIMD/FMA weight-space ES update is
+  generic and untouched. `param_dim` fixed (grid-size-independent).
+- `tests/test_attn_memory.mojo` (mirrors the geometry portion of `test_generalization`): fit on random
+  demos, score held-out. **flip_h / flip_v / transpose all reach held-out 1.0 — first try, no
+  landscape iteration.**
+
+**Why it converged cleanly (the design call that mattered): β must be seeded MODERATE, not small.**
+The instinct was "seed β small for a smooth landscape," but β→0 makes the attention uniform and the
+gather equals the grid mean — *independent of M*, so ∂(gather)/∂M = 0 (a flat, gradient-free plateau,
+the same failure mode as the nearest-neighbour rounding back at M3). β→∞ is also flat (a locked
+one-hot). The gradient in `M` is largest at **moderate** β, where the soft ~1-cell peak actually
+*moves* when `M` moves — the attention analog of the bilinear gather's smooth geometry gradient.
+Seeded β ≈ 2 (stored as `raw²` for ≥0 without `exp` overflow, β its own preconditioner group), the
+wide `FIT_SIGMA0=0.5` explored `M` while the anneal let β climb to sharpen onto the exact integer
+permutation. transpose's 4-param `M` move (the M7 fragility) was a non-issue here.
+
+Honest framing/scope: this is the next training-wheel removal — the explicit single-address gather (a
+strong structural prior) is gone, replaced by a learned global similarity read, the substrate B4's
+self-modifying memory builds on; the residual linear coord projection is what later milestones
+dissolve. **Geometry-only by decision** — recolor stays `MLPMemory`'s job, so `OperatorMemory` does
+**not** retire yet; folding the colour "local map" (the value MLP) onto this global read into one
+combined whole-subset "general grid memory" is the deferred follow-up. Cost: the gather is O(N²) per
+cell-grid, so the suite went ~72s → ~116s (still < 2 min at 4×4 grids); trimmable via iters/grid size
+if it grows. Full suite green; all prior paths unchanged (operator/MLP/seq/meta held-out 1.0, synth
+3/3).
+
+**NEGATIVE RESULT — the combined "general grid memory" (attention geometry + value MLP colour) was
+attempted and abandoned as honestly unlearnable by a single ES fit; OperatorMemory stays the
+geometry+colour baseline.** Goal: fold the emergent colour MLP onto the attention global-read into ONE
+memory (`GridMemory`, ~56 params) covering {flip, transpose, recolor} and combinations, to retire
+`OperatorMemory`. It does not work as clean emergence, and the *way* it fails is the lesson:
+
+- A cold JOINT ES fit over the 56-D coupled memory never converged — different seeds landed different
+  transforms, none exact. ES estimator variance grows with dimension, and β-sharpening couples the
+  geometry and colour stages, so the joint landscape is too hard for the derivative-free ES.
+- Every fix that moved the number was **hand-engineering the solution path**, not emergence: a staged
+  fit (fit geometry, then colour — via zeroing each group's preconditioner `scale`), a mid-fit β-boost
+  to a hand-picked sharpness so the colour phase sees integer gathers, a per-phase L2-anchor bump to
+  stop the colour-blind geometry phase from drifting off identity on pure-colour tasks, a colour-
+  output preconditioner, a residual (`gathered + 9·tanh(MLP)`) colour parameterisation seeded to exact
+  identity. With the whole stack, geometry hit 1.0 and 4/6 transforms reached 1.0 — but pure `recolor`
+  / `flip_h+recolor` stayed ~0.1–0.4 and brittle.
+- **The decisive realisation (the user's "stone soup" call):** even if one more tweak turned all six
+  green, the green would come from the *hand-choreographed fitting recipe*, not from the memory
+  emergently learning the transform — exactly the "put the reasoning in the human" the project's spine
+  forbids. By contrast B1 (recolor) and B3-geometry each emerged from a single COLD JOINT fit, no
+  staging — that is the bar for an emergence claim, and the combined memory cannot clear it.
+- Why the operator's joint fit works but this doesn't: M1–M7 *co-designed* the operator (smooth
+  bilinear, colour-then-gather, per-group preconditioner) for ES tractability. The operator IS the
+  round hole. A fully-emergent attention+MLP is strictly more general but ES-intractable as one fit.
+
+**Conclusion / routing.** Retiring `OperatorMemory` via one emergent memory is a real research step,
+not a tuning session — it needs a better adaptation mechanism (precisely B4's self-modifying memory:
+the memory generating its own update/sharpening dynamics) or a fundamentally cleaner architecture, not
+more scaffolding. Reverted all combined-memory code (`GridMemory`, `fit_staged`, residual colour,
+`_mlp_z`/base-offset refactor); shipped the clean geometry-only `AttnGatherMemory`. `OperatorMemory`
+remains the honest geometry+colour baseline. **B3 = emergent global addressing for geometry, DONE.**

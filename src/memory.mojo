@@ -1,5 +1,5 @@
 from std.memory import UnsafePointer
-from std.math import tanh, fma, floor, round
+from std.math import tanh, fma, floor, round, exp
 from hope import (
     ArcGrid,
     Sequence,
@@ -320,3 +320,118 @@ struct SeqMLPMemory(Memory):
     ):
         for i in range(inp.length):
             dst[i] = _mlp_cell(weights, inp.data[i])
+
+
+# ==========================================
+# Emergent global addressing (Phase B / B3): attention gather (geometry)
+# ==========================================
+# The per-cell MLP (B1) is LOCAL — it cannot express geometry, because flip/
+# transpose are GLOBAL coordinate permutations (out[i] = in[perm(i)]). OperatorMemory
+# does geometry with a HAND-CODED affine that computes one source address and gathers
+# exactly there. B3 re-earns geometry through an emergent GLOBAL READ instead: a
+# learned position attention. Each output cell i (centered coord v_i) reads from ALL
+# input cells j (centered coord v_j) weighted by a softmax over the coordinate
+# similarity -beta*||M*v_i + t - v_j||^2, where M is a learned 2x2 projection, t a
+# learned translation, and beta a learned temperature. As beta grows the softmax ->
+# one-hot at the input cell nearest M*v_i + t, so an integer M reproduces a
+# permutation EXACTLY (flip_h = [[1,0],[0,-1]], flip_v = [[-1,0],[0,1]], transpose =
+# [[0,1],[1,0]]); a soft beta keeps a smooth ES gradient in M (the bilinear analog).
+# The mechanism — a global similarity read, not a single hand-coded address — is the
+# substrate B4's self-modifying memory builds on; the residual linear coord
+# projection is what later milestones dissolve. param_dim is fixed (7), grid-size-
+# independent. Like apply_operator this is an inherently gather/reduction kernel, so
+# it is scalar-per-cell; the SIMD/FMA hot path (the weight-space ES update) is
+# untouched and generic. Geometry-only — colour stays MLPMemory's job; one emergent
+# memory covering BOTH geometry and colour is a future step (a single ES fit over the
+# coupled 56-D memory was not honestly learnable without hand-staging the fit — see
+# the journal's B3 entry; that retirement of OperatorMemory routes through B4).
+comptime ATTN_M_OFF = 0  # 2x2 coordinate projection [[m00,m01],[m10,m11]]
+comptime ATTN_T_OFF = 4  # translation (t_r, t_c)
+comptime ATTN_BETA_OFF = 6  # temperature (raw; beta = raw^2 keeps it >= 0 w/o overflow)
+comptime ATTN_DIM = 7
+# beta = ATTN_BETA_SEED^2 ~ 2: a soft ~1-cell peak so identity reads mostly self and
+# the gradient in M is non-zero (beta -> 0 gives a flat, M-independent mean; beta ->
+# inf gives a flat plateau — moderate beta is where moving M moves the soft peak).
+comptime ATTN_BETA_SEED = Float32(1.4)
+comptime ATTN_BETA_SCALE = Float32(1.0)
+
+
+struct AttnGatherMemory(Memory):
+    comptime Dom = GridDomain
+
+    @staticmethod
+    def param_dim() -> Int:
+        return ATTN_DIM
+
+    @staticmethod
+    def seed(weights: UnsafePointer[Float32, MutAnyOrigin]):
+        # Identity addressing: M = I, t = 0 -> q_i = v_i -> each cell reads (mostly)
+        # itself, so an unfit memory is the identity and the ES departs from it.
+        weights[ATTN_M_OFF + 0] = 1.0
+        weights[ATTN_M_OFF + 1] = 0.0
+        weights[ATTN_M_OFF + 2] = 0.0
+        weights[ATTN_M_OFF + 3] = 1.0
+        weights[ATTN_T_OFF + 0] = 0.0
+        weights[ATTN_T_OFF + 1] = 0.0
+        weights[ATTN_BETA_OFF] = ATTN_BETA_SEED
+
+    @staticmethod
+    def fill_scale(scale: UnsafePointer[Float32, MutAnyOrigin], n: Int):
+        for i in range(n):
+            scale[i] = 1.0
+        # Temperature gets its own step (diagonal preconditioner) so it can sharpen
+        # at a different rate than the geometry params.
+        scale[ATTN_BETA_OFF] = ATTN_BETA_SCALE
+
+    @staticmethod
+    def apply(
+        weights: UnsafePointer[Float32, MutAnyOrigin],
+        inp: ArcGrid,
+        dst: UnsafePointer[Float32, MutAnyOrigin],
+    ):
+        var m00 = weights[ATTN_M_OFF + 0]
+        var m01 = weights[ATTN_M_OFF + 1]
+        var m10 = weights[ATTN_M_OFF + 2]
+        var m11 = weights[ATTN_M_OFF + 3]
+        var t_r = weights[ATTN_T_OFF + 0]
+        var t_c = weights[ATTN_T_OFF + 1]
+        var beta_raw = weights[ATTN_BETA_OFF]
+        var beta = beta_raw * beta_raw  # >= 0, no exp overflow risk
+        var rows = inp.rows
+        var cols = inp.cols
+        var cr = Float32(rows - 1) * Float32(0.5)
+        var cc = Float32(cols - 1) * Float32(0.5)
+
+        for r in range(rows):
+            var vr = Float32(r) - cr
+            for c in range(cols):
+                var vc = Float32(c) - cc
+                # Read target q = M*v + t (where in coord space to gather from).
+                var qr = fma(m00, vr, fma(m01, vc, t_r))
+                var qc = fma(m10, vr, fma(m11, vc, t_c))
+
+                # Pass 1: max score over all input cells (numerical stability — the
+                # subtracted max makes the largest exponent 0, so exp never overflows).
+                var max_score = Float32(-1.0e30)
+                for rj in range(rows):
+                    var dvr = qr - (Float32(rj) - cr)
+                    var dvr2 = dvr * dvr
+                    for cj in range(cols):
+                        var dvc = qc - (Float32(cj) - cc)
+                        var score = -beta * (dvr2 + dvc * dvc)
+                        if score > max_score:
+                            max_score = score
+
+                # Pass 2: softmax-weighted gather (streaming, no per-cell buffer).
+                var z = Float32(0.0)
+                var s = Float32(0.0)
+                for rj in range(rows):
+                    var dvr = qr - (Float32(rj) - cr)
+                    var dvr2 = dvr * dvr
+                    for cj in range(cols):
+                        var dvc = qc - (Float32(cj) - cc)
+                        var score = -beta * (dvr2 + dvc * dvc)
+                        var w = exp(score - max_score)
+                        z += w
+                        s = fma(w, inp.data[rj * cols + cj], s)
+                dst[r * cols + c] = s / z
