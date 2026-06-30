@@ -464,3 +464,40 @@ regresses). Only blast-radius fix: `test_demo_fitness` poked `workspace.op_outpu
 to `op_output_all`; its base pointer is still a valid capacity-sized scratch). Pure Mojo, no new
 deps, no hot-loop alloc (per-sample buffers pre-allocated once), SIMD/FMA preserved. **Phase 2 (GPU
 via MAX) deferred** — documented in the plan; out of scope until the workload outgrows 12 cores.
+
+**23:42 — B4 first step DONE: a self-modifying memory that writes its own state in-context (recolor),
+read projections meta-learned cold.** The B3 lesson was that the ES can't fit coupled/high-dim FAST
+weights. HOPE's self-modifying memory (NL §8) is the reframe-fix: instead of the ES searching the
+fast weights, the memory runs its OWN update rule that WRITES its fast state from the demos in one
+forward pass; the ES fits only the small SLOW rule params. Built it on recolor, in two checkpoints
+(the user's validate-first choice).
+
+- **Checkpoint 1 — mechanism (fixed projections, no ES).** `RecolorSelfWrite` (`memory.mojo`):
+  `adapt(demos)` accumulates a per-colour value table from the demonstration (in,out) cells in ONE
+  pass (one-hot keys, count-normalised); `apply` reads it. `tests/test_selfmod_memory.mojo`: held-out
+  recolor **1.0** from a single in-context pass, ~3s, no ES. The self-write generalises — gate passed.
+- **Checkpoint 2 — emergent (meta-learned read).** `RecolorSelfModMemory`: the write is unchanged but
+  the READ is a learned softmax attention over **meta-learned colour embeddings + temperature**
+  (81 slow params) — `pred(q) = Σ_c softmax(β·E[q]·E[c])·value[c]`. `meta_fit_selfmod`
+  (`esper_evolution.mojo`) fits the slow vector by the SAME antithetic *parallel* ES — but its
+  dimension is just the 81 slow params (the fast state is written by `adapt`, never ES-searched),
+  which is exactly why it's tractable where fitting fast weights wasn't. Meta-objective: across a
+  family of random recolor *permutations*, adapt from each task's train demos → score its held-out
+  (continuous −MSE).
+
+**Result (cold, no scaffolding — honesty guard NOT triggered):** a generic-seed read scores **0.125**
+held-out on a fresh permutation; after one ~12s cold meta-fit (2000 iters), a **fresh, unseen recolor
+permutation is solved to held-out 1.0 by a SINGLE `adapt` forward pass** (avg over 5 fresh perms) — no
+per-task ES fit. The before/after gap (0.125 → 1.0) is asserted in the test, so the emergence is
+non-vacuous (the generic seed must fail). Contrast: B1's `MLPMemory` needs a ~4000-iteration ES fit
+*per* recolor task; this adapts in one pass after a one-time meta-fit — the HOPE fast-adaptation win,
+and a direct payoff of the B3-lesson reframe (move the search off the fast weights).
+
+Honest scope: kept the self-mod memory **concrete** (no `SelfModMemory` trait yet — YAGNI with one
+instance; abstract when a second lands, as B1 did). The read is meta-learned but the *write* is still
+a fixed accumulate, and recolor is a case where hard indexing trivially works — so this proves the
+*mechanism is learnable cold*, not that it beats the operator on geometry. The fuller HOPE block
+(self-generated η/forget-gates + internal objective) and the self-write applied to **geometry** (the
+honest route to finally retiring `OperatorMemory`, B3's open thread) are the deferred next steps.
+Additive: `hope.mojo`/`arc_io.mojo` and the existing `Memory`/ES path untouched; full suite green
+(~104s, all prior numbers unchanged).

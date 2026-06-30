@@ -1,7 +1,10 @@
 from std.memory import UnsafePointer
-from std.math import tanh, fma, floor, round, exp
+from std.math import tanh, fma, floor, round, exp, sin
+from std.collections import List
 from hope import (
     ArcGrid,
+    ArcTaskPair,
+    ExamplePair,
     Sequence,
     OP_DIM,
     COLOR_OFF,
@@ -435,3 +438,200 @@ struct AttnGatherMemory(Memory):
                         z += w
                         s = fma(w, inp.data[rj * cols + cj], s)
                 dst[r * cols + c] = s / z
+
+
+# ==========================================
+# Self-modifying memory (Phase B / B4): an in-context self-WRITE rule
+# ==========================================
+# The lesson from B3 was that the derivative-free ES can't fit coupled/high-dim
+# FAST weight spaces. HOPE's self-modifying memory (NL §8) is the fix: instead of
+# the ES blindly searching the fast weights, the memory runs its OWN update rule
+# that WRITES its fast state from the demonstrations in a single forward pass (the
+# ES/meta-learner then fits only the small SLOW rule params). This is the first,
+# minimal instance: an associative colour memory that builds the recolor map from
+# the demos by a Hebbian self-write, then reads it on the held-out input — one pass,
+# no per-task ES fit.
+#
+# CHECKPOINT 1 (this struct) validates the MECHANISM with FIXED projections (no
+# meta-learning yet): the key is the integer colour itself (one-hot addressing), the
+# value is the demo's output colour, the gate is 1, and the read is count-normalised.
+# `adapt` accumulates state from the demo (in,out) cells; `apply` reads it. If this
+# does not generalise held-out, the whole approach is wrong (fail-fast). Checkpoint 2
+# replaces the fixed one-hot projection with meta-learned slow params.
+#
+# State layout (STATE_DIM = 2*COLOR_DIM): [0:10] = running sum of out-colour per
+# in-colour, [10:20] = per-in-colour counts (so the read averages -> the map).
+comptime SELFMOD_STATE_DIM = 2 * COLOR_DIM
+
+
+struct RecolorSelfWrite:
+    @staticmethod
+    def state_dim() -> Int:
+        return SELFMOD_STATE_DIM
+
+    @staticmethod
+    def _colour_index(v: Float32) -> Int:
+        var c = Int(round(v))
+        if c < 0:
+            return 0
+        elif c > COLOR_DIM - 1:
+            return COLOR_DIM - 1
+        return c
+
+    # Inner self-write: build the colour map from the demonstrations in ONE pass.
+    @staticmethod
+    def adapt(
+        demos: List[ArcTaskPair],
+        state: UnsafePointer[Float32, MutAnyOrigin],
+    ):
+        for i in range(SELFMOD_STATE_DIM):
+            state[i] = 0.0
+        for d in range(len(demos)):
+            ref pair = demos[d]
+            var n = pair.input_grid.rows * pair.input_grid.cols
+            for k in range(n):
+                var ci = RecolorSelfWrite._colour_index(pair.input_grid.data[k])
+                # Hebbian write with the (one-hot) key ci: accumulate value + count.
+                state[ci] += pair.output_grid.data[k]
+                state[COLOR_DIM + ci] += 1.0
+
+    # Read the written map for each input cell (count-normalised; identity fallback
+    # for a colour the demos never showed).
+    @staticmethod
+    def apply(
+        state: UnsafePointer[Float32, MutAnyOrigin],
+        inp: ArcGrid,
+        dst: UnsafePointer[Float32, MutAnyOrigin],
+    ):
+        for k in range(inp.rows * inp.cols):
+            var ci = RecolorSelfWrite._colour_index(inp.data[k])
+            var cnt = state[COLOR_DIM + ci]
+            if cnt > 0.0:
+                dst[k] = state[ci] / cnt
+            else:
+                dst[k] = Float32(ci)
+
+
+# ==========================================
+# Self-modifying memory with a META-LEARNED associative read (Phase B / B4, ckpt 2)
+# ==========================================
+# Checkpoint 1 proved the self-WRITE generalises with a FIXED (one-hot) read. This
+# makes the read EMERGENT: the memory still writes a per-colour value table from the
+# demos in one pass (`adapt`), but the read is a learned softmax ATTENTION over
+# meta-learned colour embeddings E (+ a temperature beta) — pred(q) = sum over the
+# present colours c of softmax_c(beta * E[q]·E[c]) * value[c]. Exact retrieval needs
+# the embeddings SEPARABLE and beta sharp, so the meta-learner must DISCOVER a
+# working addressing from a generic seed (not the hand-set one-hot). The SLOW params
+# (E, beta) are meta-learned ONCE across a recolor family; a fresh task then adapts
+# in a single forward pass. This is the genuine self-modifying claim — the read
+# projections are learned, not given — and the ES only ever fits the small slow
+# vector (the fast state is WRITTEN by `adapt`, never ES-searched), which is the
+# whole point of the B3-lesson reframe.
+comptime SELFMOD_DK = 8
+comptime SELFMOD_SLOW_DIM = COLOR_DIM * SELFMOD_DK + 1  # E[10 x Dk] + beta
+comptime SELFMOD_BETA_OFF = COLOR_DIM * SELFMOD_DK
+
+
+struct RecolorSelfModMemory:
+    comptime Dom = GridDomain
+
+    @staticmethod
+    def slow_dim() -> Int:
+        return SELFMOD_SLOW_DIM
+
+    @staticmethod
+    def state_dim() -> Int:
+        return SELFMOD_STATE_DIM
+
+    @staticmethod
+    def seed_slow(slow: UnsafePointer[Float32, MutAnyOrigin]):
+        # Generic, weakly-separated embeddings (NOT the one-hot answer) so the
+        # meta-learner has real work — it must sharpen them into a usable addressing.
+        for c in range(COLOR_DIM):
+            for d in range(SELFMOD_DK):
+                slow[c * SELFMOD_DK + d] = (
+                    sin(Float32(c + 1) * Float32(d + 1) * 0.7) * 0.5
+                )
+        slow[SELFMOD_BETA_OFF] = 2.0
+
+    @staticmethod
+    def fill_scale(scale: UnsafePointer[Float32, MutAnyOrigin], n: Int):
+        for i in range(n):
+            scale[i] = 1.0
+
+    @staticmethod
+    def _colour_index(v: Float32) -> Int:
+        var c = Int(round(v))
+        if c < 0:
+            return 0
+        elif c > COLOR_DIM - 1:
+            return COLOR_DIM - 1
+        return c
+
+    # Self-write: build the per-colour value table from the demos (one pass).
+    @staticmethod
+    def adapt(
+        slow: UnsafePointer[Float32, MutAnyOrigin],
+        demos: List[ArcTaskPair],
+        state: UnsafePointer[Float32, MutAnyOrigin],
+    ):
+        for i in range(SELFMOD_STATE_DIM):
+            state[i] = 0.0
+        for d in range(len(demos)):
+            ref pair = demos[d]
+            var n = pair.input_grid.rows * pair.input_grid.cols
+            for k in range(n):
+                var ci = RecolorSelfModMemory._colour_index(
+                    pair.input_grid.data[k]
+                )
+                state[ci] += pair.output_grid.data[k]
+                state[COLOR_DIM + ci] += 1.0
+        # Normalise sums into per-colour values.
+        for c in range(COLOR_DIM):
+            if state[COLOR_DIM + c] > 0.0:
+                state[c] = state[c] / state[COLOR_DIM + c]
+
+    # Learned associative read: softmax attention over present colours, keyed by the
+    # meta-learned embeddings.
+    @staticmethod
+    def apply(
+        slow: UnsafePointer[Float32, MutAnyOrigin],
+        state: UnsafePointer[Float32, MutAnyOrigin],
+        inp: ArcGrid,
+        dst: UnsafePointer[Float32, MutAnyOrigin],
+    ):
+        var beta = slow[SELFMOD_BETA_OFF]
+        for k in range(inp.rows * inp.cols):
+            var q = RecolorSelfModMemory._colour_index(inp.data[k])
+            var q_off = q * SELFMOD_DK
+
+            # Pass 1: max similarity over present colours (exp stability).
+            var max_score = Float32(-1.0e30)
+            for c in range(COLOR_DIM):
+                if state[COLOR_DIM + c] > 0.0:
+                    var dot = Float32(0.0)
+                    for d in range(SELFMOD_DK):
+                        dot = fma(
+                            slow[q_off + d], slow[c * SELFMOD_DK + d], dot
+                        )
+                    var score = beta * dot
+                    if score > max_score:
+                        max_score = score
+
+            # Pass 2: softmax-weighted read of the per-colour values.
+            var z = Float32(0.0)
+            var acc = Float32(0.0)
+            for c in range(COLOR_DIM):
+                if state[COLOR_DIM + c] > 0.0:
+                    var dot = Float32(0.0)
+                    for d in range(SELFMOD_DK):
+                        dot = fma(
+                            slow[q_off + d], slow[c * SELFMOD_DK + d], dot
+                        )
+                    var w = exp(beta * dot - max_score)
+                    z += w
+                    acc = fma(w, state[c], acc)
+            if z > 0.0:
+                dst[k] = acc / z
+            else:
+                dst[k] = Float32(q)

@@ -9,8 +9,15 @@ from std.algorithm import parallelize
 # Dom is a Domain (the Example type + metrics). It consumes generic ExamplePair/
 # Task containers so the same fitness loop serves any domain. The concrete
 # OperatorMemory + ArcGrid are used only by the grid convenience wrapper below.
-from memory import Memory, OperatorMemory
-from hope import ExamplePair, Task, ArcTaskPair, HopeNode, ArcGrid
+from memory import (
+    Memory,
+    OperatorMemory,
+    RecolorSelfModMemory,
+    SELFMOD_SLOW_DIM,
+    SELFMOD_STATE_DIM,
+)
+from hope import ExamplePair, Task, ArcTaskPair, ArcTask, HopeNode, ArcGrid
+from arc_io import calculate_fitness
 
 # Default in-context fit schedule, shared by forward_with_learning and the solve
 # driver. Tuned so the annealed ES reliably fits the expressible transforms.
@@ -451,3 +458,152 @@ def reptile_meta_train[
         )
         reptile_update(slow, fast, pdim, meta_lr)
     fast.free()
+
+
+# ==========================================
+# Self-modifying memory meta-fit (Phase B / B4)
+# ==========================================
+# Meta-fitness for a candidate SLOW vector of RecolorSelfModMemory: across the
+# meta-task family, WRITE the memory's per-colour table from each task's train demos
+# (the inner self-write — NOT searched by the ES), then score the learned read on
+# that task's held-out test grids (continuous -MSE). Driving this up fits the slow
+# read projections (embeddings + temperature) so the one-pass self-write generalises
+# across recolor permutations. `state`/`op_output` are caller-provided per-sample
+# scratch (disjoint across parallel samples).
+def _selfmod_meta_fitness(
+    slow: UnsafePointer[Float32, MutAnyOrigin],
+    meta_tasks: List[ArcTask],
+    state: UnsafePointer[Float32, MutAnyOrigin],
+    op_output: UnsafePointer[Float32, MutAnyOrigin],
+) -> Float32:
+    var num = len(meta_tasks)
+    if num == 0:
+        return 0.0
+    var total = Float32(0.0)
+    var count = 0
+    for t in range(num):
+        ref task = meta_tasks[t]
+        RecolorSelfModMemory.adapt(slow, task.train, state)
+        for j in range(len(task.test)):
+            ref tp = task.test[j]
+            var n = tp.input_grid.rows * tp.input_grid.cols
+            RecolorSelfModMemory.apply(slow, state, tp.input_grid, op_output)
+            total += calculate_fitness(op_output, tp.output_grid.data, n)
+            count += 1
+    if count == 0:
+        return 0.0
+    return total / Float32(count)
+
+
+# Meta-learn the slow read projections of RecolorSelfModMemory by the SAME antithetic,
+# parallel, annealed ES used for the operator — but the ES dimension is just the small
+# slow vector (the fast state is written by `adapt`, never searched), which is exactly
+# why this is tractable where fitting fast weights was not. Bit-identical-style
+# determinism (serial epsilons in fixed order, serial reduction); parallel only the
+# independent 2*N meta-fitness evals (each in its own state/op scratch).
+def meta_fit_selfmod(
+    slow: UnsafePointer[Float32, MutAnyOrigin],
+    meta_tasks: List[ArcTask],
+    grid_capacity: Int,
+    N: Int,
+    alpha0: Float32,
+    alpha1: Float32,
+    sigma0: Float32,
+    sigma1: Float32,
+    iters: Int,
+):
+    if iters <= 0 or N <= 0:
+        return
+    var sdim = SELFMOD_SLOW_DIM
+    var remainder = sdim % nelts
+    var rem_start = sdim - remainder
+
+    var eps_all = alloc[Float32](N * sdim)
+    var pert_all = alloc[Float32](N * sdim)
+    var state_all = alloc[Float32](N * SELFMOD_STATE_DIM)
+    var op_all = alloc[Float32](N * grid_capacity)
+    var coeff = alloc[Float32](N)
+    var grad = alloc[Float32](sdim)
+    var scale = alloc[Float32](sdim)
+    RecolorSelfModMemory.fill_scale(scale, sdim)
+
+    var alpha_rate = log(alpha1 / alpha0) / Float32(iters)
+    var sigma_rate = log(sigma1 / sigma0) / Float32(iters)
+
+    for it in range(iters):
+        var alpha = alpha0 * exp(alpha_rate * Float32(it))
+        var sigma = sigma0 * exp(sigma_rate * Float32(it))
+
+        # Serial: draw all N epsilon vectors (fixed RNG order -> reproducible).
+        for s in range(N):
+            var eps_s = eps_all + s * sdim
+            for j in range(sdim):
+                eps_s[j] = Float32(randn_float64(0.0, 1.0))
+
+        # Parallel: antithetic meta-fitness in disjoint per-sample scratch.
+        @parameter
+        def sample(s: Int):
+            var eps_s = eps_all + s * sdim
+            var pert = pert_all + s * sdim
+            var st = state_all + s * SELFMOD_STATE_DIM
+            var op = op_all + s * grid_capacity
+
+            var pos = SIMD[DType.float32, nelts](sigma)
+            for j in range(0, sdim - nelts + 1, nelts):
+                var w_vec = slow.load[width=nelts](j)
+                var seps = eps_s.load[width=nelts](j) * scale.load[width=nelts](
+                    j
+                )
+                pert.store[width=nelts](j, fma(seps, pos, w_vec))
+            if remainder > 0:
+                for j in range(rem_start, sdim):
+                    pert[j] = fma(eps_s[j] * scale[j], sigma, slow[j])
+            var f_plus = _selfmod_meta_fitness(pert, meta_tasks, st, op)
+
+            var neg = SIMD[DType.float32, nelts](-sigma)
+            for j in range(0, sdim - nelts + 1, nelts):
+                var w_vec = slow.load[width=nelts](j)
+                var seps = eps_s.load[width=nelts](j) * scale.load[width=nelts](
+                    j
+                )
+                pert.store[width=nelts](j, fma(seps, neg, w_vec))
+            if remainder > 0:
+                for j in range(rem_start, sdim):
+                    pert[j] = fma(eps_s[j] * scale[j], -sigma, slow[j])
+            var f_minus = _selfmod_meta_fitness(pert, meta_tasks, st, op)
+
+            coeff[s] = f_plus - f_minus
+
+        parallelize[sample](N)
+
+        # Serial reduce + step (same shape as evolve_fast_weights).
+        memset_zero(grad, sdim)
+        for s in range(N):
+            var eps_s = eps_all + s * sdim
+            var c_vec = SIMD[DType.float32, nelts](coeff[s])
+            for j in range(0, sdim - nelts + 1, nelts):
+                var g = grad.load[width=nelts](j)
+                grad.store[width=nelts](
+                    j, fma(eps_s.load[width=nelts](j), c_vec, g)
+                )
+            if remainder > 0:
+                for j in range(rem_start, sdim):
+                    grad[j] = fma(eps_s[j], coeff[s], grad[j])
+
+        var fac = alpha / (2.0 * Float32(N) * sigma)
+        var fac_vec = SIMD[DType.float32, nelts](fac)
+        for j in range(0, sdim - nelts + 1, nelts):
+            var w_vec = slow.load[width=nelts](j)
+            var sg = grad.load[width=nelts](j) * scale.load[width=nelts](j)
+            slow.store[width=nelts](j, fma(sg, fac_vec, w_vec))
+        if remainder > 0:
+            for j in range(rem_start, sdim):
+                slow[j] = fma(grad[j] * scale[j], fac, slow[j])
+
+    eps_all.free()
+    pert_all.free()
+    state_all.free()
+    op_all.free()
+    coeff.free()
+    grad.free()
+    scale.free()
