@@ -1,4 +1,4 @@
-from std.memory import alloc, memset_zero, UnsafePointer
+from std.memory import alloc, memset_zero, memcpy, UnsafePointer
 from std.sys import simd_width_of, size_of
 from std.math import fma, exp, log
 from std.random import randn_float64
@@ -8,6 +8,7 @@ from std.collections import List
 from arc_io import calculate_fitness
 from hope import (
     ArcTaskPair,
+    ArcTask,
     apply_operator,
     OP_DIM,
     COLOR_OFF,
@@ -33,6 +34,26 @@ comptime FIT_REG = Float32(0.0001)
 # geometry and colour. Applied to both the perturbation and the update, this is a
 # diagonal preconditioner (equivalent to running the ES on rescaled parameters).
 comptime COLOR_SCALE = Float32(0.6)
+
+# Outer (slow-timescale) meta-learning schedule. The slow weights are nudged
+# toward each task's fitted fast solution (Reptile averaging); the inner fit
+# during meta-training keeps the WIDE FIT_SIGMA0 (it must DISCOVER the family's
+# operator from a cold identity prior) but a SHORTER iteration budget — Reptile
+# tolerates partial inner optimization.
+comptime META_LR = Float32(0.3)
+comptime META_ITERS = 12
+comptime META_FIT_ITERS = 600
+
+# Eval (fast in-context adaptation) schedule for the meta-prior test: a NARROW,
+# short EXPLOIT fit (small sigma0, few iters). This is where a good prior pays
+# off — from the meta-learned prior a cheap local fit lands the answer, whereas
+# from a cold identity prior the same narrow fit cannot explore far enough to
+# find the transform's basin and fails. Same eval schedule for both priors; only
+# the prior differs. (Probed: at sigma0=0.12 / 300 iters, an exact-flip_h prior
+# fits to 1.0 while a cold prior gets ~0; a wide sigma0>=0.2 lets cold solve too,
+# erasing the gap — so the narrowness is the point.)
+comptime EVAL_SIGMA0 = Float32(0.12)
+comptime EVAL_ITERS = 300
 
 comptime nelts = simd_width_of[DType.float32]()
 
@@ -347,3 +368,80 @@ def forward_with_learning(
         test_input.cols,
     )
     return result^
+
+
+# ==========================================
+# Meta-learning the slow prior (second timescale)
+# ==========================================
+# Copy a weight slice (used to (re)init the fast weights from the slow prior
+# before each inner fit).
+def copy_weights(
+    dst: UnsafePointer[Float32, MutAnyOrigin],
+    src: UnsafePointer[Float32, MutAnyOrigin],
+    size: Int,
+):
+    memcpy(dest=dst, src=src, count=size)
+
+
+# Reptile outer step on the slow prior: slow += meta_lr * (fast - slow). The
+# fitted fast weights are the inner loop's solution for one task; moving the
+# prior a fraction toward it accumulates, over tasks, the shared structure of the
+# task family. Same SIMD main-loop + scalar-remainder shape as the ES update.
+def reptile_update(
+    slow: UnsafePointer[Float32, MutAnyOrigin],
+    fast: UnsafePointer[Float32, MutAnyOrigin],
+    size: Int,
+    meta_lr: Float32,
+):
+    var remainder = size % nelts
+    var rem_start = size - remainder
+    var lr_vec = SIMD[DType.float32, nelts](meta_lr)
+    for j in range(0, size - nelts + 1, nelts):
+        var s = slow.load[width=nelts](j)
+        var f = fast.load[width=nelts](j)
+        slow.store[width=nelts](j, fma(lr_vec, f - s, s))
+    if remainder > 0:
+        for j in range(rem_start, size):
+            slow[j] = fma(meta_lr, fast[j] - slow[j], slow[j])
+
+
+# Outer, low-frequency loop that turns `slow` from a fixed identity anchor into a
+# META-LEARNED prior (HOPE's two-timescale structure). For each sampled task we
+# fit a fresh operator IN-CONTEXT starting from the current prior (so both the
+# init and the L2 anchor pull toward `slow`), then nudge `slow` toward that fitted
+# solution via Reptile. The inner `fit_operator` is reused unchanged; the caller
+# owns the (pre-sized) ESWorkspace, and the single `fast` buffer is allocated once
+# here — no per-iteration heap allocation. After meta-training, a fresh task of
+# the same family fits faster from `slow` than from a cold identity prior.
+def reptile_meta_train(
+    slow: UnsafePointer[Float32, MutAnyOrigin],
+    meta_tasks: List[ArcTask],
+    mut workspace: ESWorkspace,
+    n_iters: Int,
+    inner_iters: Int,
+    meta_lr: Float32,
+):
+    var num = len(meta_tasks)
+    if num == 0 or n_iters <= 0:
+        return
+
+    var fast = alloc[Float32](OP_DIM)
+    for t in range(n_iters):
+        # Cycle deterministically through the meta-train tasks.
+        ref task = meta_tasks[t % num]
+        copy_weights(fast, slow, OP_DIM)
+        fit_operator(
+            fast,
+            workspace,
+            slow,
+            task.train,
+            FIT_N,
+            FIT_ALPHA0,
+            FIT_ALPHA1,
+            FIT_SIGMA0,
+            FIT_SIGMA1,
+            inner_iters,
+            FIT_REG,
+        )
+        reptile_update(slow, fast, OP_DIM, meta_lr)
+    fast.free()
