@@ -214,3 +214,57 @@ structured operator is too rigid to host a useful cross-task sub-manifold. That 
 related-but-different tasks" needs a more expressive memory — exactly Phase B's job. M9 proves the
 *mechanism* (slow is learned, on the slow timescale, and demonstrably helps) honestly, on the case
 this operator can support. **Phase A (M1–M9) COMPLETE.**
+
+---
+
+## 2026-06-30
+
+**08:47 — Full ARC-AGI 2 training-split eval (the larger honest sample).** Ran the held-out driver
+(`--report`) over all **1000 training-split tasks** overnight (~2h, ~7s/task, no crashes). Result:
+
+    Solved (held-out >= 0.99):  5 / 1000   (0.5%)
+    mean held-out exact-match:  0.0265
+    held-out >= 0.5:  26      0 < held-out < 0.5:  44      held-out == 0:  930
+
+**The 5 solves are GENUINE, not flukes** — each has held-out 1.0, train-fit 1.0, gap 0.0 (fit on
+the task's demos, reproduced the *unseen* test grid exactly): `0d3d703e`, `67a3c6ac`, `68b16354`,
+`c8f0f002`, `d511f180`. Spot-checked `0d3d703e`: a pure colour-permutation task (5→1, 8→9, 6→2, …)
+— the operator learned the LUT from the demonstrations and applied it to the held-out test. These
+are real ARC-AGI 2 tasks that happen to fall inside the geometry+colour subset, **rediscovered by
+the learned operator with no symbolic DSL given** — exactly the spine of the project. This clears
+Phase A done-criterion (2): *raw ARC-AGI 2 solve rate > 0% end-to-end with a held-out test* (met on
+the training split; the 120-task eval split is harder — 0/120, mean 0.033).
+
+The shape of the rest is the same honest story as the eval split: ~93% of tasks score 0 (shape
+change / objects / counting / symmetry — outside the operator), a thin band partially fits but
+doesn't transfer (the ~15 overfit: train > 0.3, held-out < 0.1), and ~20 show genuine partial
+transfer (held-out ≥ 0.3, |gap| < 0.15 — near-subset tasks). Combined across both splits the engine
+solves **5 / 1120** real ARC-AGI 2 tasks end-to-end. Raw dump: `scratch/arc2_train_results.txt`
+(gitignored, reproducible). The path to a higher number is Phase B (a more expressive in-context
+memory), not tuning — the 0.5% is the honest ceiling of a 16-param affine+LUT operator on real ARC.
+
+**10:52 — Parallel eval across all cores + a determinism fix (the number is now reproducible).**
+The full-corpus run was sequential (~7s/task → ~2h for 1000). Each task is independent (own fit, own
+buffers), so `eval_parallel.sh` shards the `.task` list round-robin across `nproc` worker processes
+(one `mojo run src/arc_solve.mojo --report` per shard) and re-aggregates the per-task lines —
+**~12× on this 12-core box** (1000 tasks: ~2h → **758s**; the 120 eval: ~14min → ~3.5min). Pure
+harness; no in-process threading (the `ESWorkspace` scratch and global RNG aren't thread-safe).
+
+**DISCOVERY — the benchmark number depended on task ORDERING.** Validating the parallel runner
+against the sequential result, 16/120 eval tasks came out *different* (aggregate stayed 0/120 but
+the mean drifted). Cause: `arc_solve.mojo` seeded the RNG **once in `main()`**, so the one shared
+stream made each task's stochastic ES fit depend on its position in argv — and sharding changes
+positions. Fix: seed **per task** (`SOLVE_SEED`, before each fit), so a task's result depends only
+on the task itself — invariant to ordering and to how the corpus is split. Proved it: N=1 vs N=10
+workers now give byte-identical per-task held-out values.
+
+**Canonical reproducible numbers (per-task seeded, shard-invariant):**
+
+    Training split (1000):  5 / 1000 solved (0.5%),  mean held-out 0.0268
+    Public-eval split (120): 0 / 120 solved,          mean held-out 0.0426
+
+The **same 5 tasks** solve as the overnight sequential run (`0d3d703e`, `67a3c6ac`, `68b16354`,
+`c8f0f002`, `d511f180`) — held-out 1.0, gap 0.0 — confirming they are robust genuine in-subset
+solves, not an artifact of one lucky seed. The means shifted slightly (different RNG stream); the
+headline (5/1000, 0/120) is unchanged and now reproducible regardless of worker count. Re-run with
+`./eval_parallel.sh data_bin/arc2_train` (or `…/arc2_eval`).

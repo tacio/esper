@@ -40,12 +40,22 @@ from arc_io import load_arc_task, exact_match
 
 comptime SOLVE_THRESHOLD = Float32(0.99)
 
+# Per-task RNG seed. Seeding before each task's fit makes a task's result depend
+# only on the task itself, never on its position in the argv list — so the
+# benchmark number is reproducible and invariant under how the corpus is split
+# across workers (see eval_parallel.sh). Without this, one shared stream seeded
+# once in main() makes every task's stochastic ES fit depend on ordering.
+comptime SOLVE_SEED = 0
+
 
 # Fit one task on its train pairs and return its held-out exact-match (the
 # minimum over all test pairs — solved iff every test pair matches). Prints the
 # per-task held-out, the train fit, and their gap.
 def solve_task(task_path: String) raises -> Float32:
     var task = load_arc_task(task_path)
+
+    # Deterministic per-task RNG (order/shard invariant) — see SOLVE_SEED.
+    seed(SOLVE_SEED)
 
     # Operator-output scratch must hold the largest grid the operator touches.
     var capacity = 1
