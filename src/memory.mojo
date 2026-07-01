@@ -1122,3 +1122,199 @@ struct GridContextSelfModMemory(SelfModMemory):
                 for j in range(GRIDCTX_DK):
                     pred = fma(state[j], k[j], pred)
                 dst[r * cols + c] = pred
+
+
+# ==========================================
+# Richer neighbourhoods + NONLINEAR read (ARC-AGI-2 block 2)
+# ==========================================
+# GridContext (above) reads pred = S·k — LINEAR in the key — so it expresses only
+# ADDITIVE positional rules. It provably cannot do the DISJUNCTIVE / COUNT class:
+# "output = C1 if (# neighbours matching a colour) >= t else C2" (an OR / threshold
+# on a count). Crossing that barrier needs BOTH a richer neighbourhood AND a
+# nonlinear read.
+#
+# Key idea: a Moore-8 (toroidal 3x3-minus-center) neighbourhood, aggregated into a
+# MEAN neighbour-embedding histogram k = (1/8) Σ_{n∈nbrs} E[n] (plus a bias slot).
+# The SUM over neighbours is the crux — it encodes per-colour neighbour COUNTS
+# (position-invariant), exactly what a count/disjunction rule needs, and precisely
+# what GridContext's per-pair concat key does not give. The key is CENTER-FREE:
+# the disjunctive/count class depends only on the neighbourhood, so tying the
+# histogram to the centre would only fragment the per-colour weight across centres
+# and inject irrelevant centre-dependence (empirically it fails to learn). With a
+# centre-free histogram every cell trains the same small weight vector — clean
+# logistic-regression-style learning. We MEAN (÷8) rather than unit-normalise:
+# normalising would divide out the very count magnitude the threshold reads, while
+# the mean still bounds ‖k‖ (delta-write stability, the B4 lesson).
+#
+# Read (the nonlinearity): pred = LO + (HI−LO)·σ(g·(S·k) + c). σ makes a THRESHOLD
+# on the weighted count = the disjunction/majority a linear S·k can't. The self-
+# WRITE is the perceptron-style (nonlinear) gated delta rule S ← (1−α)S + η·e·R'·k
+# with R' = (HI−LO)·σ(1−σ)·g, η/α self-generated per cell. The fast state S is
+# WRITTEN over the demos (never ES-searched); the ES only fits the small slow
+# vector (E, the read scalars g/c/LO/HI, the gate projections) across a family —
+# the B3→B4 discipline. Reuses meta_fit_selfmod[GridNbhdSelfModMemory] verbatim.
+comptime GRIDNBHD_A = 5
+comptime GRIDNBHD_DE = 5  # = A so the Ckpt-A fixed one-hot embedding is expressible
+# Dk = De histogram features + 1 constant BIAS slot. The bias lets the self-write
+# learn the threshold OFFSET (so the step lands between the firing counts
+# regardless of the learned magnitude, and the threshold t can itself be learned).
+comptime GRIDNBHD_DK = GRIDNBHD_DE + 1
+comptime GRIDNBHD_NBRS = 8
+comptime GRIDNBHD_META_EPOCHS = 12
+
+comptime GRIDNBHD_E_OFF = 0
+comptime GRIDNBHD_G_OFF = GRIDNBHD_A * GRIDNBHD_DE
+comptime GRIDNBHD_C_OFF = GRIDNBHD_G_OFF + 1
+comptime GRIDNBHD_LO_OFF = GRIDNBHD_C_OFF + 1
+comptime GRIDNBHD_HI_OFF = GRIDNBHD_LO_OFF + 1
+comptime GRIDNBHD_WETA_OFF = GRIDNBHD_HI_OFF + 1
+comptime GRIDNBHD_BETA_OFF = GRIDNBHD_WETA_OFF + GRIDNBHD_DK
+comptime GRIDNBHD_WALPHA_OFF = GRIDNBHD_BETA_OFF + 1
+comptime GRIDNBHD_BALPHA_OFF = GRIDNBHD_WALPHA_OFF + GRIDNBHD_DK
+comptime GRIDNBHD_SLOW_DIM = GRIDNBHD_BALPHA_OFF + 1
+
+
+struct GridNbhdSelfModMemory(SelfModMemory):
+    comptime Dom = GridDomain
+
+    @staticmethod
+    def slow_dim() -> Int:
+        return GRIDNBHD_SLOW_DIM
+
+    @staticmethod
+    def state_dim() -> Int:
+        return GRIDNBHD_DK
+
+    @staticmethod
+    def seed_slow(slow: UnsafePointer[Float32, MutAnyOrigin]):
+        # Generic (non-one-hot) embeddings at a workable scale — the meta-fit must
+        # discover SEPARABLE embeddings + sharp read; the generic seed must FAIL
+        # (Ckpt B asserts before < 0.5) so the emergence claim is non-vacuous.
+        for c in range(GRIDNBHD_A):
+            for d in range(GRIDNBHD_DE):
+                slow[GRIDNBHD_E_OFF + c * GRIDNBHD_DE + d] = (
+                    sin(Float32(c + 1) * Float32(d + 1) * 0.7) * 1.5
+                )
+        slow[GRIDNBHD_G_OFF] = 2.0  # read sharpness
+        slow[GRIDNBHD_C_OFF] = 0.0  # read threshold bias
+        slow[GRIDNBHD_LO_OFF] = 1.5  # weak/neutral output levels (meta refines)
+        slow[GRIDNBHD_HI_OFF] = 2.5
+        for j in range(GRIDNBHD_DK):
+            slow[GRIDNBHD_WETA_OFF + j] = 0.1 * sin(Float32(j + 1) * 1.3)
+            slow[GRIDNBHD_WALPHA_OFF + j] = 0.1 * sin(Float32(j + 1) * 2.1)
+        slow[GRIDNBHD_BETA_OFF] = 0.0  # eta ~ 0.5
+        slow[
+            GRIDNBHD_BALPHA_OFF
+        ] = -6.0  # alpha ~ 0.002 (near-pure accumulation)
+
+    @staticmethod
+    def fill_scale(scale: UnsafePointer[Float32, MutAnyOrigin], n: Int):
+        for i in range(n):
+            scale[i] = 1.0
+
+    # The 8 toroidal Moore neighbours of (r,c), colour-symbolised, in a fixed order.
+    @staticmethod
+    def _gather8(
+        data: UnsafePointer[Float32, MutAnyOrigin],
+        rows: Int,
+        cols: Int,
+        r: Int,
+        c: Int,
+        mut nbrs: InlineArray[Int, GRIDNBHD_NBRS],
+    ):
+        var idx = 0
+        for dr in range(-1, 2):
+            for dc in range(-1, 2):
+                if dr == 0 and dc == 0:
+                    continue
+                var rr = (r + dr + rows) % rows
+                var cc = (c + dc + cols) % cols
+                nbrs[idx] = _gridctx_sym(data[rr * cols + cc])
+                idx += 1
+
+    # Mean-aggregated, centre-free neighbour-embedding histogram: (1/8) Σ_n E[n],
+    # plus a constant bias slot. Counts stay proportional (the nonlinear read
+    # thresholds them); ‖k‖ bounded, so no unit-norm needed.
+    @staticmethod
+    def _key(
+        slow: UnsafePointer[Float32, MutAnyOrigin],
+        nbrs: InlineArray[Int, GRIDNBHD_NBRS],
+        mut k: InlineArray[Float32, GRIDNBHD_DK],
+    ):
+        comptime De = GRIDNBHD_DE
+        var inv = 1.0 / Float32(GRIDNBHD_NBRS)
+        for b in range(De):
+            var acc = Float32(0.0)
+            for i in range(GRIDNBHD_NBRS):
+                acc += slow[GRIDNBHD_E_OFF + nbrs[i] * De + b]
+            k[b] = acc * inv
+        k[De] = 1.0  # constant bias slot (threshold offset)
+
+    @staticmethod
+    def adapt(
+        slow: UnsafePointer[Float32, MutAnyOrigin],
+        demos: List[ArcTaskPair],
+        state: UnsafePointer[Float32, MutAnyOrigin],
+    ):
+        for j in range(GRIDNBHD_DK):
+            state[j] = 0.0
+        var g = slow[GRIDNBHD_G_OFF]
+        var cc = slow[GRIDNBHD_C_OFF]
+        var lo = slow[GRIDNBHD_LO_OFF]
+        var hi = slow[GRIDNBHD_HI_OFF]
+        for _epoch in range(GRIDNBHD_META_EPOCHS):
+            for d in range(len(demos)):
+                ref pair = demos[d]
+                var rows = pair.input_grid.rows
+                var cols = pair.input_grid.cols
+                for r in range(rows):
+                    for c in range(cols):
+                        var nbrs = InlineArray[Int, GRIDNBHD_NBRS](fill=0)
+                        GridNbhdSelfModMemory._gather8(
+                            pair.input_grid.data, rows, cols, r, c, nbrs
+                        )
+                        var k = InlineArray[Float32, GRIDNBHD_DK](fill=0.0)
+                        GridNbhdSelfModMemory._key(slow, nbrs, k)
+                        var z = Float32(0.0)
+                        var geta = slow[GRIDNBHD_BETA_OFF]
+                        var galpha = slow[GRIDNBHD_BALPHA_OFF]
+                        for j in range(GRIDNBHD_DK):
+                            z = fma(state[j], k[j], z)
+                            geta = fma(slow[GRIDNBHD_WETA_OFF + j], k[j], geta)
+                            galpha = fma(
+                                slow[GRIDNBHD_WALPHA_OFF + j], k[j], galpha
+                            )
+                        var sig = _sigmoid(g * z + cc)
+                        var pred = lo + (hi - lo) * sig
+                        var dpred = (hi - lo) * sig * (1.0 - sig) * g
+                        var eta = _sigmoid(geta)
+                        var alpha = _sigmoid(galpha)
+                        var e = pair.output_grid.data[r * cols + c] - pred
+                        var upd = eta * e * dpred
+                        for j in range(GRIDNBHD_DK):
+                            state[j] = (1.0 - alpha) * state[j] + upd * k[j]
+
+    @staticmethod
+    def apply(
+        slow: UnsafePointer[Float32, MutAnyOrigin],
+        state: UnsafePointer[Float32, MutAnyOrigin],
+        inp: ArcGrid,
+        dst: UnsafePointer[Float32, MutAnyOrigin],
+    ):
+        var rows = inp.rows
+        var cols = inp.cols
+        var g = slow[GRIDNBHD_G_OFF]
+        var cc = slow[GRIDNBHD_C_OFF]
+        var lo = slow[GRIDNBHD_LO_OFF]
+        var hi = slow[GRIDNBHD_HI_OFF]
+        for r in range(rows):
+            for c in range(cols):
+                var nbrs = InlineArray[Int, GRIDNBHD_NBRS](fill=0)
+                GridNbhdSelfModMemory._gather8(inp.data, rows, cols, r, c, nbrs)
+                var k = InlineArray[Float32, GRIDNBHD_DK](fill=0.0)
+                GridNbhdSelfModMemory._key(slow, nbrs, k)
+                var z = Float32(0.0)
+                for j in range(GRIDNBHD_DK):
+                    z = fma(state[j], k[j], z)
+                var sig = _sigmoid(g * z + cc)
+                dst[r * cols + c] = lo + (hi - lo) * sig

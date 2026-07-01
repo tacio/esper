@@ -101,6 +101,18 @@ Concise, milestone-level; each links to `docs/JOURNAL.md` for the full narrative
   adapt pass** (generic seed 0.11). Reuses the meta-fit with zero core change. Expressible class =
   *additive* center↔neighbour rules (disjunctive/count/mod-wrap need a nonlinear read — later).
   (JOURNAL 2026-07-01 14:44.)
+- **Richer neighbourhoods + nonlinear read (ARC-AGI-2 block 2).** `GridNbhdSelfModMemory` crosses the
+  linear barrier: it keys on a **Moore-8 neighbour-count histogram** (centre-free, mean-aggregated) and
+  reads through a **sigmoid THRESHOLD**, expressing the DISJUNCTIVE / COUNT class
+  `out = C1 if (#neighbours == P) ≥ t else C2` — an OR / count that a linear `S·k` (GridContext) provably
+  cannot be, and that no per-cell / 1-D memory can (needs all 8 neighbours). Self-write is the
+  perceptron-style gated delta rule; the ES meta-learns only the small slow vector (embeddings + read
+  scalars + gates). Cold meta-fit → a fresh unseen rule (unseen predicate colour) solved **held-out 1.0
+  in one adapt pass** (generic seed 0.0). **Honesty control:** the same write with a LINEAR read reaches
+  only 0.61 vs the nonlinear 0.995 — the nonlinearity is load-bearing, not scaffolding. Three empirically
+  forced design calls (centre-free key; mean not unit-norm; feature-scale + bias slot). Scope = balanced
+  `t=2`, fixed output pair, predicate colour inferred in-context; varying `t` and multi-bin count deferred.
+  (JOURNAL 2026-07-01 16:05.)
 
 ## Next — the path to full ARC-AGI 2
 
@@ -108,12 +120,13 @@ Each is its own block, held to the **cold-fit bar** (a scaffolded pass is a nega
 emergent memories are each measured on the subset they express; the north-star metric is the raw
 held-out ARC-AGI-2 number.
 
-1. **Richer neighbourhoods / nonlinear read.** Grow the 2-D context beyond the additive 2-neighbour
-   class — full von Neumann / Moore neighbourhoods, and a nonlinear read for disjunctive/count rules
-   ("any neighbour is X", majority) that a linear `S·k` can't express.
+1. **Broaden the nonlinear class.** Block 2 nailed the balanced `t=2`, fixed-output-pair disjunctive/count
+   rule (predicate colour inferred in-context). Extend to a **variable threshold `t`** (imbalanced,
+   harder), **multi-bin count** (count → 3+ output bins, a richer multi-output read), and arbitrary
+   output pairs (a written output head) — growing `GridNbhdSelfModMemory`'s expressible class.
 2. **Compose content + geometry.** Combine the grid content self-write (`GridContextSelfModMemory` /
-   `DeltaSelfModMemory`) with the B3 `AttnGatherMemory` global-read (geometry + content) — the honest
-   route to finally **retiring `OperatorMemory`** (B3's open thread).
+   `GridNbhdSelfModMemory` / `DeltaSelfModMemory`) with the B3 `AttnGatherMemory` global-read (geometry +
+   content) — the honest route to finally **retiring `OperatorMemory`** (B3's open thread).
 3. **Shape change.** Handle outputs whose dims ≠ inputs (currently scored 0 by the same-shape guard) —
    a Domain / output-size generalization.
 4. **Multi-block CMS chain** (NL §7). Stack memories at multiple frequencies for multi-step /

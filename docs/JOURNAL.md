@@ -590,3 +590,42 @@ central list so growth stays additive (new heavy proofs declare themselves; noth
 CI stays `full` (correctness gate; runner time is cheap). Verified: `./esper fast` = 69s, skips exactly
 the two, green; default banner reports `tier: full`; bad arg exits 2; `mojo format` leaves the tagged
 files clean (marker-only additions).
+
+**16:05 — RICHER NEIGHBOURHOODS + NONLINEAR READ DONE (ARC-AGI-2 block 2): the disjunctive/count
+class.** GridContext reads `pred = S·k` — LINEAR — so it does only additive positional rules. This block
+crosses the nonlinear barrier: `GridNbhdSelfModMemory` keys on a Moore-8 neighbour-count histogram and
+reads through a sigmoid THRESHOLD, expressing `out = C1 if (#neighbours == P) ≥ t else C2` — an OR /
+count that no linear read of the count can be (a sharp step). Zero core change: it's a `SelfModMemory`
+over `GridDomain`, so `meta_fit_selfmod` fits it untouched.
+
+Getting there took three design corrections, each empirically forced (validate-first paid off — all on
+the cheap fixed-key Ckpt A, before any meta-fit):
+1. **Centre-free key.** My first key was the GridContext-style outer product `E[centre]⊗Σ_n E[n]`.
+   Held-out stuck at ~0.52 (majority baseline): tying the histogram to the centre fragments the
+   per-colour weight across 5 centre-rows and injects irrelevant centre-dependence. The disjunctive/count
+   class is centre-INDEPENDENT, so the key must be the bare neighbour histogram `k = (1/8)Σ_n E[n]` (+ a
+   bias slot). Then every cell trains ONE small weight vector — clean logistic-regression-style learning.
+2. **Mean, not unit-norm.** The B4 lesson is "unit-normalise the delta key or it diverges" — but here the
+   count magnitude IS the signal the threshold reads; normalising divides it out. The MEAN (÷8) keeps
+   counts proportional while still bounding ‖k‖ for stability. (Different memory, different right answer.)
+3. **Feature scale vs the bias.** With one-hot `E` the count feature (`count_P/8` ≤ 0.5) is dwarfed by
+   the bias slot (1.0), so the write just fit the mean → constant collapse. Scaling `E` (×3) so the
+   feature is O(1) fixed it; a **constant bias slot** in the key lets the write self-calibrate the
+   threshold offset regardless of the learned magnitude (and makes `t` itself learnable).
+
+Read: `pred = LO + (HI−LO)·σ(g·(S·k) + c)`; write: the perceptron-style gated delta
+`S ← (1−α)S + η·e·(HI−LO)σ(1−σ)g·k`, η/α self-generated, 12 epochs over the demo cells. The boundary
+cells (count exactly = t) need a fairly SHARP σ or they mis-round; 12 epochs + moderate `g` on a
+balanced `t=2` rule (Binom(8,1/5): P(≥2)≈0.50) gets there. **Honesty control (cheap, decisive):** the
+SAME write with a LINEAR read (identity, even clamped — the strongest linear baseline) reaches only 0.61
+vs the nonlinear 0.995 — a linear read cannot sharply threshold a count. Ckpt A: nonlinear **0.995**,
+linear **0.611**. Ckpt B (cold `meta_fit_selfmod`, generic seed → fresh unseen rules): before **0.0**
+(generic seed predicts constant → non-vacuous), after **1.0** — a fresh disjunctive/count rule (unseen
+predicate colour P) solved to held-out 1.0 in ONE adapt pass.
+
+Scope (honest): the balanced `t=2`, fixed output-pair `{0,4}` family; the predicate colour P is inferred
+in-context (analogous to RecolorSelfModMemory inferring a permutation). Varying `t` (imbalanced, harder)
+and multi-bin count → later. Cost: sized against the 10-min rule — the full 326s fit (N=96/1500) hit
+after=1.0 with huge headroom, so I trimmed to N=64/1000 iters (**157s**, still after=1.0). The test is
+`# suite-tier: full`, so `./esper fast` is unchanged (71s); the full suite rises to ~8 min (under the
+line). Additive: only `memory.mojo` grew + the new test; the ES/self-mod core untouched.
