@@ -573,3 +573,20 @@ now ~5.4 min). Additive — `esper_evolution.mojo`/`hope.mojo`/`arc_io.mojo` and
 `Memory`/ES/self-mod core untouched; full suite green, all prior numbers unchanged. **Next: compose
 this content self-write with the B3 attention geometry (retire `OperatorMemory`), richer neighbourhoods
 / nonlinear read, shape-change, CMS chain.**
+
+**15:05 — Fast/full suite tiers.** The suite has crept to ~5.4 min as each meta-fit proof landed, too
+slow for a routine local gate. Timed every test individually to see where the cost lives — it is
+brutally lopsided: `test_grid_context_selfmod` (178s) + `test_delta_selfmod` (64s) = **79% of the whole
+suite**; the other 14 tests + `main` + `arc_solve` total ~65s. So the split is really about deferring
+those two. Added a `run_tests.sh [full|fast]` tier (default `full`, so CI and bare `./esper suite` are
+unchanged) + a `./esper fast` alias (~80s). A test opts *out* of `fast` by self-tagging a
+`# suite-tier: full` comment line (grepped by the runner); untagged → runs in both. Only the two heavy
+proofs are tagged. **Design discipline:** `fast` is a *strict subset at full budget* — no reduced
+iterations, no relaxed `≥0.95` gates (a weakened smoke test would be exactly the stone-soup failure
+mode). It still covers every code path once at full budget, including the self-mod `meta_fit_selfmod`
+core via `test_selfmod_memory` (11s); the two deferred tests are the same mechanism at larger scale, so
+`fast` loses no coverage type, only the large-scale milestone confirmations. Chose self-tagging over a
+central list so growth stays additive (new heavy proofs declare themselves; nothing to keep in sync).
+CI stays `full` (correctness gate; runner time is cheap). Verified: `./esper fast` = 69s, skips exactly
+the two, green; default banner reports `tier: full`; bad arg exits 2; `mojo format` leaves the tagged
+files clean (marker-only additions).

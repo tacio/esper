@@ -10,7 +10,8 @@
 #   ./esper main                 # run src/main.mojo
 #   ./esper solve <glob...>      # arc_solve.mojo over .task bundles (adds --report)
 #   ./esper fmt [files...]       # mojo format (defaults to src + tests)
-#   ./esper suite                # ./run_tests.sh (full suite + format gate)
+#   ./esper suite [full|fast]    # ./run_tests.sh (default full; fast defers heavy proofs)
+#   ./esper fast                 # alias for `./esper suite fast` (~80s local gate)
 #   ./esper mojo <args...>       # raw mojo passthrough (with venv active)
 set -euo pipefail
 
@@ -62,13 +63,16 @@ fmt)
     fi
     ;;
 suite)
-    ./run_tests.sh
+    ./run_tests.sh "$@"
+    ;;
+fast)
+    ./run_tests.sh fast
     ;;
 mojo)
     mojo "$@"
     ;;
 *)
-    echo "usage: ./esper {run|test|main|solve|fmt|suite|mojo} ..." >&2
+    echo "usage: ./esper {run|test|main|solve|fmt|suite|fast|mojo} ..." >&2
     echo "  see the header of $ROOT/esper for details" >&2
     exit 2
     ;;

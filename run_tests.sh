@@ -1,7 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "Starting Esper Test Suite..."
+# Suite tier: `full` (default) runs everything; `fast` skips the heavy meta-fit
+# milestone proofs (tests tagged `# suite-tier: full`) for a quick local gate.
+# The `fast` tier still covers every code path at FULL budget (structural, the ES
+# operator fit, and the self-mod meta-fit core via test_selfmod_memory) — it only
+# defers the two large-scale proofs (grid_context ~178s, delta_selfmod ~64s), so
+# it never runs a weakened threshold. See CLAUDE.md "Testing".
+TIER="${1:-full}"
+if [[ "$TIER" != "full" && "$TIER" != "fast" ]]; then
+    echo "usage: $0 [full|fast]  (got '$TIER')" >&2
+    exit 2
+fi
+
+echo "Starting Esper Test Suite (tier: ${TIER})..."
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
@@ -23,8 +35,13 @@ _save_task(
 print("Generated build/sample.task")
 PY
 
-# Run every tests/test_*.mojo with src on the import path.
+# Run every tests/test_*.mojo with src on the import path. In the `fast` tier,
+# skip files that tag themselves `# suite-tier: full` (heavy milestone proofs).
 for test_file in tests/test_*.mojo; do
+    if [[ "$TIER" == "fast" ]] && grep -q '^# suite-tier: full' "${test_file}"; then
+        echo "Skipping ${test_file} (full-tier only)..."
+        continue
+    fi
     echo "Running ${test_file}..."
     mojo run -I src "${test_file}"
 done

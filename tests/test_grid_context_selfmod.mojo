@@ -1,3 +1,7 @@
+# suite-tier: full
+#   Heaviest meta-fit milestone proof (~178s). Deferred from the `fast` tier —
+#   the meta_fit_selfmod core is already covered there by test_selfmod_memory.
+#   See run_tests.sh / CLAUDE.md "Testing".
 from std.memory import alloc, UnsafePointer
 from std.random import seed, random_float64
 from std.collections import List
