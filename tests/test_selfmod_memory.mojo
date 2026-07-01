@@ -140,7 +140,9 @@ def main() raises:
         rand_perm(p)
         meta.append(make_task(p, 6, 4))
         p.free()
-    meta_fit_selfmod(slow, meta, n, 128, 0.1, 0.003, 0.5, 0.01, 2000)
+    meta_fit_selfmod[RecolorSelfModMemory](
+        slow, meta, n, 128, 0.1, 0.003, 0.5, 0.01, 2000
+    )
 
     var after = Float32(0.0)
     for _ in range(5):
