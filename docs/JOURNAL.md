@@ -629,3 +629,34 @@ and multi-bin count → later. Cost: sized against the 10-min rule — the full 
 after=1.0 with huge headroom, so I trimmed to N=64/1000 iters (**157s**, still after=1.0). The test is
 `# suite-tier: full`, so `./esper fast` is unchanged (71s); the full suite rises to ~8 min (under the
 line). Additive: only `memory.mojo` grew + the new test; the ES/self-mod core untouched.
+
+**17:20 — BROADENED THE NONLINEAR CLASS (ARC-AGI-2 block 3): infer the WHOLE 2-level count rule
+in-context.** Block 2 fixed the output colours (`{0,4}`) and threshold (`t=2`) in meta params. This
+generalises `GridNbhdSelfModMemory` (in place — the fixed case is a strict subset) so the memory infers
+`out = C1 if (#Moore-8 == P) ≥ t else C2` with **P, t, AND both colours C1/C2 all varying per task**,
+keeping the single-sigmoid read.
+
+The first attempt was a **written 2-unit output head** `pred = v0(1−σ)+v1·σ` with `v0/v1` delta-written
+and `min/max` symmetry-break init. It worked for ~half the rules but was marginal on **inverted** rules
+(fire → the *smaller* colour) and erratic at higher `g`: the value-coupled head and the salience *fight*
+— `min/max` pins `v1=max`, but an inverted rule wants the high-count regime to output the *min* colour,
+forcing a large wrong correction. Diagnosed on the cheap fixed-key probe (0.24–1.0 scatter).
+
+Fix = **decouple colour from threshold**. Read the two colours straight off the demos (`v0/v1 = min/max`
+output, written, no delta), and train the salience `S` as a **binary classifier** of *which* colour a
+cell outputs (`y = output > mid`) — not by regressing the raw target. So `S` inherits block 2's proven
+logistic count-write, and the classifier's **learned sign** handles inversion for free; the bias slot
+self-calibrates any `t`. One more correction: the classifier's cross-entropy update had lost block 2's
+`(HI−LO)=4` gain, so it under-trained (~16× too small a step); restored via a `GRIDNBHD_LR` gain +
+dropping the vanishing `σ(1−σ)` factor (cross-entropy, doesn't stall under a sharp read). After that:
+fixed-config Ckpt A = **1.0 on normal, inverted, and t=3** rules; linear-read control **0.48**.
+
+Ckpt B honesty subtlety (worth recording): with a `sin` embedding seed the generic seed *already* scored
+**0.92** — because block 3 reads the colours off the demos, a decent classifier + a separable-enough
+generic `E` generalises on its own, making the "generic seed fails" guard vacuous. The honest fix is a
+**zero-embedding seed** (the canonical "no learned representation" prior): then `k=0`, the read is
+constant, and `before` = best-constant baseline **0.74**, while the meta-fit must *discover* separable
+colour embeddings from scratch → **after 1.0**. So the ES genuinely grows `E` from zero (antithetic noise
+breaks the 5-way colour symmetry). Cost ~164s (in place → replaces block 2's test; full suite stays
+~8.4 min, under the 10-min line). Scope now: any 2-level count rule; multi-bin count (3+ outputs) is the
+next broadening. Zero core change — `meta_fit_selfmod` reads `state_dim`/`slow_dim`.

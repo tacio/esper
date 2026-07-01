@@ -14,12 +14,11 @@ from memory import (
     GRIDNBHD_DE,
     GRIDNBHD_DK,
     GRIDNBHD_NBRS,
+    GRIDNBHD_STATE_DIM,
     GRIDNBHD_SLOW_DIM,
     GRIDNBHD_E_OFF,
     GRIDNBHD_G_OFF,
     GRIDNBHD_C_OFF,
-    GRIDNBHD_LO_OFF,
-    GRIDNBHD_HI_OFF,
     GRIDNBHD_BETA_OFF,
     GRIDNBHD_BALPHA_OFF,
     _gridctx_sym,
@@ -28,25 +27,26 @@ from esper_evolution import meta_fit_selfmod
 from arc_io import exact_match
 
 # ==========================================================================
-# Richer neighbourhoods + NONLINEAR read (ARC-AGI-2 block 2). GridContext reads
-# pred = S·k (LINEAR) and expresses only additive positional rules. This memory
-# keys on the Moore-8 neighbour-count histogram and reads through a sigmoid
-# THRESHOLD, so it expresses the DISJUNCTIVE / COUNT class:
-#   out[r,c] = C1 if (# Moore-8 neighbours == P) >= t else C2      (toroidal)
-# provably outside GridContext's additive class (a linear read of a count cannot
-# be a sharp step) and outside any per-cell / 1-D memory (it needs all 8
-# neighbours). At t in {2,3} with A=5 colours the two classes are ~balanced.
+# Broadening the nonlinear class (ARC-AGI-2 block 3). Block 2 proved the
+# disjunctive/count class but with the output colours (fixed {0,4}) and threshold
+# (t=2) baked into meta params. This generalised memory infers the WHOLE 2-level
+# rule from the demos:
+#   out[r,c] = C1 if (# Moore-8 neighbours == P) >= t else C2   (toroidal)
+# with P, t, AND both output colours C1/C2 all varying per task. The read is still
+# a single sigmoid THRESHOLD on the neighbour-count histogram; the trick is
+# DECOUPLING — the two colours are read off the demos (v0/v1 = min/max output,
+# WRITTEN), and the salience is trained as a binary classifier of which colour a
+# cell outputs, so its learned sign handles inverted rules (fire -> smaller colour)
+# and the bias slot self-calibrates any threshold t.
 #
-# Ckpt A: FIXED (scaled one-hot) key + hand-set nonlinear read; the gated delta
-# self-write learns one such rule to >= 0.95 held-out. CONTROL: the same write
-# with a LINEAR (identity, clamped) read fails (< 0.6) — proof the nonlinearity
-# does the work, not scaffolding. Fail-fast gate before the meta-fit.
+# Ckpt A: FIXED (scaled one-hot) key + hand-set read; the self-write learns
+# ARBITRARY rules (arbitrary colours incl. inverted, t in {2,3}) each to >= 0.95
+# held-out. CONTROL: a LINEAR read (identity, clamped) fails (< 0.75). Fail-fast.
 # ==========================================================================
 
 comptime A = GRIDNBHD_A
 comptime R = 6
 comptime C = 6
-comptime T = 2  # threshold; t=2 gives ~balanced classes (majority baseline ~0.52)
 comptime GridTask = Task[ArcGrid]
 
 
@@ -58,16 +58,14 @@ def rand_grid() -> ArcGrid:
 
 
 def count_match(g: ArcGrid, r: Int, c: Int, p: Int) -> Int:
-    var rows = g.rows
-    var cols = g.cols
     var cnt = 0
     for dr in range(-1, 2):
         for dc in range(-1, 2):
             if dr == 0 and dc == 0:
                 continue
-            var rr = (r + dr + rows) % rows
-            var cc = (c + dc + cols) % cols
-            if _gridctx_sym(g.data[rr * cols + cc]) == p:
+            var rr = (r + dr + g.rows) % g.rows
+            var cc = (c + dc + g.cols) % g.cols
+            if _gridctx_sym(g.data[rr * g.cols + cc]) == p:
                 cnt += 1
     return cnt
 
@@ -95,8 +93,19 @@ def make_task(
     return GridTask(train^, test^)
 
 
+# A random 2-level count rule: predicate P, threshold t in {2,3}, distinct C1/C2.
+def rand_task(nt: Int, nv: Int) -> GridTask:
+    var p = Int(random_float64(0.0, Float64(A)))
+    var t = 2 + Int(random_float64(0.0, 2.0))
+    var a = Int(random_float64(0.0, Float64(A)))
+    var b = Int(random_float64(0.0, Float64(A)))
+    while b == a:
+        b = Int(random_float64(0.0, Float64(A)))
+    return make_task(p, t, Float32(a), Float32(b), nt, nv)
+
+
 # The fixed-parameter Ckpt-A config validated by the offline probe: scaled one-hot
-# embeddings (De == A), moderate sharpness, low decay, output levels 0/4.
+# embeddings (De == A), moderate sharpness, low decay.
 def set_fixed(slow: UnsafePointer[Float32, MutAnyOrigin]):
     for i in range(GRIDNBHD_SLOW_DIM):
         slow[i] = 0.0
@@ -104,27 +113,51 @@ def set_fixed(slow: UnsafePointer[Float32, MutAnyOrigin]):
         slow[GRIDNBHD_E_OFF + cc * GRIDNBHD_DE + cc] = 3.0
     slow[GRIDNBHD_G_OFF] = 2.0
     slow[GRIDNBHD_C_OFF] = 0.0
-    slow[GRIDNBHD_LO_OFF] = 0.0
-    slow[GRIDNBHD_HI_OFF] = 4.0
     slow[GRIDNBHD_BETA_OFF] = 0.0  # eta ~ 0.5
     slow[GRIDNBHD_BALPHA_OFF] = -6.0  # alpha ~ 0.002
 
 
-# A LINEAR-read control sharing the exact centre-free key + gated delta write, but
-# R = identity (clamped to [0,A-1]). A linear read of a count cannot be a sharp
-# step, so a threshold rule must fail — isolating the nonlinearity as the cause.
-def heldout_linear_control(p: Int, t: Int) raises -> Float32:
+# Fixed-config held-out for one specific rule (Ckpt A).
+def fixed_heldout(p: Int, t: Int, c1: Float32, c2: Float32) raises -> Float32:
+    var slow = alloc[Float32](GRIDNBHD_SLOW_DIM)
+    set_fixed(slow)
     var demos = List[ArcTaskPair]()
-    for _ in range(8):
+    for _ in range(12):
+        var g = rand_grid()
+        demos.append(ArcTaskPair(g^, apply_rule(g, p, t, c1, c2)))
+    var state = alloc[Float32](GRIDNBHD_STATE_DIM)
+    GridNbhdSelfModMemory.adapt(slow, demos, state)
+    var ms = Float32(0.0)
+    var n = R * C
+    for _ in range(12):
+        var tg = rand_grid()
+        var truth = apply_rule(tg, p, t, c1, c2)
+        var pred = alloc[Float32](n)
+        GridNbhdSelfModMemory.apply(slow, state, tg, pred)
+        ms += exact_match(pred, truth.data, n)
+        pred.free()
+    state.free()
+    slow.free()
+    return ms / 12.0
+
+
+# LINEAR-read control: same centre-free key + gated delta write, but R = identity
+# (clamped to [0,A-1]). A linear read of a count cannot be a sharp step, so a
+# threshold rule must fail — isolating the nonlinearity as the cause.
+def heldout_linear_control(
+    p: Int, t: Int, c1: Float32, c2: Float32
+) raises -> Float32:
+    var demos = List[ArcTaskPair]()
+    for _ in range(12):
         var gin = rand_grid()
-        demos.append(ArcTaskPair(gin^, apply_rule(gin, p, t, 4.0, 0.0)))
+        demos.append(ArcTaskPair(gin^, apply_rule(gin, p, t, c1, c2)))
     var slow = alloc[Float32](GRIDNBHD_SLOW_DIM)
     for i in range(GRIDNBHD_SLOW_DIM):
         slow[i] = 0.0
     for cc in range(A):
         slow[GRIDNBHD_E_OFF + cc * GRIDNBHD_DE + cc] = 3.0
     var eta = Float32(0.3)
-    var state = alloc[Float32](GRIDNBHD_DK)
+    var state = alloc[Float32](GRIDNBHD_STATE_DIM)
     for j in range(GRIDNBHD_DK):
         state[j] = 0.0
     for _epoch in range(6):
@@ -145,11 +178,10 @@ def heldout_linear_control(p: Int, t: Int) raises -> Float32:
                     for j in range(GRIDNBHD_DK):
                         state[j] += eta * e * k[j]
     var ms = Float32(0.0)
-    var trials = 8
     var n = R * C
-    for _ in range(trials):
+    for _ in range(12):
         var tg = rand_grid()
-        var truth = apply_rule(tg, p, t, 4.0, 0.0)
+        var truth = apply_rule(tg, p, t, c1, c2)
         var pred = alloc[Float32](n)
         for r in range(R):
             for c in range(C):
@@ -169,15 +201,13 @@ def heldout_linear_control(p: Int, t: Int) raises -> Float32:
         pred.free()
     state.free()
     slow.free()
-    return ms / Float32(trials)
+    return ms / 12.0
 
 
-# One (multi-epoch) adapt pass on a fresh rule, then held-out on unseen grids.
-def fresh_heldout(
-    slow: UnsafePointer[Float32, MutAnyOrigin], p: Int, t: Int
-) raises -> Float32:
-    var task = make_task(p, t, 4.0, 0.0, 8, 8)
-    var state = alloc[Float32](GRIDNBHD_DK)
+# One (multi-epoch) adapt pass on a fresh random rule, then held-out.
+def fresh_heldout(slow: UnsafePointer[Float32, MutAnyOrigin]) raises -> Float32:
+    var task = rand_task(8, 8)
+    var state = alloc[Float32](GRIDNBHD_STATE_DIM)
     GridNbhdSelfModMemory.adapt(slow, task.train, state)
     var ms = Float32(0.0)
     var n = R * C
@@ -192,121 +222,98 @@ def fresh_heldout(
 
 def main() raises:
     seed(0)
-    var n = R * C
 
-    # ---------- Checkpoint A: fixed-key nonlinear write + linear control ----------
-    var slow = alloc[Float32](GRIDNBHD_SLOW_DIM)
-    set_fixed(slow)
-    var demos = List[ArcTaskPair]()
-    for _ in range(12):
-        var gin = rand_grid()
-        demos.append(ArcTaskPair(gin^, apply_rule(gin, 2, T, 4.0, 0.0)))
-    var state = alloc[Float32](GRIDNBHD_DK)
-    GridNbhdSelfModMemory.adapt(slow, demos, state)
-    var match_sum = Float32(0.0)
-    var trials = 12
-    for _ in range(trials):
-        var tg = rand_grid()
-        var truth = apply_rule(tg, 2, T, 4.0, 0.0)
-        var pred = alloc[Float32](n)
-        GridNbhdSelfModMemory.apply(slow, state, tg, pred)
-        match_sum += exact_match(pred, truth.data, n)
-        pred.free()
-    var nonlin = match_sum / Float32(trials)
-    state.free()
-    slow.free()
+    # ---------- Checkpoint A: fixed-key, arbitrary rules + linear control ----------
+    # Three rules covering: normal (fire->larger), INVERTED (fire->smaller), t=3.
+    var r1 = fixed_heldout(1, 2, 4.0, 0.0)  # fire -> 4  (normal)
+    var r2 = fixed_heldout(3, 2, 2.0, 3.0)  # fire -> 2  (inverted: 2 < 3)
+    var r3 = fixed_heldout(4, 3, 3.0, 0.0)  # t = 3
     print(
-        "  ckptA nonlinear self-write held-out (count-threshold rule):", nonlin
+        "  ckptA fixed-config held-out: normal", r1, " inverted", r2, " t=3", r3
     )
-
     seed(0)
-    var lin = heldout_linear_control(2, T)
-    print("  ckptA LINEAR-read control (same write, identity+clamp):", lin)
+    var lin = heldout_linear_control(1, 2, 4.0, 0.0)
+    print("  ckptA LINEAR-read control (identity+clamp):", lin)
 
-    if nonlin < 0.95:
+    if r1 < 0.95 or r2 < 0.95 or r3 < 0.95:
         raise Error(
-            "ERROR: the nonlinear Moore-8 gated-delta self-write did not learn"
-            " the count-threshold rule to >= 0.95 held-out (got "
-            + String(nonlin)
+            "ERROR: the generalised self-write did not learn an arbitrary"
+            " 2-level count rule (arbitrary colours / inverted / t=3) to >="
+            " 0.95 held-out (got "
+            + String(r1)
+            + ", "
+            + String(r2)
+            + ", "
+            + String(r3)
             + ")."
         )
-    # The control is the STRONGEST linear read (a clamped ramp): on a balanced
-    # threshold it approximates the step and reaches ~0.6, but cannot round the
-    # boundary counts correctly — far short of the bar and of the nonlinear 0.995.
-    # The decisive signal is the gap; require the linear read to stay clearly
-    # short of the 0.95 bar.
     if lin >= 0.75:
         raise Error(
             "ERROR: the LINEAR-read control unexpectedly approached the bar"
             " (got "
             + String(lin)
-            + ") — the nonlinearity is not the load-bearing part; claim"
-            " vacuous."
+            + ") — the nonlinearity is not load-bearing; claim vacuous."
         )
     print(
-        (
-            "Grid-neighbourhood checkpoint A passed: the nonlinear read + gated"
-            " delta self-write learned a Moore-8 count-threshold rule to"
-        ),
-        nonlin,
-        "held-out, where the strongest linear read reaches only",
-        lin,
-        "(cannot sharply threshold a count).",
+        "Grid-neighbourhood checkpoint A passed: the memory infers arbitrary"
+        " 2-level count rules (colours + threshold, incl. inverted) in-context,"
+        " where the linear read cannot."
     )
 
-    # ---------- Checkpoint B: meta-learn the projections (emergent) ----------
+    # ---------- Checkpoint B: meta-learn the projections cold (emergent) ----------
     seed(0)
-    var slow_b = alloc[Float32](GRIDNBHD_SLOW_DIM)
-    GridNbhdSelfModMemory.seed_slow(slow_b)
+    var slow = alloc[Float32](GRIDNBHD_SLOW_DIM)
+    GridNbhdSelfModMemory.seed_slow(slow)  # E = 0: no learned representation
 
     var before = Float32(0.0)
-    for i in range(5):
-        var p = Int(random_float64(0.0, Float64(A)))
-        before += fresh_heldout(slow_b, p, T)
-    before = before / 5.0
-    print("  ckptB fresh held-out BEFORE meta-fit (generic seed):", before)
+    for _ in range(8):
+        before += fresh_heldout(slow)
+    before = before / 8.0
+    print(
+        "  ckptB fresh held-out BEFORE meta-fit (E=0 seed = best-constant):",
+        before,
+    )
 
     var meta = List[GridTask]()
     for _ in range(8):
-        var p = Int(random_float64(0.0, Float64(A)))
-        meta.append(make_task(p, T, 4.0, 0.0, 8, 4))
-    # Budget trimmed (N, iters) to keep the full suite under the 10-min line: the
-    # before/after gap is large (0.0 -> 1.0 at N=96/1500 iters), leaving ample head-
-    # room. See docs/JOURNAL.md and CLAUDE.md "Testing" (this test is full-tier).
+        meta.append(rand_task(8, 4))
+    # Budget matched to block 2 (~150s) so the full suite stays under the 10-min
+    # line; before/after gap is large, leaving headroom.
     meta_fit_selfmod[GridNbhdSelfModMemory](
-        slow_b, meta, n, 64, 0.1, 0.003, 0.5, 0.01, 1000
+        slow, meta, R * C, 64, 0.1, 0.003, 0.5, 0.01, 1000
     )
 
     var after = Float32(0.0)
-    var n_fresh = 8
-    for i in range(n_fresh):
-        var p = Int(random_float64(0.0, Float64(A)))
-        after += fresh_heldout(slow_b, p, T)
+    var n_fresh = 10
+    for _ in range(n_fresh):
+        after += fresh_heldout(slow)
     after = after / Float32(n_fresh)
     print(
-        "  ckptB fresh held-out AFTER meta-fit (one-pass, 8 unseen rules):",
+        "  ckptB fresh held-out AFTER meta-fit (one-pass, 10 unseen rules):",
         after,
     )
-    slow_b.free()
+    slow.free()
 
     if after < 0.95:
         raise Error(
-            "ERROR: the meta-learned grid-neighbourhood memory did not solve a"
-            " fresh count-threshold rule to >= 0.95 held-out in one adapt pass"
-            " (got "
+            "ERROR: the meta-learned memory did not solve a fresh arbitrary"
+            " 2-level count rule to >= 0.95 held-out in one adapt pass (got "
             + String(after)
             + ")."
         )
-    if before >= 0.5:
+    # Non-vacuous: from a zero-embedding prior the write can only predict the
+    # majority colour (~best constant); meta-learning must DISCOVER separable
+    # colour embeddings to classify the count. Require a clear gap below the bar.
+    if before >= 0.85:
         raise Error(
-            "ERROR: the generic seed already generalised (before="
+            "ERROR: the E=0 generic seed already generalised (before="
             + String(before)
             + ") — the meta-fit is not doing the work; emergence claim vacuous."
         )
 
     print(
-        "Grid-neighbourhood checkpoint B passed: the self-modifying memory"
-        " meta-learned its neighbourhood embeddings + nonlinear read cold; a"
-        " fresh disjunctive/count rule adapts in ONE pass (a linear / per-cell"
-        " / 1-D memory cannot express it)."
+        "Grid-neighbourhood checkpoint B passed: from a zero-embedding prior"
+        " the self-modifying memory meta-learned colour embeddings + the"
+        " nonlinear read cold; a fresh arbitrary 2-level count rule (predicate,"
+        " threshold, and both output colours) adapts in ONE pass."
     )

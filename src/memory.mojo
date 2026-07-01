@@ -1125,7 +1125,7 @@ struct GridContextSelfModMemory(SelfModMemory):
 
 
 # ==========================================
-# Richer neighbourhoods + NONLINEAR read (ARC-AGI-2 block 2)
+# Richer neighbourhoods + NONLINEAR read (ARC-AGI-2 blocks 2-3)
 # ==========================================
 # GridContext (above) reads pred = S·k — LINEAR in the key — so it expresses only
 # ADDITIVE positional rules. It provably cannot do the DISJUNCTIVE / COUNT class:
@@ -1146,13 +1146,24 @@ struct GridContextSelfModMemory(SelfModMemory):
 # normalising would divide out the very count magnitude the threshold reads, while
 # the mean still bounds ‖k‖ (delta-write stability, the B4 lesson).
 #
-# Read (the nonlinearity): pred = LO + (HI−LO)·σ(g·(S·k) + c). σ makes a THRESHOLD
-# on the weighted count = the disjunction/majority a linear S·k can't. The self-
-# WRITE is the perceptron-style (nonlinear) gated delta rule S ← (1−α)S + η·e·R'·k
-# with R' = (HI−LO)·σ(1−σ)·g, η/α self-generated per cell. The fast state S is
-# WRITTEN over the demos (never ES-searched); the ES only fits the small slow
-# vector (E, the read scalars g/c/LO/HI, the gate projections) across a family —
-# the B3→B4 discipline. Reuses meta_fit_selfmod[GridNbhdSelfModMemory] verbatim.
+# Read (the nonlinearity): pred = v0·(1−σ) + v1·σ with σ = σ(g·(S·k) + c). σ makes
+# a THRESHOLD on the weighted count = the disjunction/majority a linear S·k can't.
+# BLOCK 3 (broadening): the memory infers the WHOLE 2-level rule from demos —
+# predicate colour, threshold t, AND both output colours C1/C2 — not just the fixed
+# {0,4}/t=2 of the first count block.
+#
+# The trick that makes this robust is DECOUPLING colour from threshold. The two
+# output colours are read straight off the demos (v0/v1 = min/max output, WRITTEN
+# into state), and the salience S is trained as a BINARY CLASSIFIER of which colour
+# a cell outputs (label y = 1 if output == vmax else 0) — NOT by regressing the raw
+# target. So S inherits block 2's proven logistic count-write verbatim
+# (S ← (1−α)S + η·(y−σ)·σ(1−σ)·g·k, η/α self-generated); the classifier's LEARNED
+# SIGN handles inverted rules (fire → the SMALLER colour), which a value-coupled
+# output head fights over. Variable t: the key's bias slot + c self-calibrate the
+# threshold offset. The fast state [S | v0 | v1] is WRITTEN over the demos (never
+# ES-searched); the ES fits only the small slow vector (E, read scalars g/c, the
+# gate projections) across a family — the B3→B4 discipline. Reuses
+# meta_fit_selfmod[GridNbhdSelfModMemory] verbatim.
 comptime GRIDNBHD_A = 5
 comptime GRIDNBHD_DE = 5  # = A so the Ckpt-A fixed one-hot embedding is expressible
 # Dk = De histogram features + 1 constant BIAS slot. The bias lets the self-write
@@ -1161,13 +1172,24 @@ comptime GRIDNBHD_DE = 5  # = A so the Ckpt-A fixed one-hot embedding is express
 comptime GRIDNBHD_DK = GRIDNBHD_DE + 1
 comptime GRIDNBHD_NBRS = 8
 comptime GRIDNBHD_META_EPOCHS = 12
+# Base learning rate for the salience classifier write (cross-entropy logistic
+# delta). The self-generated eta in (0,1) modulates it; this constant restores
+# the update magnitude block 2 got for free from its (HI-LO)=4 read gain.
+comptime GRIDNBHD_LR = Float32(8.0)
+
+# The two output colours are NOT meta-fixed — they are WRITTEN per task into the
+# state as a 2-unit output head [v0, v1] (v0 = low-regime colour, v1 = high). So
+# the state is [ S (Dk salience) | v0 | v1 ]. This is what lets the memory infer
+# arbitrary output pairs (and, with the key's bias slot, an arbitrary threshold t)
+# in-context, not just the fixed {0,4} / t=2 of the first count block.
+comptime GRIDNBHD_V0_OFF = GRIDNBHD_DK
+comptime GRIDNBHD_V1_OFF = GRIDNBHD_DK + 1
+comptime GRIDNBHD_STATE_DIM = GRIDNBHD_DK + 2
 
 comptime GRIDNBHD_E_OFF = 0
 comptime GRIDNBHD_G_OFF = GRIDNBHD_A * GRIDNBHD_DE
 comptime GRIDNBHD_C_OFF = GRIDNBHD_G_OFF + 1
-comptime GRIDNBHD_LO_OFF = GRIDNBHD_C_OFF + 1
-comptime GRIDNBHD_HI_OFF = GRIDNBHD_LO_OFF + 1
-comptime GRIDNBHD_WETA_OFF = GRIDNBHD_HI_OFF + 1
+comptime GRIDNBHD_WETA_OFF = GRIDNBHD_C_OFF + 1
 comptime GRIDNBHD_BETA_OFF = GRIDNBHD_WETA_OFF + GRIDNBHD_DK
 comptime GRIDNBHD_WALPHA_OFF = GRIDNBHD_BETA_OFF + 1
 comptime GRIDNBHD_BALPHA_OFF = GRIDNBHD_WALPHA_OFF + GRIDNBHD_DK
@@ -1183,22 +1205,22 @@ struct GridNbhdSelfModMemory(SelfModMemory):
 
     @staticmethod
     def state_dim() -> Int:
-        return GRIDNBHD_DK
+        return GRIDNBHD_STATE_DIM
 
     @staticmethod
     def seed_slow(slow: UnsafePointer[Float32, MutAnyOrigin]):
-        # Generic (non-one-hot) embeddings at a workable scale — the meta-fit must
-        # discover SEPARABLE embeddings + sharp read; the generic seed must FAIL
-        # (Ckpt B asserts before < 0.5) so the emergence claim is non-vacuous.
+        # ZERO embeddings — the "no learned representation" prior. With E=0 the
+        # histogram key is 0, so the read is constant (baseline) and the self-write
+        # cannot classify: the meta-fit must DISCOVER separable colour embeddings
+        # from scratch, so the emergence claim is non-vacuous (Ckpt B asserts the
+        # generic seed fails to clear the bar). Unlike a `sin` seed — which is
+        # already separable enough for the strong cross-entropy write to generalise
+        # on its own — zero is genuinely uninformative.
         for c in range(GRIDNBHD_A):
             for d in range(GRIDNBHD_DE):
-                slow[GRIDNBHD_E_OFF + c * GRIDNBHD_DE + d] = (
-                    sin(Float32(c + 1) * Float32(d + 1) * 0.7) * 1.5
-                )
+                slow[GRIDNBHD_E_OFF + c * GRIDNBHD_DE + d] = 0.0
         slow[GRIDNBHD_G_OFF] = 2.0  # read sharpness
         slow[GRIDNBHD_C_OFF] = 0.0  # read threshold bias
-        slow[GRIDNBHD_LO_OFF] = 1.5  # weak/neutral output levels (meta refines)
-        slow[GRIDNBHD_HI_OFF] = 2.5
         for j in range(GRIDNBHD_DK):
             slow[GRIDNBHD_WETA_OFF + j] = 0.1 * sin(Float32(j + 1) * 1.3)
             slow[GRIDNBHD_WALPHA_OFF + j] = 0.1 * sin(Float32(j + 1) * 2.1)
@@ -1258,10 +1280,32 @@ struct GridNbhdSelfModMemory(SelfModMemory):
     ):
         for j in range(GRIDNBHD_DK):
             state[j] = 0.0
+
+        # Read the two output colours straight off the demos (min/max), and store
+        # them as the written output levels v0/v1. DECOUPLED from the salience: the
+        # salience is trained as a BINARY CLASSIFIER of which colour a cell outputs
+        # (label y = 1 if output == vmax else 0), not by regressing the raw target.
+        # This is the crux of the block-3 generalisation — it inherits block 2's
+        # proven logistic count-write verbatim, while the classifier's LEARNED SIGN
+        # handles inverted rules (fire → the smaller colour) that a value-coupled
+        # head fights over. Arbitrary colours: v0/v1. Arbitrary threshold t: the
+        # key's bias slot + c self-calibrate the offset.
+        var vmin = demos[0].output_grid.data[0]
+        var vmax = vmin
+        for d in range(len(demos)):
+            ref pg = demos[d].output_grid
+            for i in range(pg.rows * pg.cols):
+                var v = pg.data[i]
+                if v < vmin:
+                    vmin = v
+                if v > vmax:
+                    vmax = v
+        state[GRIDNBHD_V0_OFF] = vmin
+        state[GRIDNBHD_V1_OFF] = vmax
+        var mid = 0.5 * (vmin + vmax)
         var g = slow[GRIDNBHD_G_OFF]
         var cc = slow[GRIDNBHD_C_OFF]
-        var lo = slow[GRIDNBHD_LO_OFF]
-        var hi = slow[GRIDNBHD_HI_OFF]
+
         for _epoch in range(GRIDNBHD_META_EPOCHS):
             for d in range(len(demos)):
                 ref pair = demos[d]
@@ -1285,12 +1329,16 @@ struct GridNbhdSelfModMemory(SelfModMemory):
                                 slow[GRIDNBHD_WALPHA_OFF + j], k[j], galpha
                             )
                         var sig = _sigmoid(g * z + cc)
-                        var pred = lo + (hi - lo) * sig
-                        var dpred = (hi - lo) * sig * (1.0 - sig) * g
+                        # Binary label: does this cell output the HIGH colour?
+                        var y = Float32(1.0) if pair.output_grid.data[
+                            r * cols + c
+                        ] > mid else Float32(0.0)
+                        # Cross-entropy logistic delta (no vanishing sig(1-sig) so
+                        # it doesn't stall under a sharp read), gated + gain-scaled.
+                        var e = y - sig
                         var eta = _sigmoid(geta)
                         var alpha = _sigmoid(galpha)
-                        var e = pair.output_grid.data[r * cols + c] - pred
-                        var upd = eta * e * dpred
+                        var upd = GRIDNBHD_LR * eta * e
                         for j in range(GRIDNBHD_DK):
                             state[j] = (1.0 - alpha) * state[j] + upd * k[j]
 
@@ -1305,8 +1353,8 @@ struct GridNbhdSelfModMemory(SelfModMemory):
         var cols = inp.cols
         var g = slow[GRIDNBHD_G_OFF]
         var cc = slow[GRIDNBHD_C_OFF]
-        var lo = slow[GRIDNBHD_LO_OFF]
-        var hi = slow[GRIDNBHD_HI_OFF]
+        var v0 = state[GRIDNBHD_V0_OFF]
+        var v1 = state[GRIDNBHD_V1_OFF]
         for r in range(rows):
             for c in range(cols):
                 var nbrs = InlineArray[Int, GRIDNBHD_NBRS](fill=0)
@@ -1317,4 +1365,4 @@ struct GridNbhdSelfModMemory(SelfModMemory):
                 for j in range(GRIDNBHD_DK):
                     z = fma(state[j], k[j], z)
                 var sig = _sigmoid(g * z + cc)
-                dst[r * cols + c] = lo + (hi - lo) * sig
+                dst[r * cols + c] = v0 * (1.0 - sig) + v1 * sig

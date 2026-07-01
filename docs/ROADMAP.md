@@ -113,6 +113,15 @@ Concise, milestone-level; each links to `docs/JOURNAL.md` for the full narrative
   forced design calls (centre-free key; mean not unit-norm; feature-scale + bias slot). Scope = balanced
   `t=2`, fixed output pair, predicate colour inferred in-context; varying `t` and multi-bin count deferred.
   (JOURNAL 2026-07-01 16:05.)
+- **Broaden the count class (ARC-AGI-2 block 3).** Generalised `GridNbhdSelfModMemory` (in place; the
+  block-2 case is a strict subset) so it infers the **WHOLE 2-level rule** from demos —
+  `out = C1 if (#Moore-8 == P) ≥ t else C2` with **P, t, AND both output colours C1/C2 varying per task**.
+  Key idea: **decouple colour from threshold** — read the two colours off the demos (`v0/v1 = min/max`
+  output, written) and train the salience as a **binary classifier** of which colour a cell outputs, so
+  its learned sign handles inverted rules (fire → the smaller colour) and the bias slot self-calibrates
+  `t`. Cold meta-fit **from a zero-embedding prior** (the honest "no representation" baseline: `before`
+  = best-constant ~0.74) → a fresh arbitrary rule solved **held-out 1.0 in one adapt pass**; linear-read
+  control 0.48. (JOURNAL 2026-07-01 17:20.)
 
 ## Next — the path to full ARC-AGI 2
 
@@ -120,10 +129,9 @@ Each is its own block, held to the **cold-fit bar** (a scaffolded pass is a nega
 emergent memories are each measured on the subset they express; the north-star metric is the raw
 held-out ARC-AGI-2 number.
 
-1. **Broaden the nonlinear class.** Block 2 nailed the balanced `t=2`, fixed-output-pair disjunctive/count
-   rule (predicate colour inferred in-context). Extend to a **variable threshold `t`** (imbalanced,
-   harder), **multi-bin count** (count → 3+ output bins, a richer multi-output read), and arbitrary
-   output pairs (a written output head) — growing `GridNbhdSelfModMemory`'s expressible class.
+1. **Multi-bin count → colour map.** Blocks 2-3 did the 2-level count rule (arbitrary colours + variable
+   `t` ✓). Next: an arbitrary *function* of the count — count → 3+ output bins (e.g. 0-1→A, 2-3→B, 4+→C).
+   Needs a richer written read (a value-table / staircase over count-bins) beyond the single sigmoid.
 2. **Compose content + geometry.** Combine the grid content self-write (`GridContextSelfModMemory` /
    `GridNbhdSelfModMemory` / `DeltaSelfModMemory`) with the B3 `AttnGatherMemory` global-read (geometry +
    content) — the honest route to finally **retiring `OperatorMemory`** (B3's open thread).
