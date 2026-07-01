@@ -122,6 +122,17 @@ Concise, milestone-level; each links to `docs/JOURNAL.md` for the full narrative
   `t`. Cold meta-fit **from a zero-embedding prior** (the honest "no representation" baseline: `before`
   = best-constant ~0.74) → a fresh arbitrary rule solved **held-out 1.0 in one adapt pass**; linear-read
   control 0.48. (JOURNAL 2026-07-01 17:20.)
+- **Multi-bin count map (ARC-AGI-2 block 4).** `GridCountMapSelfModMemory` reads an **arbitrary**
+  `out = M(count_P)` (map count → colour, non-contiguous / non-monotone, ≥3 output colours); `P` and `M`
+  inferred per task. **Negative result then fix (recorded):** the "obvious" coupled gradient self-write
+  (learn salience + value table together) fails — at `S=0` the only bootstrap signal is linear covariance,
+  which vanishes for non-monotone maps (identifying *which* colour to count is a discrete selection, not a
+  gradient target). The fix holds the emergent bar with a **meta-learned SCORING salience**: per-colour
+  demo statistics (variance-reduction, correlation, mean-count) → a learned score picks `P`; the meta-fit
+  **learns to weight variance-reduction over correlation** (the feature that fails non-monotone). Read =
+  soft count-bin value table. Ckpt A: arbitrary non-monotone maps **1.0** vs the block-3 2-level memory
+  **0.41** on the same ≥3-colour map. Cold meta-fit (w=0 seed → uniform → 0.32): fresh unseen map
+  **held-out 1.0 in one adapt pass**. (JOURNAL 2026-07-01 18:30.)
 
 ## Next — the path to full ARC-AGI 2
 
@@ -129,16 +140,17 @@ Each is its own block, held to the **cold-fit bar** (a scaffolded pass is a nega
 emergent memories are each measured on the subset they express; the north-star metric is the raw
 held-out ARC-AGI-2 number.
 
-1. **Multi-bin count → colour map.** Blocks 2-3 did the 2-level count rule (arbitrary colours + variable
-   `t` ✓). Next: an arbitrary *function* of the count — count → 3+ output bins (e.g. 0-1→A, 2-3→B, 4+→C).
-   Needs a richer written read (a value-table / staircase over count-bins) beyond the single sigmoid.
-2. **Compose content + geometry.** Combine the grid content self-write (`GridContextSelfModMemory` /
-   `GridNbhdSelfModMemory` / `DeltaSelfModMemory`) with the B3 `AttnGatherMemory` global-read (geometry +
-   content) — the honest route to finally **retiring `OperatorMemory`** (B3's open thread).
-3. **Shape change.** Handle outputs whose dims ≠ inputs (currently scored 0 by the same-shape guard) —
+1. **Compose content + geometry.** Combine the grid content self-write (`GridContextSelfModMemory` /
+   `GridNbhdSelfModMemory` / `GridCountMapSelfModMemory` / `DeltaSelfModMemory`) with the B3
+   `AttnGatherMemory` global-read (geometry + content) — the honest route to finally **retiring
+   `OperatorMemory`** (B3's open thread).
+2. **Shape change.** Handle outputs whose dims ≠ inputs (currently scored 0 by the same-shape guard) —
    a Domain / output-size generalization.
-4. **Multi-block CMS chain** (NL §7). Stack memories at multiple frequencies for multi-step /
+3. **Multi-block CMS chain** (NL §7). Stack memories at multiple frequencies for multi-step /
    object-level reasoning.
+4. **Real ARC-AGI-2 re-measure.** With the count/neighbourhood family in hand, re-run the honest held-out
+   eval (`arc_solve --report`) to see whether the emergent memories move the raw corpus number off the
+   M8 operator ceiling (5/1000).
 
 ## Beyond ARC-AGI 2 (TBD)
 

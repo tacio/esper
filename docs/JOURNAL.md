@@ -660,3 +660,32 @@ colour embeddings from scratch → **after 1.0**. So the ES genuinely grows `E` 
 breaks the 5-way colour symmetry). Cost ~164s (in place → replaces block 2's test; full suite stays
 ~8.4 min, under the 10-min line). Scope now: any 2-level count rule; multi-bin count (3+ outputs) is the
 next broadening. Zero core change — `meta_fit_selfmod` reads `state_dim`/`slow_dim`.
+
+**18:30 — MULTI-BIN COUNT MAP DONE (ARC-AGI-2 block 4): an ARBITRARY function of a colour's
+neighbour-count, incl. non-monotone.** `GridCountMapSelfModMemory` reads `out = M(count_P)` for an
+arbitrary map `M: count → colour` (non-contiguous, ≥3 output colours); both predicate `P` and map `M`
+inferred per task. (Execution budget raised to 15 min mid-block, so the 4th heavy full-tier test is fine.)
+
+**The instructive part — a documented NEGATIVE RESULT, then the fix.** I first built the "obvious"
+generalisation of block 3: a soft count-BIN value table `pred = Σ_j φ_j(z)·V[j]` with a COUPLED gradient
+self-write (learn the salience `S` and the value table `V` together by the reconstruction gradient). It
+**failed**: on non-monotone maps held-out was erratic 0.03–0.85 across every LR, and even fine monotone
+maps only reached ~0.66–0.85. Root cause (verified with a pinned-salience read-check that itself hits
+**1.0**): the READ is fine, but at `S=0` every cell shares the count-score `z`, so the only signal
+bootstrapping the salience is the **linear covariance** of `count_c` with the output — which **vanishes
+for non-monotone maps**. Identifying *which* colour to count is a discrete SELECTION, not a smooth
+gradient target. (Same family as block 3's coupled-head fight; a hard-won recurring lesson.)
+
+**The fix (held the emergent bar): a META-LEARNED SCORING salience.** Instead of gradient-writing `S`,
+the memory computes per-colour demo STATISTICS of how `count_c` relates to the output — the variance
+REDUCTION `Var(out) − E_j[Var(out|count_c=j)]` (captures ANY functional dependence, monotone or not), the
+linear correlation, and the mean count — and a meta-learned linear score `a = softmax(τ·(w·features))`
+picks the predicate colour. `z = Σ_c a_c·count_c` (a→onehot(P) ⇒ `z = count_P`, integer-scaled, so the
+bin grid needs no calibration); the value table is written by a delta keyed by the soft bin. The meta-fit
+**learns to weight variance-reduction over correlation** — i.e. it discovers that the linear feature is
+exactly the one that fails on non-monotone maps. `w=0` seed ⇒ uniform selection ⇒ constant read ⇒ fails
+(non-vacuous). Results: Ckpt A (fixed scoring) solves arbitrary non-monotone maps at **1.0**, while the
+block-3 2-level memory on the same ≥3-colour map gets **0.41** (it can emit only two colours — multi-bin
+is load-bearing). Ckpt B (cold meta-fit): before **0.319** → after **1.0** (fresh unseen maps, one adapt
+pass). `slow_dim=12` so the fit is fast (~56s test). Additive new struct (block 3 stays green); zero core
+change. Scope: `A=5`, Moore-8, observable counts ~0..4; rare high counts are out-of-distribution.

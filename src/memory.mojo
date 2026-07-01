@@ -1366,3 +1366,292 @@ struct GridNbhdSelfModMemory(SelfModMemory):
                     z = fma(state[j], k[j], z)
                 var sig = _sigmoid(g * z + cc)
                 dst[r * cols + c] = v0 * (1.0 - sig) + v1 * sig
+
+
+# ==========================================
+# Multi-bin count -> colour MAP (ARC-AGI-2 block 4)
+# ==========================================
+# Blocks 2-3 read a colour's Moore-8 neighbour COUNT through a single sigmoid ->
+# a 2-LEVEL (threshold) output. This memory generalises the read to an ARBITRARY
+# map out = M(count_P): count -> colour, non-contiguous / non-monotone, >= 3
+# output colours. Both the predicate colour P and the map M are inferred per task.
+#
+# WHY NOT a gradient self-write (the block-3 pattern): at S=0 every cell shares the
+# count-score, so the only signal driving a gradient-written salience is the LINEAR
+# COVARIANCE of count_c with the output -- which VANISHES for non-monotone maps (the
+# whole point here). Verified empirically: the coupled write fails/erratic on
+# non-monotone maps. Identifying WHICH colour to count is a discrete SELECTION, not
+# a smooth gradient target.
+#
+# Mechanism: a META-LEARNED SCORING salience + a soft count-bin value table.
+#   1. Per colour c, compute demo STATISTICS of how count_c relates to the output:
+#      the variance REDUCTION  Var(out) - E_j[Var(out | count_c=j)]  (captures ANY
+#      functional dependence, monotone or not), the linear correlation, and the mean
+#      count. A meta-learned linear score picks the predicate: a = softmax(tau*(w.feat)).
+#      The meta-fit learns to weight variance-reduction OVER correlation -- correlation
+#      is exactly what fails on non-monotone maps, so the memory LEARNS the right
+#      statistic. (w=0 seed -> uniform a -> constant read -> fails: non-vacuous.)
+#   2. Count-score z = sum_c a[c]*count_c (a ~ onehot(P) -> z = count_P, integer-scaled).
+#   3. Soft count-bins phi_j = softmax_j(-temp*(z-mu_j)^2); value table V[j] WRITTEN by
+#      a delta keyed by the soft bin; read pred = sum_j phi_j*V[j] (mu/temp meta-learned).
+# The fast state [a | V] is WRITTEN from the demos in one pass (never ES-searched);
+# the ES fits only the small slow vector (scoring w/bias/tau, temp, mu, value rate).
+comptime GRIDCMAP_A = 5
+comptime GRIDCMAP_NBRS = 8
+comptime GRIDCMAP_B = 5  # count bins (observable count_P range is ~0..4)
+comptime GRIDCMAP_NFEAT = 3  # per-colour features: [reduction, corr, mean_count]
+comptime GRIDCMAP_EPOCHS = 8
+
+comptime GRIDCMAP_V_OFF = GRIDCMAP_A  # value table follows the A selection weights
+comptime GRIDCMAP_STATE_DIM = GRIDCMAP_A + GRIDCMAP_B
+
+comptime GRIDCMAP_W_OFF = 0  # scoring weights over NFEAT features
+comptime GRIDCMAP_BSCORE_OFF = GRIDCMAP_NFEAT
+comptime GRIDCMAP_TAU_OFF = GRIDCMAP_BSCORE_OFF + 1  # selection sharpness
+comptime GRIDCMAP_TEMP_OFF = GRIDCMAP_TAU_OFF + 1  # bin sharpness
+comptime GRIDCMAP_MU_OFF = GRIDCMAP_TEMP_OFF + 1
+comptime GRIDCMAP_EV_OFF = GRIDCMAP_MU_OFF + GRIDCMAP_B  # value-table write rate
+comptime GRIDCMAP_SLOW_DIM = GRIDCMAP_EV_OFF + 1
+
+
+struct GridCountMapSelfModMemory(SelfModMemory):
+    comptime Dom = GridDomain
+
+    @staticmethod
+    def slow_dim() -> Int:
+        return GRIDCMAP_SLOW_DIM
+
+    @staticmethod
+    def state_dim() -> Int:
+        return GRIDCMAP_STATE_DIM
+
+    @staticmethod
+    def seed_slow(slow: UnsafePointer[Float32, MutAnyOrigin]):
+        # w = 0: uninformative scoring -> uniform colour selection -> constant read
+        # -> the generic seed fails; the meta-fit must DISCOVER which statistic
+        # (variance-reduction) identifies the predicate colour (non-vacuous).
+        for i in range(GRIDCMAP_NFEAT):
+            slow[GRIDCMAP_W_OFF + i] = 0.0
+        slow[GRIDCMAP_BSCORE_OFF] = 0.0
+        slow[GRIDCMAP_TAU_OFF] = 1.0
+        slow[
+            GRIDCMAP_TEMP_OFF
+        ] = 4.0  # bins need to be sharp (probe: temp >= 3)
+        for j in range(GRIDCMAP_B):
+            slow[GRIDCMAP_MU_OFF + j] = Float32(
+                j
+            )  # bins at integer counts 0..4
+        slow[GRIDCMAP_EV_OFF] = 0.0  # eta_v ~ 0.5
+
+    @staticmethod
+    def fill_scale(scale: UnsafePointer[Float32, MutAnyOrigin], n: Int):
+        for i in range(n):
+            scale[i] = 1.0
+
+    # Moore-8 colour histogram at (r,c), toroidal: hist[colour] = neighbour count.
+    @staticmethod
+    def _hist(
+        data: UnsafePointer[Float32, MutAnyOrigin],
+        rows: Int,
+        cols: Int,
+        r: Int,
+        c: Int,
+        mut hist: InlineArray[Float32, GRIDCMAP_A],
+    ):
+        for i in range(GRIDCMAP_A):
+            hist[i] = 0.0
+        for dr in range(-1, 2):
+            for dc in range(-1, 2):
+                if dr == 0 and dc == 0:
+                    continue
+                var rr = (r + dr + rows) % rows
+                var cc = (c + dc + cols) % cols
+                hist[_gridctx_sym(data[rr * cols + cc])] += 1.0
+
+    # Bin score z -> soft bins phi over meta-learned centres mu (stable softmax).
+    @staticmethod
+    def _bins(
+        slow: UnsafePointer[Float32, MutAnyOrigin],
+        z: Float32,
+        mut phi: InlineArray[Float32, GRIDCMAP_B],
+    ):
+        var temp = slow[GRIDCMAP_TEMP_OFF]
+        var mx = Float32(-1.0e30)
+        for j in range(GRIDCMAP_B):
+            var d = z - slow[GRIDCMAP_MU_OFF + j]
+            var lg = -temp * d * d
+            phi[j] = lg
+            if lg > mx:
+                mx = lg
+        var s = Float32(0.0)
+        for j in range(GRIDCMAP_B):
+            var ev = exp(phi[j] - mx)
+            phi[j] = ev
+            s += ev
+        var invs = 1.0 / (s + 1e-9)
+        for j in range(GRIDCMAP_B):
+            phi[j] = phi[j] * invs
+
+    # Meta-learned scoring -> soft colour-selection a (written into state[0..A-1]).
+    # For each colour c the per-demo-cell pairs (count_c, output) yield three
+    # features; a = softmax(tau * (w.feat + b)).
+    @staticmethod
+    def _select(
+        slow: UnsafePointer[Float32, MutAnyOrigin],
+        demos: List[ArcTaskPair],
+        state: UnsafePointer[Float32, MutAnyOrigin],
+    ):
+        # Overall output moments (shared across colours).
+        var n = 0
+        var osum = Float32(0.0)
+        var osq = Float32(0.0)
+        for d in range(len(demos)):
+            ref pg = demos[d].output_grid
+            for i in range(pg.rows * pg.cols):
+                var o = pg.data[i]
+                osum += o
+                osq = fma(o, o, osq)
+                n += 1
+        var invn = 1.0 / Float32(n)
+        var omean = osum * invn
+        var ovar = osq * invn - omean * omean + 1e-6
+
+        var score = InlineArray[Float32, GRIDCMAP_A](fill=0.0)
+        var smax = Float32(-1.0e30)
+        for cc in range(GRIDCMAP_A):
+            # Accumulate per-count-bin output stats for colour cc, plus cross term.
+            var bn = InlineArray[Float32, GRIDCMAP_B](fill=0.0)
+            var bs = InlineArray[Float32, GRIDCMAP_B](fill=0.0)
+            var bq = InlineArray[Float32, GRIDCMAP_B](fill=0.0)
+            var cnt_sum = Float32(0.0)
+            var cnt_out = Float32(0.0)  # sum count*out (for correlation)
+            var cnt_sq = Float32(0.0)
+            for d in range(len(demos)):
+                ref pair = demos[d]
+                var rows = pair.input_grid.rows
+                var cols = pair.input_grid.cols
+                for r in range(rows):
+                    for c in range(cols):
+                        var hist = InlineArray[Float32, GRIDCMAP_A](fill=0.0)
+                        GridCountMapSelfModMemory._hist(
+                            pair.input_grid.data, rows, cols, r, c, hist
+                        )
+                        var k = Int(hist[cc])
+                        if k >= GRIDCMAP_B:
+                            k = GRIDCMAP_B - 1
+                        var o = pair.output_grid.data[r * cols + c]
+                        bn[k] += 1.0
+                        bs[k] += o
+                        bq[k] = fma(o, o, bq[k])
+                        var kf = hist[cc]
+                        cnt_sum += kf
+                        cnt_out = fma(kf, o, cnt_out)
+                        cnt_sq = fma(kf, kf, cnt_sq)
+            # Feature 1: variance reduction (within-bin) -> functional dependence.
+            var within = Float32(0.0)
+            for j in range(GRIDCMAP_B):
+                if bn[j] > 0.5:
+                    var m = bs[j] / bn[j]
+                    within += bq[j] - bn[j] * m * m
+            within = within * invn
+            var reduction = (ovar - within) / ovar  # in ~[0,1]
+            # Feature 2: |linear correlation| of count_cc with output.
+            var cmean = cnt_sum * invn
+            var cvar = cnt_sq * invn - cmean * cmean + 1e-6
+            var cov = cnt_out * invn - cmean * omean
+            var corr = cov / sqrt(cvar * ovar)
+            if corr < 0.0:
+                corr = -corr
+            # Feature 3: mean count (scale ~ [0,1]).
+            var meanc = cmean / Float32(GRIDCMAP_NBRS)
+            var sc = slow[GRIDCMAP_BSCORE_OFF]
+            sc = fma(slow[GRIDCMAP_W_OFF + 0], reduction, sc)
+            sc = fma(slow[GRIDCMAP_W_OFF + 1], corr, sc)
+            sc = fma(slow[GRIDCMAP_W_OFF + 2], meanc, sc)
+            score[cc] = sc
+            if sc > smax:
+                smax = sc
+        # a = softmax(tau * score)
+        var tau = slow[GRIDCMAP_TAU_OFF]
+        var ssum = Float32(0.0)
+        for cc in range(GRIDCMAP_A):
+            var e = exp(tau * (score[cc] - smax))
+            state[cc] = e
+            ssum += e
+        var invs = 1.0 / (ssum + 1e-9)
+        for cc in range(GRIDCMAP_A):
+            state[cc] = state[cc] * invs
+
+    @staticmethod
+    def adapt(
+        slow: UnsafePointer[Float32, MutAnyOrigin],
+        demos: List[ArcTaskPair],
+        state: UnsafePointer[Float32, MutAnyOrigin],
+    ):
+        # 1. Meta-learned scoring picks the predicate colour (soft), -> state[0..A-1].
+        GridCountMapSelfModMemory._select(slow, demos, state)
+        # 2. Init the value table spread over the demo output range (distinct bins).
+        var vmin = demos[0].output_grid.data[0]
+        var vmax = vmin
+        for d in range(len(demos)):
+            ref pg = demos[d].output_grid
+            for i in range(pg.rows * pg.cols):
+                var v = pg.data[i]
+                if v < vmin:
+                    vmin = v
+                if v > vmax:
+                    vmax = v
+        for j in range(GRIDCMAP_B):
+            var f = Float32(j) / Float32(GRIDCMAP_B - 1)
+            state[GRIDCMAP_V_OFF + j] = vmin + (vmax - vmin) * f
+        # 3. Delta-write the value table keyed by the soft count-bin.
+        var eta_v = _sigmoid(slow[GRIDCMAP_EV_OFF])
+        for _epoch in range(GRIDCMAP_EPOCHS):
+            for d in range(len(demos)):
+                ref pair = demos[d]
+                var rows = pair.input_grid.rows
+                var cols = pair.input_grid.cols
+                for r in range(rows):
+                    for c in range(cols):
+                        var hist = InlineArray[Float32, GRIDCMAP_A](fill=0.0)
+                        GridCountMapSelfModMemory._hist(
+                            pair.input_grid.data, rows, cols, r, c, hist
+                        )
+                        var z = Float32(0.0)
+                        for cc in range(GRIDCMAP_A):
+                            z = fma(state[cc], hist[cc], z)
+                        var phi = InlineArray[Float32, GRIDCMAP_B](fill=0.0)
+                        GridCountMapSelfModMemory._bins(slow, z, phi)
+                        var pred = Float32(0.0)
+                        for j in range(GRIDCMAP_B):
+                            pred = fma(phi[j], state[GRIDCMAP_V_OFF + j], pred)
+                        var e = pair.output_grid.data[r * cols + c] - pred
+                        for j in range(GRIDCMAP_B):
+                            state[GRIDCMAP_V_OFF + j] = fma(
+                                eta_v * e, phi[j], state[GRIDCMAP_V_OFF + j]
+                            )
+
+    @staticmethod
+    def apply(
+        slow: UnsafePointer[Float32, MutAnyOrigin],
+        state: UnsafePointer[Float32, MutAnyOrigin],
+        inp: ArcGrid,
+        dst: UnsafePointer[Float32, MutAnyOrigin],
+    ):
+        var rows = inp.rows
+        var cols = inp.cols
+        for r in range(rows):
+            for c in range(cols):
+                var hist = InlineArray[Float32, GRIDCMAP_A](fill=0.0)
+                GridCountMapSelfModMemory._hist(
+                    inp.data, rows, cols, r, c, hist
+                )
+                var z = Float32(0.0)
+                for cc in range(GRIDCMAP_A):
+                    z = fma(state[cc], hist[cc], z)
+                var phi = InlineArray[Float32, GRIDCMAP_B](fill=0.0)
+                GridCountMapSelfModMemory._bins(slow, z, phi)
+                var pred = Float32(0.0)
+                for j in range(GRIDCMAP_B):
+                    pred = fma(phi[j], state[GRIDCMAP_V_OFF + j], pred)
+                dst[r * cols + c] = pred
