@@ -18,7 +18,7 @@ The foundational learning path now works (milestones M1–M4 done): the memoriza
 - **Never hand the engine a symbolic DSL.** Geometric/color transforms (flip/transpose/recolor) must *emerge* as fitted operator parameters; they live only in the offline `synth_tasks.py` generator as ground truth to rediscover. The north star is fully emergent (a general parametric memory); structured priors are removable "training wheels".
 - **Metric = held-out generalization** (fit on a task's train pairs, score the unseen test pair — uncheatable by memorization), not fitting a known target. The old `benchmark.mojo` memorization harness has been removed; a held-out generalization driver (`src/arc_solve.mojo`) lands at M7.
 
-Phase 2 then strips the structural priors toward an emergent self-modifying memory and lifts the grid/task abstraction to a domain interface so the same ES / two-timescale core serves other reasoning problems. (Full milestone plan: `~/.claude/plans/let-s-create-a-roadmap-ticklish-adleman.md`, user-local.)
+Phase 2 then strips the structural priors toward an emergent self-modifying memory and lifts the grid/task abstraction to a domain interface so the same ES / two-timescale core serves other reasoning problems. (Full roadmap — status, next steps, and the working discipline — lives in **`docs/ROADMAP.md`**, the canonical project direction. Per-session Claude Code plan files are ephemeral and not authoritative.)
 
 The theory behind the architecture (the "Nested Learning"/HOPE paper, <https://abehrouz.github.io/files/NL.pdf>) is distilled in **`docs/NL-summary.md`** — read that instead of fetching the 52-page PDF. It ends with a table mapping each paper concept onto Esper's `slow`/`fast` weights, ES optimizer, and CMS direction.
 

@@ -4,9 +4,8 @@ A running, timestamped narrative of progress, discoveries, and blockers — so t
 project has a complete story later. Newest entries at the bottom. Times are local
 (America/Bahia, −03).
 
-Companion docs: the strategy/roadmap lives in the plan file
-(`~/.claude/plans/let-s-create-a-roadmap-ticklish-adleman.md`, user-local); the
-theory is distilled in `docs/NL-summary.md`.
+Companion docs: the canonical roadmap (status + direction) lives in
+`docs/ROADMAP.md`; the theory is distilled in `docs/NL-summary.md`.
 
 ---
 
