@@ -93,6 +93,14 @@ Concise, milestone-level; each links to `docs/JOURNAL.md` for the full narrative
   `out[i]=f(in[i],in[i-1])` it meta-learns its projections **cold** → a fresh *arbitrary* rule solved
   to **held-out ~0.98 in one adapt pass**. Discovery: unit-normalise the key or the delta write
   diverges. (JOURNAL 2026-06-30 23:42 / 2026-07-01 12:25.)
+- **2-D context keys (first ARC-AGI-2 block).** `GridContextSelfModMemory` lifts the self-write to a 2-D
+  toroidal grid neighbourhood: the key is `concat(E[center]⊗E[up], E[center]⊗E[left])` (unit-normalised),
+  η/α self-generated, a gated delta write over a few epochs. On the additive local rule
+  `out[r,c]=h1(center,up)+h2(center,left)` — genuinely 2-D (per-cell/1-D memories can't express it) — it
+  meta-learns its neighbourhood projections **cold** → a fresh rule solved to **held-out ~0.985 in one
+  adapt pass** (generic seed 0.11). Reuses the meta-fit with zero core change. Expressible class =
+  *additive* center↔neighbour rules (disjunctive/count/mod-wrap need a nonlinear read — later).
+  (JOURNAL 2026-07-01 14:44.)
 
 ## Next — the path to full ARC-AGI 2
 
@@ -100,11 +108,12 @@ Each is its own block, held to the **cold-fit bar** (a scaffolded pass is a nega
 emergent memories are each measured on the subset they express; the north-star metric is the raw
 held-out ARC-AGI-2 number.
 
-1. **2-D context keys.** Lift the self-write's context from a 1-D neighbour to grid neighbourhoods —
-   local pattern → colour rules, a large slice of ARC.
-2. **Compose content + geometry.** Combine the `DeltaSelfModMemory` content self-write with the B3
-   `AttnGatherMemory` global-read (geometry + content) — the honest route to finally **retiring
-   `OperatorMemory`** (B3's open thread).
+1. **Richer neighbourhoods / nonlinear read.** Grow the 2-D context beyond the additive 2-neighbour
+   class — full von Neumann / Moore neighbourhoods, and a nonlinear read for disjunctive/count rules
+   ("any neighbour is X", majority) that a linear `S·k` can't express.
+2. **Compose content + geometry.** Combine the grid content self-write (`GridContextSelfModMemory` /
+   `DeltaSelfModMemory`) with the B3 `AttnGatherMemory` global-read (geometry + content) — the honest
+   route to finally **retiring `OperatorMemory`** (B3's open thread).
 3. **Shape change.** Handle outputs whose dims ≠ inputs (currently scored 0 by the same-shape guard) —
    a Domain / output-size generalization.
 4. **Multi-block CMS chain** (NL §7). Stack memories at multiple frequencies for multi-step /

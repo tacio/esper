@@ -544,3 +544,32 @@ Additive — `hope.mojo`/`arc_io.mojo` and the existing `Memory`/ES path untouch
 **Next (a later phase, per plan): the path to full ARC-AGI 2** — 2-D context keys (grid neighbourhoods),
 composing this content self-write with the B3 attention geometry (the honest route to retiring
 `OperatorMemory`), shape-change, and a multi-block CMS chain.
+
+**14:44 — 2-D CONTEXT KEYS DONE (first ARC-AGI-2 block): the self-modifying memory keys on a grid
+NEIGHBOURHOOD and learns a local pattern→colour rule in-context.** Lifted the B4 fuller block from a
+1-D sequence neighbour to a 2-D toroidal grid neighbourhood. Proving task (user's chosen class):
+`out[r,c] = h1(center, up) + h2(center, left)` — the ADDITIVE center↔neighbour class, genuinely 2-D (a
+per-cell MLP, a colour-LUT, and the 1-D sequence memory all provably fail it; it needs *both*
+neighbours). Additive because the read `S·k` is linear — arbitrary neighbourhood rules are
+combinatorial (A^9) and out of scope (a nonlinear read is a later block).
+
+- **`GridContextSelfModMemory`** (`SelfModMemory`, `Dom = GridDomain`): per toroidal cell the key is
+  `concat(E[center]⊗E[up], E[center]⊗E[left])` (Dk = 2·De² = 50), unit-normalised (the B4 stability
+  lesson); η/α self-generated; the gated delta write runs a few EPOCHS over the demo cells (the
+  additive read is a 2-way decomposition SGD solves — one "adapt" is multi-epoch, still a forward pass,
+  not ES). ~127 slow params. Reuses `meta_fit_selfmod[GridContextSelfModMemory]` with **zero core
+  change** (the meta-fit was already `Domain`-generic — a grid self-mod memory just plugs in).
+- **Checkpoint A** (`GridContextSelfWrite`, fixed one-hot keys, no ES): the gated delta write solves the
+  additive decomposition from the demo cells (eta 0.2, 20 epochs) → held-out **1.0**, mechanism +
+  convergence validated.
+- **Checkpoint B** (meta-learned): generic seed **0.114 → 0.985** (avg of 8 fresh unseen rules) after a
+  cold meta-fit (4×4 grids, 8 tasks, 2500 iters), each fresh rule solved by a single adapt pass; the
+  before/after gap is asserted.
+
+Sized the meta-fit against the 10-minute budget before running (a short 500-iter probe = 27s → the
+full 2500-iter fit ≈ 2m51s, comfortably under). Honest scope: like the 1-D fuller block this lands
+near the bar (~0.98) — a genuine cold pass on a harder task. Cost: heaviest test yet (~3.2 min; suite
+now ~5.4 min). Additive — `esper_evolution.mojo`/`hope.mojo`/`arc_io.mojo` and the whole existing
+`Memory`/ES/self-mod core untouched; full suite green, all prior numbers unchanged. **Next: compose
+this content self-write with the B3 attention geometry (retire `OperatorMemory`), richer neighbourhoods
+/ nonlinear read, shape-change, CMS chain.**

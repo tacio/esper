@@ -885,3 +885,240 @@ struct DeltaSelfModMemory(SelfModMemory):
             for j in range(DELTA_DK):
                 pred = fma(state[j], k[j], pred)
             dst[i] = pred
+
+
+# ==========================================
+# 2-D context keys (Phase B / first ARC-AGI-2 block): grid-neighbourhood self-write
+# ==========================================
+# Lift the B4 fuller block from a 1-D sequence neighbour to a 2-D GRID neighbourhood,
+# so the memory can learn local pattern->colour rules in-context. Per cell (r,c) on a
+# TOROIDAL grid (wrap avoids edge-coverage gaps), the context is (center, up, left) =
+# (in[r,c], in[r-1,c], in[r,c-1]). Target class (bounded, matches the linear read):
+# ADDITIVE center<->neighbour rules  out[r,c] = h1(center,up) + h2(center,left).
+# Disjunctive/count/mod-wrap rules need a nonlinear read — out of scope here.
+#
+# CHECKPOINT A (this struct) validates the grid 2-D self-write MECHANISM with FIXED
+# one-hot context keys (Dk = 2*A^2, two active entries per cell), eta fixed, alpha=0.
+# The read S·k = S[ctx_up] + S[ctx_left] is an ADDITIVE decomposition the gated delta
+# rule solves by SGD, so `adapt` runs a few EPOCHS over the demo cells (the memory's
+# own optimizer running longer — NOT an ES search). Checkpoint B replaces the one-hot
+# key with learned embeddings + self-generated gates.
+comptime GRIDCTX_A = 5
+comptime GRIDCTX_ONEHOT_STATE = 2 * GRIDCTX_A * GRIDCTX_A
+comptime GRIDCTX_EPOCHS = 20
+comptime GRIDCTX_ETA_A = Float32(0.2)
+
+
+def _gridctx_sym(v: Float32) -> Int:
+    var c = Int(round(v))
+    if c < 0:
+        return 0
+    elif c > GRIDCTX_A - 1:
+        return GRIDCTX_A - 1
+    return c
+
+
+struct GridContextSelfWrite:
+    @staticmethod
+    def state_dim() -> Int:
+        return GRIDCTX_ONEHOT_STATE
+
+    @staticmethod
+    def adapt(
+        demos: List[ArcTaskPair],
+        state: UnsafePointer[Float32, MutAnyOrigin],
+    ):
+        for i in range(GRIDCTX_ONEHOT_STATE):
+            state[i] = 0.0
+        comptime block = GRIDCTX_A * GRIDCTX_A
+        for _epoch in range(GRIDCTX_EPOCHS):
+            for d in range(len(demos)):
+                ref pair = demos[d]
+                var rows = pair.input_grid.rows
+                var cols = pair.input_grid.cols
+                for r in range(rows):
+                    for c in range(cols):
+                        var center = _gridctx_sym(
+                            pair.input_grid.data[r * cols + c]
+                        )
+                        var up = _gridctx_sym(
+                            pair.input_grid.data[
+                                ((r - 1 + rows) % rows) * cols + c
+                            ]
+                        )
+                        var left = _gridctx_sym(
+                            pair.input_grid.data[
+                                r * cols + ((c - 1 + cols) % cols)
+                            ]
+                        )
+                        var ctx1 = center * GRIDCTX_A + up
+                        var ctx2 = block + center * GRIDCTX_A + left
+                        var v = pair.output_grid.data[r * cols + c]
+                        # Gated delta rule, one-hot key (two active entries), alpha=0.
+                        var e = v - (state[ctx1] + state[ctx2])
+                        state[ctx1] += GRIDCTX_ETA_A * e
+                        state[ctx2] += GRIDCTX_ETA_A * e
+
+    @staticmethod
+    def apply(
+        state: UnsafePointer[Float32, MutAnyOrigin],
+        inp: ArcGrid,
+        dst: UnsafePointer[Float32, MutAnyOrigin],
+    ):
+        comptime block = GRIDCTX_A * GRIDCTX_A
+        var rows = inp.rows
+        var cols = inp.cols
+        for r in range(rows):
+            for c in range(cols):
+                var center = _gridctx_sym(inp.data[r * cols + c])
+                var up = _gridctx_sym(
+                    inp.data[((r - 1 + rows) % rows) * cols + c]
+                )
+                var left = _gridctx_sym(
+                    inp.data[r * cols + ((c - 1 + cols) % cols)]
+                )
+                var ctx1 = center * GRIDCTX_A + up
+                var ctx2 = block + center * GRIDCTX_A + left
+                dst[r * cols + c] = state[ctx1] + state[ctx2]
+
+
+# CHECKPOINT B — the emergent grid-context block. The key is the concat of two
+# outer products of learned per-colour embeddings — E[center]⊗E[up] and
+# E[center]⊗E[left] — unit-normalised (the B4 stability lesson); η/α are
+# self-generated per cell. The gated delta write runs a few epochs over the demo
+# cells (the additive read S·k = h1(center,up)+h2(center,left) is a 2-way
+# decomposition SGD solves). The SLOW params (embeddings + gate projections) are
+# meta-learned ONCE across a family of local rules; a fresh rule then adapts in a
+# single (multi-epoch) forward pass. Reuses meta_fit_selfmod[GridContextSelfModMemory].
+comptime GRIDCTX_DE = 5
+comptime GRIDCTX_DK = 2 * GRIDCTX_DE * GRIDCTX_DE
+comptime GRIDCTX_META_EPOCHS = 6
+comptime GRIDCTX_E_OFF = 0
+comptime GRIDCTX_WETA_OFF = GRIDCTX_A * GRIDCTX_DE
+comptime GRIDCTX_BETA_OFF = GRIDCTX_WETA_OFF + GRIDCTX_DK
+comptime GRIDCTX_WALPHA_OFF = GRIDCTX_BETA_OFF + 1
+comptime GRIDCTX_BALPHA_OFF = GRIDCTX_WALPHA_OFF + GRIDCTX_DK
+comptime GRIDCTX_SLOW_DIM = GRIDCTX_BALPHA_OFF + 1
+
+
+struct GridContextSelfModMemory(SelfModMemory):
+    comptime Dom = GridDomain
+
+    @staticmethod
+    def slow_dim() -> Int:
+        return GRIDCTX_SLOW_DIM
+
+    @staticmethod
+    def state_dim() -> Int:
+        return GRIDCTX_DK
+
+    @staticmethod
+    def seed_slow(slow: UnsafePointer[Float32, MutAnyOrigin]):
+        for c in range(GRIDCTX_A):
+            for d in range(GRIDCTX_DE):
+                slow[GRIDCTX_E_OFF + c * GRIDCTX_DE + d] = (
+                    sin(Float32(c + 1) * Float32(d + 1) * 0.7) * 0.5
+                )
+        for j in range(GRIDCTX_DK):
+            slow[GRIDCTX_WETA_OFF + j] = 0.1 * sin(Float32(j + 1) * 1.3)
+            slow[GRIDCTX_WALPHA_OFF + j] = 0.1 * sin(Float32(j + 1) * 2.1)
+        slow[GRIDCTX_BETA_OFF] = 0.0
+        slow[GRIDCTX_BALPHA_OFF] = -2.0
+
+    @staticmethod
+    def fill_scale(scale: UnsafePointer[Float32, MutAnyOrigin], n: Int):
+        for i in range(n):
+            scale[i] = 1.0
+
+    # Concat of two outer-product context keys (center⊗up | center⊗left), unit-norm.
+    @staticmethod
+    def _key(
+        slow: UnsafePointer[Float32, MutAnyOrigin],
+        center: Int,
+        up: Int,
+        left: Int,
+        mut k: InlineArray[Float32, GRIDCTX_DK],
+    ):
+        comptime block = GRIDCTX_DE * GRIDCTX_DE
+        var sumsq = Float32(0.0)
+        for a in range(GRIDCTX_DE):
+            var ec = slow[GRIDCTX_E_OFF + center * GRIDCTX_DE + a]
+            for b in range(GRIDCTX_DE):
+                var ku = ec * slow[GRIDCTX_E_OFF + up * GRIDCTX_DE + b]
+                var kl = ec * slow[GRIDCTX_E_OFF + left * GRIDCTX_DE + b]
+                k[a * GRIDCTX_DE + b] = ku
+                k[block + a * GRIDCTX_DE + b] = kl
+                sumsq = fma(ku, ku, fma(kl, kl, sumsq))
+        var inv = 1.0 / (sqrt(sumsq) + 1e-6)
+        for j in range(GRIDCTX_DK):
+            k[j] = k[j] * inv
+
+    @staticmethod
+    def adapt(
+        slow: UnsafePointer[Float32, MutAnyOrigin],
+        demos: List[ArcTaskPair],
+        state: UnsafePointer[Float32, MutAnyOrigin],
+    ):
+        for j in range(GRIDCTX_DK):
+            state[j] = 0.0
+        for _epoch in range(GRIDCTX_META_EPOCHS):
+            for d in range(len(demos)):
+                ref pair = demos[d]
+                var rows = pair.input_grid.rows
+                var cols = pair.input_grid.cols
+                for r in range(rows):
+                    for c in range(cols):
+                        var center = _gridctx_sym(
+                            pair.input_grid.data[r * cols + c]
+                        )
+                        var up = _gridctx_sym(
+                            pair.input_grid.data[
+                                ((r - 1 + rows) % rows) * cols + c
+                            ]
+                        )
+                        var left = _gridctx_sym(
+                            pair.input_grid.data[
+                                r * cols + ((c - 1 + cols) % cols)
+                            ]
+                        )
+                        var k = InlineArray[Float32, GRIDCTX_DK](fill=0.0)
+                        GridContextSelfModMemory._key(slow, center, up, left, k)
+                        var pred = Float32(0.0)
+                        var geta = slow[GRIDCTX_BETA_OFF]
+                        var galpha = slow[GRIDCTX_BALPHA_OFF]
+                        for j in range(GRIDCTX_DK):
+                            pred = fma(state[j], k[j], pred)
+                            geta = fma(slow[GRIDCTX_WETA_OFF + j], k[j], geta)
+                            galpha = fma(
+                                slow[GRIDCTX_WALPHA_OFF + j], k[j], galpha
+                            )
+                        var eta = _sigmoid(geta)
+                        var alpha = _sigmoid(galpha)
+                        var e = pair.output_grid.data[r * cols + c] - pred
+                        for j in range(GRIDCTX_DK):
+                            state[j] = (1.0 - alpha) * state[j] + eta * e * k[j]
+
+    @staticmethod
+    def apply(
+        slow: UnsafePointer[Float32, MutAnyOrigin],
+        state: UnsafePointer[Float32, MutAnyOrigin],
+        inp: ArcGrid,
+        dst: UnsafePointer[Float32, MutAnyOrigin],
+    ):
+        var rows = inp.rows
+        var cols = inp.cols
+        for r in range(rows):
+            for c in range(cols):
+                var center = _gridctx_sym(inp.data[r * cols + c])
+                var up = _gridctx_sym(
+                    inp.data[((r - 1 + rows) % rows) * cols + c]
+                )
+                var left = _gridctx_sym(
+                    inp.data[r * cols + ((c - 1 + cols) % cols)]
+                )
+                var k = InlineArray[Float32, GRIDCTX_DK](fill=0.0)
+                GridContextSelfModMemory._key(slow, center, up, left, k)
+                var pred = Float32(0.0)
+                for j in range(GRIDCTX_DK):
+                    pred = fma(state[j], k[j], pred)
+                dst[r * cols + c] = pred
