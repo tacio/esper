@@ -736,3 +736,47 @@ Roadmap updated accordingly: Next #1 rerouted from "one composed memory" to **en
 "Beyond ARC" horizon item added for the emergent pipeline under the identifiability conditions; two new
 working principles ("sharpness belongs to the solver, not the module"; "at a real wall, pause and
 survey"). Block 5's retirement of `OperatorMemory` is deferred to the energy-composition block.
+
+**12:56 — BLOCK 5 DONE (the energy-composition reroute works): `OperatorMemory` retired emergently by
+`GeomColorComposedMemory` — the whole subset 1.0 cold, PLUS a composed flip∘recolor no single memory
+expresses.** The design straight from the research pass: two modules, each fit on a signal INVARIANT to
+the other's factor, composed additively, each keeping its own sharpness.
+
+The invariance is the whole trick. **Colour:** for position-permutation geometry, per-demo colour COUNTS
+are position-free (`cnt_out[V(c)] = cnt_in[c]` whatever the permutation), so the colour table V is
+**written closed-form from count signatures** — match each input colour's across-demo count vector
+against every output colour's, sharp softmax (τ=32), done. Probe: V exact on recolor **including the
+9→0 wrap**, and exactly identity on geometry tasks — with zero geometry knowledge. A write rule in the
+self-mod family (one forward pass, never ES-searched). **Geometry:** the proven AttnGather ES — but run
+on demos whose inputs are PRE-MAPPED through V (**colour-then-gather**, the same decoupling hope.mojo
+chose in Phase A): V is cellwise, the gather positional, so they commute, and with V applied first the
+7-param search runs on the exact B3 fitness landscape (integer values, no colour-table cliff).
+
+Two probe-driven design corrections worth recording:
+1. **Fitting geometry THROUGH a soft colour read fails** (probe v1: composed task 0.10 vs 1.0 with the
+   pre-map): interp(V, gather) with V's 9→0 cliff turns colour blends near 9 into wild values and the
+   ES collapses into a soft-blur optimum. The pre-map is load-bearing, not a convenience. (This also
+   closes the block-5 negative-result loop with a constructive fix: the soft/sharp conflict is
+   dissolved by moving the colour read out of the geometry fitness entirely.)
+2. **Per-task RNG seeding in the proof test** (the arc_solve protocol): the first full-test run had
+   Ckpt C fail at 0.21 purely from its RNG stream position after five prior fits — a fresh-seed probe
+   showed **12/12 arbitrary seeds solve the composed task at 1.0** (both eval orders; seed 9 even found
+   the negative-beta flip variant, β=raw² making the sign free). Re-seeding per task makes each fit
+   order-invariant and attributable; not seed-shopping, and the honest failure-rate evidence is journaled.
+
+Implementation is almost embarrassingly additive: `GeomColorComposedMemory` (17 = 7 attn | 10 V;
+`fill_scale` zeroes the V group — the perturbation AND update are scale-multiplied, so even a generic ES
+fit can never move V) + `fit_geomcolor` = write_color → pre-map the demo list once (per task, not per
+iteration — the hot loop stays alloc-free) → the standard `fit_operator[AttnGatherMemory]` on the
+state's first 7 slots. Zero core change; the composed fit IS the proven attention fit on transformed
+data. `apply` = sharp fitted gather + hard V lookup (equal to colour-then-gather at the fitted β≈9,
+probe-verified both orders).
+
+`test_composed_generalization` (full tier): Ckpt A the write recovers the full recolor permutation
+exactly; Ckpt B the retirement bar — {flip_h, flip_v, transpose, recolor} each **held-out 1.0, cold**
+(test_generalization's exact bar); Ckpt C **flip_h∘recolor 1.0 cold** — the composition payoff, a task
+NO existing single memory expresses (and one the structured operator was never even tested on); control:
+geometry-only ablation on recolor fails at 0.23 (the colour module is load-bearing). `OperatorMemory` is
+now DORMANT (kept solely as the arc_solve/M8 baseline; removal is a later cleanup). This is the
+first working instance of the composition pattern the research pass predicted — the fixed 2-stage
+pipeline is v1; making the pipeline itself emergently learned is the horizon item (Schug conditions).

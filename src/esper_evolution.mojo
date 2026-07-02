@@ -9,7 +9,14 @@ from std.algorithm import parallelize
 # Dom is a Domain (the Example type + metrics). It consumes generic ExamplePair/
 # Task containers so the same fitness loop serves any domain. The concrete
 # OperatorMemory + ArcGrid are used only by the grid convenience wrapper below.
-from memory import Memory, OperatorMemory, SelfModMemory
+from memory import (
+    Memory,
+    OperatorMemory,
+    SelfModMemory,
+    AttnGatherMemory,
+    GeomColorComposedMemory,
+    ATTN_DIM,
+)
 from hope import ExamplePair, Task, ArcTaskPair, HopeNode, ArcGrid
 
 # Default in-context fit schedule, shared by forward_with_learning and the solve
@@ -605,3 +612,74 @@ def meta_fit_selfmod[
     coeff.free()
     grad.free()
     scale.free()
+
+
+# ==========================================
+# Composed geometry × colour fit (ARC-AGI-2 block 5)
+# ==========================================
+# The per-task in-context fit for GeomColorComposedMemory — the energy-
+# composition pipeline (see the struct comment in memory.mojo): each module is
+# fit on a signal INVARIANT to the other's factor, then composed.
+#
+#   1. COLOUR: write the table V closed-form from the demos' count signatures
+#      (geometry-invariant — one forward pass, no search).
+#   2. PRE-MAP: rebuild the demo list with inputs mapped through V
+#      (colour-then-gather; V is cellwise and the gather positional, so they
+#      commute — this puts the geometry search on the exact, proven B3 fitness
+#      landscape with no colour-table cliff).
+#   3. GEOMETRY: the standard annealed fit_operator[AttnGatherMemory] over the
+#      state's 7 attention slots (the state layout puts them first, so `state`
+#      itself is the attention weight vector), anchored to the identity seed.
+#
+# The pre-map list is built once per task fit (not per ES iteration), so the
+# hot loop stays allocation-free. `n_fit` is passed to the workspace so the
+# parallel ES stripes are sized to the actual sample count.
+def fit_geomcolor(
+    state: UnsafePointer[Float32, MutAnyOrigin],
+    demos: List[ArcTaskPair],
+    grid_capacity: Int,
+    n_fit: Int,
+    alpha0: Float32,
+    alpha1: Float32,
+    sigma0: Float32,
+    sigma1: Float32,
+    iters: Int,
+    reg_lambda: Float32,
+) raises:
+    # 1. Colour self-write (fills state[GEOMCOLOR_V_OFF:]).
+    GeomColorComposedMemory.write_color(state, demos)
+
+    # 2. Pre-map demo inputs through the written V.
+    var mapped = List[ArcTaskPair]()
+    for d in range(len(demos)):
+        var min_g = ArcGrid(demos[d].input_grid.rows, demos[d].input_grid.cols)
+        for k in range(min_g.rows * min_g.cols):
+            min_g.data[k] = GeomColorComposedMemory._v_lookup(
+                state, demos[d].input_grid.data[k]
+            )
+        var mout = ArcGrid(demos[d].output_grid.rows, demos[d].output_grid.cols)
+        memcpy(
+            dest=mout.data,
+            src=demos[d].output_grid.data,
+            count=mout.rows * mout.cols,
+        )
+        mapped.append(ArcTaskPair(min_g^, mout^))
+
+    # 3. Proven attention-gather fit on the geometry slots, identity anchor.
+    var slow = alloc[Float32](ATTN_DIM)
+    AttnGatherMemory.seed(slow)
+    var ws = ESWorkspace[AttnGatherMemory](grid_capacity, n_fit)
+    fit_operator[AttnGatherMemory](
+        state,
+        ws,
+        slow,
+        mapped,
+        n_fit,
+        alpha0,
+        alpha1,
+        sigma0,
+        sigma1,
+        iters,
+        reg_lambda,
+    )
+    slow.free()

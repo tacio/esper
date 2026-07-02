@@ -147,8 +147,21 @@ Concise, milestone-level; each links to `docs/JOURNAL.md` for the full narrative
   and a free colour table **absorbs** geometry error at wrong geometries (flattening the ES contrast).
   ~7 mechanism iterations, each trading transpose against recolor; the parts are each proven separately
   (AttnGather: all geometry 1.0; recolor memories: 1.0). Root cause is general, so development paused for
-  a literature pass → the reroute is **energy-based composition** (see Next #1 and `RESEARCH-NOTES.md`
-  2026-07-02). (JOURNAL 2026-07-02.)
+  a literature pass → the reroute is **energy-based composition** (see `RESEARCH-NOTES.md` 2026-07-02).
+  (JOURNAL 2026-07-02.)
+- **OperatorMemory RETIRED emergently (ARC-AGI-2 block 5 done).** `GeomColorComposedMemory` lands the
+  energy-composition reroute: two modules, each fit on a signal **invariant** to the other's factor —
+  the colour table V **written closed-form from count signatures** (position-free for permutation
+  geometry, so it needs no geometry knowledge; exact incl. the 9→0 wrap) and the proven AttnGather ES run
+  on demos **pre-mapped through V** (colour-then-gather: V is cellwise, the gather positional, so they
+  commute and the 7-param search runs on the exact B3 landscape). Retirement proof
+  (`test_composed_generalization`): the whole operator subset {flip_h, flip_v, transpose, recolor}
+  **held-out 1.0, per-task cold** + a composed **flip_h∘recolor 1.0 cold** (a task no single memory
+  expresses); geometry-only ablation fails recolor (0.23 — the colour module is load-bearing). Probed
+  negative branch: fitting geometry THROUGH a soft colour read fails (0.10) — the pre-map is
+  load-bearing. `OperatorMemory` is **dormant** (kept only as the arc_solve/M8 baseline). First working
+  instance of the composition pattern; the pipeline itself becoming learned is the horizon item.
+  (JOURNAL 2026-07-02 12:56.)
 
 ## Next — the path to full ARC-AGI 2
 
@@ -156,23 +169,18 @@ Each is its own block, held to the **cold-fit bar** (a scaffolded pass is a nega
 emergent memories are each measured on the subset they express; the north-star metric is the raw
 held-out ARC-AGI-2 number.
 
-1. **Compose content + geometry — via energy composition.** The single-jointly-fit-memory route is a
-   recorded negative result (block 5: the soft/sharp coupling). The reroute (`RESEARCH-NOTES.md`
-   2026-07-02 #1): recast memories as **energies** `E(out | in, demos)`, train geometry- and
-   colour-energies **separately** (both already proven as forward memories), compose at inference by
-   **summation** `E = E_geom + E_colour`, and solve by minimizing the summed energy over the output
-   with an **annealed** schedule — the soft→hard schedule lives on the solver, not inside any module,
-   so each energy keeps its own sharpness. Additive and selector-free (a summed energy is a
-   conjunction of constraints, not a DSL over memories). This is the honest route to finally
-   **retiring `OperatorMemory`** (B3's open thread), and doubles as the composition mechanism for
-   the pipeline horizon below.
+1. **Compose content + geometry.** Extend the block-5 composition pattern to the content self-writes
+   (`GridNbhdSelfModMemory` / `GridCountMapSelfModMemory` / `DeltaSelfModMemory`) — geometry × content
+   rules, the next capability the corpus needs. The proven recipe: fit each module on a signal invariant
+   to the other's factor; the full annealed summed-energy solver over outputs (RESEARCH-NOTES #1)
+   becomes necessary once modules give only PARTIAL constraints (no closed-form composition).
 2. **Shape change.** Handle outputs whose dims ≠ inputs (currently scored 0 by the same-shape guard) —
    a Domain / output-size generalization.
 3. **Multi-block CMS chain** (NL §7). Stack memories at multiple frequencies for multi-step /
    object-level reasoning.
-4. **Real ARC-AGI-2 re-measure.** With the count/neighbourhood family in hand, re-run the honest held-out
-   eval (`arc_solve --report`) to see whether the emergent memories move the raw corpus number off the
-   M8 operator ceiling (5/1000).
+4. **Real ARC-AGI-2 re-measure.** With the count/neighbourhood family and the composed memory in hand,
+   re-run the honest held-out eval (`arc_solve --report`) to see whether the emergent memories move the
+   raw corpus number off the M8 operator ceiling (5/1000).
 
 ## Beyond ARC-AGI 2
 
