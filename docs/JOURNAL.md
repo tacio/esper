@@ -689,3 +689,50 @@ block-3 2-level memory on the same ≥3-colour map gets **0.41** (it can emit on
 is load-bearing). Ckpt B (cold meta-fit): before **0.319** → after **1.0** (fresh unseen maps, one adapt
 pass). `slow_dim=12` so the fit is fast (~56s test). Additive new struct (block 3 stays green); zero core
 change. Scope: `A=5`, Moore-8, observable counts ~0..4; rare high counts are out-of-distribution.
+
+## 2026-07-02
+
+**12:30 — BLOCK 5 HIT A REAL WALL (single composed geometry+colour memory): the soft/sharp coupling.
+Recorded as a NEGATIVE RESULT; development paused for a literature pass.** The block-5 plan was the
+anti-stone-soup design: ES searches ONLY the 7 AttnGather geometry params, the colour table is solved
+CLOSED-FORM from the demos per candidate (a soft-binned value table over the gathered colour) — never a
+joint 17-D search. It still failed, and the failure is instructive enough to record in full.
+
+~7 mechanism iterations, every one trading transpose against recolor (flip_h/flip_v were 1.0 throughout):
+soft colour read at test → recolor 0.89 (soft blending mixes adjacent colours that map far apart in a
+permutation); hard lookup fixed recolor to 1.0 but transpose collapsed (0.11–0.25) — root cause **colour
+absorption**: a free colour table explains away geometry error at WRONG geometries, flattening the
+geometry ES's fitness contrast (control: colour forced ≡ identity → transpose 1.0, M≈[[0,1],[1,0]] — the
+ES *can* find it, the colour table was hiding it). Every containment then broke the other side: a
+constant identity-ridge → transpose 1.0 / recolor 0.84 (breaks map entries far from identity, e.g. the
+9→0 wrap); a variance-gated shrink → recolor 0.16 (the soft gather blurs recolor's bins → spurious
+variance → over-shrink); hard-bin solve + gate → 0.25; decoupling sharpness by ROLE (sharp gather for
+solve/test, learned soft beta for the fitness gradient) → recolor 0.13 (soft-fitness/hard-test mismatch —
+the fitness optimum drifts off identity). The diagnosis is structural, not a tuning matter: **the
+geometry ES needs a SOFT gather (a gradient in M) while colour needs a SHARP gather (clean bins), and
+one temperature + one colour table cannot serve both.** Per the stone-soup discipline I stopped rather
+than stage the fit by hand. The WIP composed code (`ComposedGeomColorMemory`/`fit_composed`) sits
+uncommitted, not wired into the suite, pending the reroute.
+
+**The pause (user call, and the right one): stop building, survey the field** — both for this blocker
+and for the long-term vision (an architecture for neuro-symbolic + continual-learning problems well
+beyond ARC; the blocker's fix should serve that vision, not just this block). Findings recorded in the
+new **`docs/RESEARCH-NOTES.md`** (a durable doc: literature mapped onto Esper's concepts at decision
+points), summarized: (1) **energy-based compositional inference** (Compositional Energy Minimization
+2025; IRED, ICML 2024) dissolves the wall — recast memories as energies `E(out|in,demos)`, train
+geometry/colour energies SEPARATELY, compose at inference by SUMMATION, solve by annealed minimization
+over the output; the soft→hard schedule lives on the SOLVER, so no shared temperature exists to fight
+over, and `+`-composition is selector-free. (2) **Identifiability of modular structure** (Schug et al.,
+ICLR 2024): hypernetwork task-weights = per-task code × shared templates (exactly our Reptile fast/slow
+split) provably recover primitive modules from O(M) combinations — IFF compositional+connected task
+support and NO over-parameterization (excess capacity ⇒ memorize-per-task instead of factoring; a live
+caution for our memory sizes). This is the theory for the user's "pipeline of emergent memories whose
+composition is itself learned". (3) Learned decomposition scheduling (LCC-CMA-ES 2025) — our decouple
+lesson made adaptive; parked. (4) Latent program spaces (LPN 2024) — search a smooth latent that DECODES
+to a valid operator; the reserve pivot if energies stall. Context check (ARC Prize 2025 report): the
+frontier is test-time refinement loops in WEIGHT space, not symbolic space — Esper's core bet is aligned.
+
+Roadmap updated accordingly: Next #1 rerouted from "one composed memory" to **energy composition**; a
+"Beyond ARC" horizon item added for the emergent pipeline under the identifiability conditions; two new
+working principles ("sharpness belongs to the solver, not the module"; "at a real wall, pause and
+survey"). Block 5's retirement of `OperatorMemory` is deferred to the energy-composition block.

@@ -4,8 +4,9 @@ The durable, canonical view of Esper's **direction**: what it is, the discipline
 what's done, what's next, and the horizon beyond. This is the source of truth for *where the
 project is going*. Companion docs: **`docs/JOURNAL.md`** is the timestamped narrative (the *why*
 behind every step — this roadmap links to it for depth), **`docs/NL-summary.md`** distills the
-theory (the "Nested Learning"/HOPE paper), and **`CLAUDE.md`** holds the conventions and hard
-constraints.
+theory (the "Nested Learning"/HOPE paper), **`docs/RESEARCH-NOTES.md`** maps external literature
+onto Esper at decision points (the evidence behind direction changes), and **`CLAUDE.md`** holds
+the conventions and hard constraints.
 
 > Per-session implementation plans (Claude Code plan files) are **ephemeral** and scoped to one
 > session — they are *not* the project roadmap. This file is.
@@ -43,6 +44,12 @@ sessions:
 - **Additive, trait-based growth.** Memories conform to `Memory`/`SelfModMemory` over a `Domain`; each
   is measured on the subset it expresses. There is **no runtime memory-selector** (that would be a DSL
   over memories). New capability is additive — the generic ES/two-timescale core stays untouched.
+- **Sharpness belongs to the solver, not the module.** When composed modules need *different* softness
+  (block 5: geometry wants a soft gather, colour wants sharp bins), no single shared temperature works;
+  compose additively (e.g. summed energies) and put the soft→hard **annealing on the inference loop**.
+- **At a real wall, pause and survey.** When a mechanism fails for a *general* reason (not a tuning
+  reason), stop iterating and check the literature; record the findings in `docs/RESEARCH-NOTES.md`
+  mapped onto Esper's concepts, then reroute the roadmap.
 - **Journal every step** (`docs/JOURNAL.md`) — the *why*, the discoveries, the blockers and fixes.
 
 ## Status — done
@@ -133,6 +140,15 @@ Concise, milestone-level; each links to `docs/JOURNAL.md` for the full narrative
   soft count-bin value table. Ckpt A: arbitrary non-monotone maps **1.0** vs the block-3 2-level memory
   **0.41** on the same ≥3-colour map. Cold meta-fit (w=0 seed → uniform → 0.32): fresh unseen map
   **held-out 1.0 in one adapt pass**. (JOURNAL 2026-07-01 18:30.)
+- **Compose geometry + colour, single memory — NEGATIVE RESULT (ARC-AGI-2 block 5, recorded).** A single
+  ES-fit composed memory (attention gather + colour table, ES on geometry only + closed-form colour) hits
+  an **irreconcilable soft/sharp coupling**: the geometry ES needs a SOFT gather (a gradient in `M`),
+  recolor needs a SHARP gather (clean colour bins); one temperature + one colour table cannot serve both,
+  and a free colour table **absorbs** geometry error at wrong geometries (flattening the ES contrast).
+  ~7 mechanism iterations, each trading transpose against recolor; the parts are each proven separately
+  (AttnGather: all geometry 1.0; recolor memories: 1.0). Root cause is general, so development paused for
+  a literature pass → the reroute is **energy-based composition** (see Next #1 and `RESEARCH-NOTES.md`
+  2026-07-02). (JOURNAL 2026-07-02.)
 
 ## Next — the path to full ARC-AGI 2
 
@@ -140,10 +156,16 @@ Each is its own block, held to the **cold-fit bar** (a scaffolded pass is a nega
 emergent memories are each measured on the subset they express; the north-star metric is the raw
 held-out ARC-AGI-2 number.
 
-1. **Compose content + geometry.** Combine the grid content self-write (`GridContextSelfModMemory` /
-   `GridNbhdSelfModMemory` / `GridCountMapSelfModMemory` / `DeltaSelfModMemory`) with the B3
-   `AttnGatherMemory` global-read (geometry + content) — the honest route to finally **retiring
-   `OperatorMemory`** (B3's open thread).
+1. **Compose content + geometry — via energy composition.** The single-jointly-fit-memory route is a
+   recorded negative result (block 5: the soft/sharp coupling). The reroute (`RESEARCH-NOTES.md`
+   2026-07-02 #1): recast memories as **energies** `E(out | in, demos)`, train geometry- and
+   colour-energies **separately** (both already proven as forward memories), compose at inference by
+   **summation** `E = E_geom + E_colour`, and solve by minimizing the summed energy over the output
+   with an **annealed** schedule — the soft→hard schedule lives on the solver, not inside any module,
+   so each energy keeps its own sharpness. Additive and selector-free (a summed energy is a
+   conjunction of constraints, not a DSL over memories). This is the honest route to finally
+   **retiring `OperatorMemory`** (B3's open thread), and doubles as the composition mechanism for
+   the pipeline horizon below.
 2. **Shape change.** Handle outputs whose dims ≠ inputs (currently scored 0 by the same-shape guard) —
    a Domain / output-size generalization.
 3. **Multi-block CMS chain** (NL §7). Stack memories at multiple frequencies for multi-step /
@@ -152,12 +174,24 @@ held-out ARC-AGI-2 number.
    eval (`arc_solve --report`) to see whether the emergent memories move the raw corpus number off the
    M8 operator ceiling (5/1000).
 
-## Beyond ARC-AGI 2 (TBD)
+## Beyond ARC-AGI 2
 
-The ES / two-timescale / self-modifying core is deliberately **domain-agnostic** (proved by B2), so it
-should serve reasoning problems well beyond ARC. The long horizon — a fuller Continuum Memory System
-and a self-modifying *optimizer* (the memory shaping its own learning rule end-to-end, HOPE §4/§8) —
-is intentionally **TBD** and will be fleshed out once the ARC-AGI 2 path is further along.
+The long-term goal: an architecture trainable for problems **completely different** from ARC that
+require neuro-symbolic reasoning and continuous learning. The ES / two-timescale / self-modifying
+core is deliberately **domain-agnostic** (proved by B2); every blocker fix should move toward this
+vision, not just past the blocker.
+
+- **The emergent pipeline.** A pipeline of emergent memories whose *composition is itself learned*.
+  The theory guardrail (`RESEARCH-NOTES.md` 2026-07-02 #2, Schug et al. ICLR 2024): primitive modules
+  are provably recoverable from demonstrations after only O(M) combinations via a **hypernetwork**
+  (task weights = per-task code × shared templates — exactly our Reptile fast/slow split) *iff* the
+  task distribution has compositional + connected support and the student is **not over-parameterized**
+  (excess capacity ⇒ per-task memorization instead of factored primitives). Practical consequences
+  today: engineer `synth_tasks.py` families that *share* primitives (e.g. flip∘recolor), and treat
+  memory capacity as a lever, not just headroom.
+- The fuller **Continuum Memory System** and a self-modifying *optimizer* (the memory shaping its own
+  learning rule end-to-end, HOPE §4/§8) remain the far horizon, fleshed out as the ARC-AGI 2 path
+  matures.
 
 ---
 
@@ -168,5 +202,7 @@ is intentionally **TBD** and will be fleshed out once the ARC-AGI 2 path is furt
 - **Claude Code plan files** (e.g. `~/.claude/plans/…`) — **ephemeral**, per-session *implementation*
   plans. Not the roadmap; not authoritative for direction.
 - **`docs/JOURNAL.md`** — the timestamped *narrative* (why the code looks the way it does).
+- **`docs/RESEARCH-NOTES.md`** — external literature mapped onto Esper at decision points (the
+  *evidence* behind direction changes).
 - **`docs/NL-summary.md`** — the *theory* (HOPE / Nested Learning).
 - **`CLAUDE.md`** — *conventions* and hard constraints for working in the repo.
