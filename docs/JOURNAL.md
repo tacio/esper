@@ -797,3 +797,41 @@ offline-only" hard constraint is now directory structure, not convention — `sr
 construction. Deliberately NOT restructured (evaluated): `esper_evolution.mojo` (685 lines, cohesive
 — revisit when the CMS chain grows the meta layer), hope.mojo's dormant `prim_*` (tied to the
 OperatorMemory-removal cleanup), tests/ layout, root scripts. CI needed zero changes (globs).
+
+**17:31 — ROADMAP.md gets a Mission/Vision/Values framing; a second, still-unshaped Vision surfaces.**
+Pure discussion, no code — but it changes how future milestones get sized, so it's recorded here.
+Used the standard business frame to separate three altitudes that had been getting flattened into one
+"direction" narrative: **Mission** = the unreachable holy grail, redefined only on a pivot (never
+"achieved," never itself measured) — an artificial reasoner that gets more intelligent through its own
+experience, emergent rather than hand-installed, eventually learning *how to learn* and not just what.
+**Vision** = the current, objectively measurable horizon, which recedes toward the mission as it's
+closed on. **Values** = the self-imposed constraints on *how* the mission is pursued — these bind
+across both visions below.
+
+Talking it through surfaced that Esper actually has **two visions from two different starting points
+toward the same mission**, not one:
+- **Vision A (current, active)** is the existing ARC-AGI 2 path — held-out solve rate via emergent,
+  composable, self-modifying memories fit in-context by ES (~5/1000 today, M8 operator ceiling). Named
+  explicitly for the first time: this vision still hands the engine *goals* (a task's demo pairs are
+  compressed supervision), even though it never hands it a DSL.
+- **Vision B (WIP — not previously written down anywhere)** is inspired by Random Network Distillation,
+  open-endedness, and unsupervised RL: an agent that masters its environment with **zero hand-coded
+  goals** at all — self-generated novelty (prediction-error against a fixed random network) replaces
+  the demonstration pairs. This is a *stricter* reading of the mission than Vision A — it drops the last
+  hand-out (the goal itself), not just the DSL. Concretely it will need a new `Domain` (Example =
+  trajectory, not grid pair) and a fitness signal the agent generates itself rather than one supplied
+  externally — ES-for-RL (Salimans et al. 2017) is the natural fit for the existing derivative-free core,
+  so this isn't a new learning mechanism, just a new `Domain`/`Memory` instance and a different fitness
+  source. No design work done yet; explicitly a placeholder until shaped into milestones (likely first
+  rung: the persistent-slow-weights-across-a-task-stream idea already tabled for later).
+- **Convergence hypothesis**, stated but not yet tested: primitives discovered by open-ended exploration
+  (B) become the reusable vocabulary that few-shot composition (A) draws on — unsupervised
+  "pretraining" feeding few-shot composition, via ES/CMS instead of gradient descent on a corpus.
+
+Also added a 6th value, **frugal by design**: every milestone must be provable on commodity hardware
+with synthetic/tiny corpora; needing a cluster or a petabyte corpus to even attempt a claim is a signal
+the substrate isn't emergent/efficient enough yet, not a green light to add compute. Sits alongside the
+existing emergence / honest-measurement / bare-metal / domain-agnostic-core / narrated-evidence values,
+all of which now explicitly bind Vision B too, not just Vision A. The existing "Beyond ARC-AGI 2"
+section is left as-is but now cross-referenced as Vision B's seed, so it's clear nothing in it is
+scheduled yet.
