@@ -162,6 +162,10 @@ Concise, milestone-level; each links to `docs/JOURNAL.md` for the full narrative
   load-bearing. `OperatorMemory` is **dormant** (kept only as the arc_solve/M8 baseline). First working
   instance of the composition pattern; the pipeline itself becoming learned is the horizon item.
   (JOURNAL 2026-07-02 12:56.)
+- **Restructure.** `memory.mojo` split per-family (`memory.mojo` = the trait seam; `memory_es` /
+  `memory_composed` / `memory_selfmod` / `memory_selfmod_grid`), and the offline Python toolchain moved
+  `src/` → `tools/` — `src/` is pure Mojo by construction. Pure moves, identical suite numbers.
+  (JOURNAL 2026-07-02 13:33.)
 
 ## Next — the path to full ARC-AGI 2
 

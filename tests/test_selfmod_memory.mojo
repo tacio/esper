@@ -4,7 +4,7 @@ from std.collections import List
 
 # Run from the project root: `mojo run -I src tests/test_selfmod_memory.mojo`.
 from hope import ArcGrid, ArcTaskPair, ArcTask
-from memory import (
+from memory_selfmod import (
     RecolorSelfWrite,
     RecolorSelfModMemory,
     SELFMOD_STATE_DIM,

@@ -3,7 +3,7 @@ from std.collections import List
 
 # Run from the project root: `mojo run -I src tests/test_shape.mojo`.
 from hope import ArcGrid, ArcTaskPair, OP_DIM, seed_identity_operator
-from memory import OperatorMemory
+from memory_es import OperatorMemory
 from esper_evolution import fitness
 
 # ==========================================================================

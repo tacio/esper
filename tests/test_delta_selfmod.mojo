@@ -8,7 +8,7 @@ from std.collections import List
 
 # Run from the project root: `mojo run -I src tests/test_delta_selfmod.mojo`.
 from hope import Sequence, ExamplePair, Task
-from memory import (
+from memory_selfmod import (
     DeltaSelfWrite,
     DeltaSelfModMemory,
     SEQCTX_A,

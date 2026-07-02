@@ -23,7 +23,7 @@ mkdir -p build
 # sample .task bundle (2 train + 1 test flip_h pairs) for the task-loader test.
 python - <<'PY'
 import sys
-sys.path.insert(0, "src")
+sys.path.insert(0, "tools")
 from arc_compiler import _save_grid, _save_task
 _save_grid([[1, 2, 3], [4, 5, 6]], "build/sample_in.bin")
 print("Generated build/sample_in.bin")
@@ -59,7 +59,7 @@ GEN_DIR="$(mktemp -d)"
 trap 'rm -rf "$GEN_DIR"' EXIT
 python - "$GEN_DIR" <<'PY'
 import sys
-sys.path.insert(0, "src")
+sys.path.insert(0, "tools")
 from synth_tasks import generate_task_groups
 generate_task_groups("flip_h", sys.argv[1], num_tasks=2, n_train=6, rows=4, cols=4, seed=0)
 generate_task_groups("recolor", sys.argv[1], num_tasks=1, n_train=6, rows=4, cols=4, seed=1)

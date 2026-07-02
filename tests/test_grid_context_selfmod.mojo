@@ -8,7 +8,7 @@ from std.collections import List
 
 # Run from the project root: `mojo run -I src tests/test_grid_context_selfmod.mojo`.
 from hope import ArcGrid, ArcTaskPair, Task
-from memory import (
+from memory_selfmod_grid import (
     GridContextSelfWrite,
     GridContextSelfModMemory,
     GRIDCTX_A,

@@ -780,3 +780,20 @@ geometry-only ablation on recolor fails at 0.23 (the colour module is load-beari
 now DORMANT (kept solely as the arc_solve/M8 baseline; removal is a later cleanup). This is the
 first working instance of the composition pattern the research pass predicted — the fixed 2-stage
 pipeline is v1; making the pipeline itself emergently learned is the horizon item (Schug conditions).
+
+**13:33 — RESTRUCTURE: memory.mojo split per-family; src/ is now pure Mojo.** Two moves, zero semantic
+change (verified: full suite green with identical numbers). (1) `memory.mojo` (1811 lines, 11 structs)
+is now the trait seam only (`Memory` + `SelfModMemory`, ~90 lines); the families moved verbatim into
+flat `-I src` modules — `memory_es.mojo` (the ES-fit forward family: dormant OperatorMemory, MLP, the
+seq pair, AttnGather), `memory_composed.mojo` (GeomColorComposedMemory), `memory_selfmod.mojo` (B4
+core: Recolor + Delta self-writes), `memory_selfmod_grid.mojo` (the ARC-AGI-2 grid blocks). Direct
+imports everywhere (no re-export façade — explicit, and avoids betting on b2 transitive-import
+semantics); flat modules rather than a package dir (unverified b2 package semantics; the `memory_*`
+prefix gives the grouping anyway). 15 import sites retargeted mechanically. A neat find for future
+refactors: `mojo build --emit object -I src <file>` compile-checks a file in seconds without linking
+(the nix env lacks `-lm` for full links) — all 19 entry points checked before any test ran. (2) The
+offline Python toolchain moved `src/` → `tools/` (arc_compiler.py, synth_tasks.py): the "Python is
+offline-only" hard constraint is now directory structure, not convention — `src/` is pure Mojo by
+construction. Deliberately NOT restructured (evaluated): `esper_evolution.mojo` (685 lines, cohesive
+— revisit when the CMS chain grows the meta layer), hope.mojo's dormant `prim_*` (tied to the
+OperatorMemory-removal cleanup), tests/ layout, root scripts. CI needed zero changes (globs).

@@ -6,12 +6,11 @@ from std.collections import List
 
 # Run from the project root: `mojo run -I src tests/test_composed_generalization.mojo`.
 from hope import ArcGrid, ArcTaskPair, COLOR_DIM
-from memory import (
-    AttnGatherMemory,
+from memory_es import AttnGatherMemory, ATTN_DIM
+from memory_composed import (
     GeomColorComposedMemory,
     GEOMCOLOR_DIM,
     GEOMCOLOR_V_OFF,
-    ATTN_DIM,
 )
 from esper_evolution import (
     ESWorkspace,

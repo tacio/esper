@@ -4,7 +4,8 @@ from std.collections import List
 
 # Run from the project root: `mojo run -I src tests/test_seq_domain.mojo`.
 from hope import Sequence, ExamplePair
-from memory import Memory, SeqOperatorMemory, SeqMLPMemory
+from memory import Memory
+from memory_es import SeqOperatorMemory, SeqMLPMemory
 from esper_evolution import (
     ESWorkspace,
     fit_operator,

@@ -8,7 +8,7 @@ from std.collections import List, InlineArray
 
 # Run from the project root: `mojo run -I src tests/test_grid_nbhd_selfmod.mojo`.
 from hope import ArcGrid, ArcTaskPair, Task
-from memory import (
+from memory_selfmod_grid import (
     GridNbhdSelfModMemory,
     GRIDNBHD_A,
     GRIDNBHD_DE,

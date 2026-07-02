@@ -4,7 +4,8 @@ from std.collections import List
 
 # Run from the project root: `mojo run -I src tests/test_attn_memory.mojo`.
 from hope import ArcGrid, ArcTaskPair
-from memory import Memory, AttnGatherMemory, ATTN_DIM
+from memory import Memory
+from memory_es import AttnGatherMemory, ATTN_DIM
 from esper_evolution import (
     ESWorkspace,
     fit_operator,

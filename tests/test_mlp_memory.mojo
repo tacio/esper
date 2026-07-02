@@ -4,7 +4,7 @@ from std.collections import List
 
 # Run from the project root: `mojo run -I src tests/test_mlp_memory.mojo`.
 from hope import ArcGrid, ArcTaskPair
-from memory import MLPMemory, MLP_DIM
+from memory_es import MLPMemory, MLP_DIM
 from esper_evolution import (
     ESWorkspace,
     fit_operator,

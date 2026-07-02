@@ -3,7 +3,7 @@ from std.memory import alloc, UnsafePointer
 from std.random import seed
 
 from hope import OP_DIM, apply_operator, seed_identity_operator
-from memory import OperatorMemory
+from memory_es import OperatorMemory
 from esper_evolution import (
     ESWorkspace,
     fit_operator,

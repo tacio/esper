@@ -9,14 +9,9 @@ from std.algorithm import parallelize
 # Dom is a Domain (the Example type + metrics). It consumes generic ExamplePair/
 # Task containers so the same fitness loop serves any domain. The concrete
 # OperatorMemory + ArcGrid are used only by the grid convenience wrapper below.
-from memory import (
-    Memory,
-    OperatorMemory,
-    SelfModMemory,
-    AttnGatherMemory,
-    GeomColorComposedMemory,
-    ATTN_DIM,
-)
+from memory import Memory, SelfModMemory
+from memory_es import OperatorMemory, AttnGatherMemory, ATTN_DIM
+from memory_composed import GeomColorComposedMemory
 from hope import ExamplePair, Task, ArcTaskPair, HopeNode, ArcGrid
 
 # Default in-context fit schedule, shared by forward_with_learning and the solve
