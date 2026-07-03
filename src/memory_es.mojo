@@ -333,6 +333,10 @@ comptime ATTN_DIM = 7
 # inf gives a flat plateau — moderate beta is where moving M moves the soft peak).
 comptime ATTN_BETA_SEED = Float32(1.4)
 comptime ATTN_BETA_SCALE = Float32(1.0)
+# Softmax window half-width (see apply): the gather scans a (2W+1)^2 window
+# centred on q instead of the whole grid. Grids <= W+1 wide are covered for any
+# centre => synth results bit-identical; real-ARC grids get the ~3-5x cut.
+comptime ATTN_WINDOW = 6
 
 
 struct AttnGatherMemory(Memory):
@@ -389,13 +393,48 @@ struct AttnGatherMemory(Memory):
                 var qr = fma(m00, vr, fma(m01, vc, t_r))
                 var qc = fma(m10, vr, fma(m11, vc, t_c))
 
-                # Pass 1: max score over all input cells (numerical stability — the
+                # WINDOWED softmax (the at-scale enabler): restrict both passes
+                # to a (2W+1)^2 window centred on q. The peak is always inside
+                # (the window follows q, so projection/translation are
+                # unaffected); only the far tail is truncated, and even at the
+                # softest beta the wide-sigma ES visits (raw ~0.4 => beta~0.16)
+                # a distance-7 cell weighs e^(-0.16*49) ~ 4e-4 — negligible.
+                # For grids <= ATTN_WINDOW+1 wide the window spans the whole
+                # grid for ANY centre, so every synth-scale result is
+                # BIT-IDENTICAL to the full scan; on real ARC grids (up to
+                # 30x30) this cuts the O(cells^2) apply by ~3-5x. The centre is
+                # clamped into bounds FIRST, so the window always overlaps the
+                # grid (z can never be 0).
+                var ctr_r = Int(round(qr + cr))
+                var ctr_c = Int(round(qc + cc))
+                if ctr_r < 0:
+                    ctr_r = 0
+                if ctr_r > rows - 1:
+                    ctr_r = rows - 1
+                if ctr_c < 0:
+                    ctr_c = 0
+                if ctr_c > cols - 1:
+                    ctr_c = cols - 1
+                var r_lo = ctr_r - ATTN_WINDOW
+                if r_lo < 0:
+                    r_lo = 0
+                var r_hi = ctr_r + ATTN_WINDOW
+                if r_hi > rows - 1:
+                    r_hi = rows - 1
+                var c_lo = ctr_c - ATTN_WINDOW
+                if c_lo < 0:
+                    c_lo = 0
+                var c_hi = ctr_c + ATTN_WINDOW
+                if c_hi > cols - 1:
+                    c_hi = cols - 1
+
+                # Pass 1: max score over the window (numerical stability — the
                 # subtracted max makes the largest exponent 0, so exp never overflows).
                 var max_score = Float32(-1.0e30)
-                for rj in range(rows):
+                for rj in range(r_lo, r_hi + 1):
                     var dvr = qr - (Float32(rj) - cr)
                     var dvr2 = dvr * dvr
-                    for cj in range(cols):
+                    for cj in range(c_lo, c_hi + 1):
                         var dvc = qc - (Float32(cj) - cc)
                         var score = -beta * (dvr2 + dvc * dvc)
                         if score > max_score:
@@ -404,10 +443,10 @@ struct AttnGatherMemory(Memory):
                 # Pass 2: softmax-weighted gather (streaming, no per-cell buffer).
                 var z = Float32(0.0)
                 var s = Float32(0.0)
-                for rj in range(rows):
+                for rj in range(r_lo, r_hi + 1):
                     var dvr = qr - (Float32(rj) - cr)
                     var dvr2 = dvr * dvr
-                    for cj in range(cols):
+                    for cj in range(c_lo, c_hi + 1):
                         var dvc = qc - (Float32(cj) - cc)
                         var score = -beta * (dvr2 + dvc * dvc)
                         var w = exp(score - max_score)

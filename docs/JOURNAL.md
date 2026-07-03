@@ -835,3 +835,51 @@ existing emergence / honest-measurement / bare-metal / domain-agnostic-core / na
 all of which now explicitly bind Vision B too, not just Vision A. The existing "Beyond ARC-AGI 2"
 section is left as-is but now cross-referenced as Vision B's seed, so it's clear nothing in it is
 scheduled yet.
+
+**19:15 — ROADMAP: "Next" section expanded (user-driven, after the MVV framing).** The path to full
+ARC-AGI 2 now carries six evidence-ordered rungs instead of four: the funnel facts measured today
+(68% same-shape ⇒ expressiveness binds before shape; median 3 demos ⇒ few-demo robustness is a real
+block, promoted to #3; grid scale ⇒ compute, already addressed by the windowed gather) are stated in
+the section as the basis for the ordering, the in-flight v2 re-measure moved to #1 with its
+deliverable spelled out (the breakdown, not just the number), and the tabled **persistent slow
+weights + task-stream** idea is now rung #6 with concrete measurables — (a) solve rate at a narrow
+budget improves with stream position, (b) no catastrophic forgetting, (c) frozen-prior + shuffled-
+stream controls — plus its known hazard (M9: flat priors wash out across heterogeneous families →
+Schug hypernetwork route / CMS hierarchy) and its dual role as Vision B's likely first rung.
+
+## 2026-07-03
+
+**07:00 — REAL ARC-AGI-2 RE-MEASURE v2 (the emergent stack on the real corpus): train 10/1000
+(M8 operator: 5), eval 0/120, and a decisive diagnostic verdict.** The block (started 2026-07-02):
+windowed attention gather (a (2W+1)²=13² window centred on q — bit-identical on synth grids by
+construction since every synth grid is ≤6 wide, ~3-5× cheaper at real 30×30; the composed full-tier
+test actually got FASTER, 61s→33s), `arc_solve` switched from the dormant operator to the emergent
+`GeomColorComposedMemory` (`fit_geomcolor`), a documented `--fit N ITERS` corpus budget (full-budget
+fits at 30×30 are compute-prohibitive; CI's synth path keeps the full proven budget), an exact
+compute skip when every test pair is shape-changing (held-out 0 by construction, ~⅓ of corpus
+compute saved), and `tools/corpus_stats.py` (funnel + train-vs-held-out breakdown). Corpus runs at
+budget 64/1500, 6 workers pinned to half the cores (user needed the machine): eval split 3390s,
+train split 14878s.
+
+**The numbers (budget 64/1500, seed-per-task, reproducible):**
+- **train: 10/1000 solved** (mean held-out 0.402) vs the M8 operator's 5/1000 (0.027) at FULL
+  budget — the emergent composed memory **doubles the operator ceiling at 1/5.3 the ES budget**.
+  4 of M8's 5 retained; **6 NEW solves** (0b17323b, 18286ef8, 9f5f939b, 9f8de559, b1948b0a,
+  ed36ccf7) — every one scored **0.0 under M8**, so this is new capability (the attention geometry +
+  composed mechanics), not budget luck.
+- **eval: 0/120** (mean held-out 0.319 vs 0.027) — the eval split stays unsolved, as expected;
+  its top task (135a2760) sits at held-out **0.989**, a hair under the 0.99 bar.
+- **One loss, and it's instructive: d511f180** (M8 1.0 → v2 0.75/0.80 train-fit): a colour-map task
+  where the ES-fit LUT at full budget succeeded but the count-signature colour write partially
+  mis-assigns — at the corpus's **median 3 demos** count signatures can tie. The few-demo-robustness
+  rung (roadmap #3) now has its first real-corpus exhibit.
+- Honest caveat: the big mean-held-out jump (0.03→0.40) partly reflects partial credit on
+  sparse-edit tasks (identity geometry + colour table get the unchanged background right); the
+  solve count is the headline, the breakdown is the value.
+
+**The breakdown (the block's real deliverable — it re-prioritizes the roadmap with evidence):**
+train same-shape subset (680): expressiveness gap (train<0.3) only **12.5%**, fits-but-no-generalize
+**27**, near misses (0.5≤held-out<0.99) **437**. Eval same-shape (81): gap 18.5%, near misses 44/81.
+Train ≈ held-out on nearly all top tasks — **what the memory learns DOES generalize; it simply
+cannot express the full rule.** The binding constraint is expressiveness of local/content rules,
+exactly roadmap #2 (compose content + geometry) — confirmed by measurement, not guessed.

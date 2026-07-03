@@ -9,17 +9,22 @@
 # same `--report` driver `run_tests.sh` / the docs use; the numbers are identical.
 #
 # Usage:
-#   ./eval_parallel.sh <task_dir> [out_file] [n_workers]
+#   ./eval_parallel.sh <task_dir> [out_file] [n_workers] [fit_N fit_iters]
 # e.g.
 #   ./eval_parallel.sh data_bin/arc2_train scratch/arc2_train_results.txt
+#   ./eval_parallel.sh data_bin/arc2_train scratch/arc2_train_v2.txt 16 64 1500
+# The optional trailing pair is forwarded as `--fit N ITERS` (the documented
+# corpus budget); omitted = the full FIT_N/FIT_ITERS proof budget.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
-TASK_DIR="${1:?usage: ./eval_parallel.sh <task_dir> [out_file] [n_workers]}"
+TASK_DIR="${1:?usage: ./eval_parallel.sh <task_dir> [out_file] [n_workers] [fit_N fit_iters]}"
 OUT_FILE="${2:-scratch/eval_results.txt}"
 N="${3:-$(nproc)}"
+FIT_ARGS=()
+if [[ $# -ge 5 ]]; then FIT_ARGS=(--fit "$4" "$5"); fi
 
 mapfile -t TASKS < <(ls "$TASK_DIR"/*.task 2>/dev/null | sort)
 TOTAL="${#TASKS[@]}"
@@ -46,7 +51,7 @@ pids=()
 for ((w = 0; w < N; w++)); do
     # xargs feeds the shard's task paths as argv to one mojo invocation.
     (xargs -a "$WORK/shard_$w.args" -d '\n' \
-        mojo run -I src src/arc_solve.mojo --report \
+        mojo run -I src src/arc_solve.mojo --report "${FIT_ARGS[@]}" \
         >"$WORK/out_$w.txt" 2>&1) &
     pids+=($!)
 done

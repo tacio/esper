@@ -44,7 +44,8 @@ learns both *what* to think and, eventually, *how* to learn.
 
 - **Vision A — ARC-AGI 2 (current, active).** Raw held-out solve rate on the real ARC-AGI-2 corpus
   (`arc_solve --report`) via composable, emergent, self-modifying memories fit in-context by ES —
-  currently ~5/1000 at the M8 operator-only ceiling. See "Next — the path to full ARC-AGI 2" below
+  currently **10/1000 (train) / 0/120 (eval)** at the v2 emergent-composed-memory measure (the M8
+  operator ceiling was 5/1000). See "Next — the path to full ARC-AGI 2" below
   for the measurable rungs. Still hands the engine *goals* (a task's demonstration pairs are
   compressed supervision) even though it never hands it a DSL.
 - **Vision B — open-ended mastery (WIP — not yet started, no design work done).** Inspired by
@@ -214,25 +215,63 @@ Concise, milestone-level; each links to `docs/JOURNAL.md` for the full narrative
   `memory_composed` / `memory_selfmod` / `memory_selfmod_grid`), and the offline Python toolchain moved
   `src/` → `tools/` — `src/` is pure Mojo by construction. Pure moves, identical suite numbers.
   (JOURNAL 2026-07-02 13:33.)
+- **Real ARC-AGI-2 re-measure v2 — the emergent stack on the real corpus.** Windowed attention gather
+  (bit-identical on synth, ~3-5× cheaper at 30×30), `arc_solve` fits `GeomColorComposedMemory`, a
+  documented `--fit` corpus budget, `tools/corpus_stats.py` diagnostics. At budget 64/1500:
+  **train 10/1000** (the M8 operator: 5/1000 at full budget — doubled at 1/5.3 the budget; all 6 new
+  solves scored 0.0 under M8), **eval 0/120** (top task 0.989 — a hair under the bar). One
+  instructive loss (d511f180): the count-signature colour write can tie at the corpus's median
+  3 demos — the few-demo rung's first real exhibit. **The verdict from the breakdown:** train ≈
+  held-out on nearly all top tasks and the expressiveness gap is only ~13% — what the memory learns
+  generalizes; it cannot yet EXPRESS most rules. Content composition (Next #1) is the binding
+  constraint, confirmed by measurement. (JOURNAL 2026-07-03 07:00.)
 
-## Next — the path to full ARC-AGI 2
+## Next — the path to full ARC-AGI 2 (Vision A)
 
 Each is its own block, held to the **cold-fit bar** (a scaffolded pass is a negative result). The
 emergent memories are each measured on the subset they express; the north-star metric is the raw
 held-out ARC-AGI-2 number.
 
+**Corpus funnel evidence** (2026-07-02, `tools/corpus_stats.py` — the facts the ordering below rests
+on): **68% of both splits are same-shape** (680/1000 train, 81/120 eval), so expressiveness — not
+shape — is the first binding constraint; median max-grid is **196 cells (train) / 525 (eval)** (ARC
+max 900), so real-grid scale is a *compute* constraint (hence the windowed gather and documented
+corpus fit-budgets); and **median 3 demos per task (min 2)** vs the synth suite's 8, so every
+in-context write rule must hold at 2–3 demonstrations.
+
 1. **Compose content + geometry.** Extend the block-5 composition pattern to the content self-writes
    (`GridNbhdSelfModMemory` / `GridCountMapSelfModMemory` / `DeltaSelfModMemory`) — geometry × content
-   rules, the next capability the corpus needs. The proven recipe: fit each module on a signal invariant
-   to the other's factor; the full annealed summed-energy solver over outputs (RESEARCH-NOTES #1)
-   becomes necessary once modules give only PARTIAL constraints (no closed-form composition).
-2. **Shape change.** Handle outputs whose dims ≠ inputs (currently scored 0 by the same-shape guard) —
-   a Domain / output-size generalization.
-3. **Multi-block CMS chain** (NL §7). Stack memories at multiple frequencies for multi-step /
-   object-level reasoning.
-4. **Real ARC-AGI-2 re-measure.** With the count/neighbourhood family and the composed memory in hand,
-   re-run the honest held-out eval (`arc_solve --report`) to see whether the emergent memories move the
-   raw corpus number off the M8 operator ceiling (5/1000).
+   rules, the biggest expressiveness jump the same-shape 68% needs. **Confirmed by the v2 re-measure
+   as the binding constraint** (expressiveness gap ~13%, train ≈ held-out on top tasks, 437/680 near
+   misses — the memory generalizes what it learns but cannot express most rules). The proven recipe:
+   fit each module on a signal invariant to the other's factor; the full annealed summed-energy solver
+   over outputs (RESEARCH-NOTES #1) becomes necessary once modules give only PARTIAL constraints (no
+   closed-form composition).
+2. **Few-demo robustness.** The synth proofs fit from 8 demos; the corpus median is 3 (min 2). The
+   count-signature colour write and the self-write rules lose statistical footing at 2–3 demos
+   (signature ties, noisier salience statistics) — real exhibit: d511f180, solved by M8's ES-fit LUT
+   but lost by the colour write in v2. Measure each memory's degradation curve on synth families at
+   `n_train ∈ {2,3,5,8}` and harden what breaks — without per-task tuning (the cold-fit bar applies
+   to the *rule*, not per task).
+3. **Shape change.** Handle outputs whose dims ≠ inputs — a Domain / output-size generalization
+   (the output shape itself must be *inferred in-context* from the demos, like any other rule
+   parameter — never a hand-coded size heuristic). Unlocks the excluded 32% of both splits.
+4. **Multi-block CMS chain** (NL §7). Stack memories at multiple update frequencies for multi-step /
+   object-level reasoning — the composition pattern (#1) chained in depth, not just in pairs.
+5. **Persistent slow weights + task-stream (continual meta-learning).** Stop re-seeding cold per
+   task: the engine processes a **stream** of tasks and its slow weights **persist**, Reptile-nudged
+   after each in-context fit (M9's outer loop made continual — the prior is never reset). Measurable,
+   in order of strength: (a) at a fixed *narrow* eval budget, solve rate / fit speed **improves with
+   stream position** — "gets more intelligent through its own experience", the mission made a number;
+   (b) **no catastrophic forgetting** — tasks from early families still solve at stream end; (c) the
+   honest controls: a frozen-prior baseline and a shuffled stream (order-insensitivity of the final
+   prior). Known hazard to design around (the M9 lesson: priors help within a *family*): a single
+   flat prior across a heterogeneous stream washes out — the fix is per-family structure that is
+   itself emergent (the Schug hypernetwork route, RESEARCH-NOTES #2: per-task code × shared
+   templates) and/or the CMS frequency hierarchy (#4), where slow blocks consolidate what fast
+   blocks keep re-discovering. **Serves both visions**: on Vision A it is the meta-learned prior at
+   corpus scale; it is also the tabled **first rung of Vision B** — the same persistence machinery,
+   later driven by self-generated novelty instead of demonstration pairs.
 
 ## Beyond ARC-AGI 2
 
