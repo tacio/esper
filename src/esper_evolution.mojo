@@ -23,6 +23,16 @@ comptime FIT_SIGMA0 = Float32(0.5)
 comptime FIT_SIGMA1 = Float32(0.01)
 comptime FIT_ITERS = 4000
 comptime FIT_REG = Float32(0.0001)
+# CONSTANT-COMPUTE demo normalization (the few-demo block): the FIT_* schedule
+# was tuned at 8-demo synth tasks, and one ES iteration costs ~n_demos fitness
+# passes while its SIGNAL also shrinks with fewer demos (weaker contrast on the
+# demo average — measured: n=3 flip∘countmap solved 6/10 at the nominal budget,
+# 9/10 at constant compute). The composed fit drivers therefore scale the
+# iteration count by FIT_DEMO_REF / n_demos: every task gets the SAME total
+# demo-evaluations regardless of demo count — a task-independent budgeting
+# rule, not a per-task tune. At n_demos = 8 the factor is 1 (all synth proofs
+# unchanged).
+comptime FIT_DEMO_REF = 8
 
 # Outer (slow-timescale) meta-learning schedule. The slow weights are nudged
 # toward each task's fitted fast solution (Reptile averaging); the inner fit
@@ -661,6 +671,12 @@ def fit_geomcolor(
         mapped.append(ArcTaskPair(min_g^, mout^))
 
     # 3. Proven attention-gather fit on the geometry slots, identity anchor.
+    # Constant-compute normalization: iters scaled by FIT_DEMO_REF / n_demos
+    # (see the FIT_DEMO_REF comment) — same total demo-evaluations per task.
+    var n_demos = len(demos)
+    if n_demos < 1:
+        n_demos = 1
+    var iters_scaled = iters * FIT_DEMO_REF // n_demos
     var slow = alloc[Float32](ATTN_DIM)
     AttnGatherMemory.seed(slow)
     var ws = ESWorkspace[AttnGatherMemory](grid_capacity, n_fit)
@@ -674,7 +690,7 @@ def fit_geomcolor(
         alpha1,
         sigma0,
         sigma1,
-        iters,
+        iters_scaled,
         reg_lambda,
     )
     slow.free()
@@ -733,6 +749,12 @@ def fit_geomcount(
         mapped.append(ArcTaskPair(min_g^, mout^))
 
     # 3. Proven attention-gather fit on the geometry slots, identity anchor.
+    # Constant-compute normalization: iters scaled by FIT_DEMO_REF / n_demos
+    # (see the FIT_DEMO_REF comment) — same total demo-evaluations per task.
+    var n_demos = len(demos)
+    if n_demos < 1:
+        n_demos = 1
+    var iters_scaled = iters * FIT_DEMO_REF // n_demos
     var slow = alloc[Float32](ATTN_DIM)
     AttnGatherMemory.seed(slow)
     var ws = ESWorkspace[AttnGatherMemory](grid_capacity, n_fit)
@@ -746,7 +768,7 @@ def fit_geomcount(
         alpha1,
         sigma0,
         sigma1,
-        iters,
+        iters_scaled,
         reg_lambda,
     )
     slow.free()

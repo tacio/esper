@@ -21,8 +21,9 @@ from memory_es import AttnGatherMemory, ATTN_DIM
 #   geometry the per-demo colour COUNTS are position-free (cnt_out[V(c)] =
 #   cnt_in[c] whatever the permutation), so the colour table V is written
 #   closed-form from count signatures — per colour c the across-demo count
-#   vector is matched against every output colour's, and a sharp softmax
-#   (GEOMCOLOR_TAU) assigns V[c]. Geometry-only task ⇒ counts unchanged ⇒ V =
+#   vector is matched against every output colour's by a global-min greedy
+#   INJECTIVE assignment (identity for ties/unseen — the few-demo hardening;
+#   see write_color). Geometry-only task ⇒ counts unchanged ⇒ V =
 #   identity; recolor ⇒ the permutation (incl. the 9→0 wrap, exactly — probe-
 #   verified). A write rule in the self-mod family: the map's CONTENT is
 #   inferred per task, one forward pass, never ES-searched.
@@ -41,9 +42,6 @@ from memory_es import AttnGatherMemory, ATTN_DIM
 # attention slots via fit_operator[AttnGatherMemory] on the pre-mapped demos.
 comptime GEOMCOLOR_V_OFF = ATTN_DIM  # the 10-entry written colour table V
 comptime GEOMCOLOR_DIM = ATTN_DIM + COLOR_DIM  # 7 geometry | 10 colour
-# Count-signature softmax sharpness: one raw-count mismatch in one of 8 demos
-# gives weight exp(-32/8) ~ 0.018 — a worst-case V blend of ~0.16, round-safe.
-comptime GEOMCOLOR_TAU = Float32(32.0)
 
 
 struct GeomColorComposedMemory(Memory):
@@ -108,8 +106,10 @@ struct GeomColorComposedMemory(Memory):
 
         For each demo, per-colour input and output counts are accumulated; the
         mismatch matrix sums, over demos, the squared count difference between
-        input colour c and output colour c'. A sharp softmax over c' rows then
-        assigns V[c]. Geometry-invariant by construction (counts ignore
+        input colour c and output colour c'. Assignment is a global-min greedy
+        INJECTIVE matching with identity defaults for unseen colours and
+        identity preference on exact ties (the few-demo hardening — see the
+        inline comment). Geometry-invariant by construction (counts ignore
         position), so it runs BEFORE any geometry search. Stack accumulators
         only — no allocation.
         """
@@ -117,6 +117,7 @@ struct GeomColorComposedMemory(Memory):
         if num == 0:
             return
         var mismatch = InlineArray[Float32, COLOR_DIM * COLOR_DIM](fill=0.0)
+        var seen = InlineArray[Int, COLOR_DIM](fill=0)
         for d in range(num):
             var cnt_in = InlineArray[Float32, COLOR_DIM](fill=0.0)
             var cnt_out = InlineArray[Float32, COLOR_DIM](fill=0.0)
@@ -126,29 +127,61 @@ struct GeomColorComposedMemory(Memory):
                 var co = Int(round(demos[d].output_grid.data[k]))
                 if ci >= 0 and ci < COLOR_DIM:
                     cnt_in[ci] += 1.0
+                    seen[ci] = 1
                 if co >= 0 and co < COLOR_DIM:
                     cnt_out[co] += 1.0
             for c in range(COLOR_DIM):
                 for c2 in range(COLOR_DIM):
                     var diff = cnt_in[c] - cnt_out[c2]
                     mismatch[c * COLOR_DIM + c2] += diff * diff
-        var inv_d = 1.0 / Float32(num)
+        # HARDENED assignment (the few-demo block; measured: at n=3 the old
+        # independent-per-colour softmax left 3-5/10 tasks with a wrong or
+        # colliding V). Three task-independent rules:
+        #   1. UNSEEN colours (absent from every demo input) are unknowable —
+        #      they default to IDENTITY (the same maximum-prior convention as
+        #      the ES's identity anchor).
+        #   2. Seen colours are assigned by GLOBAL-MIN GREEDY INJECTIVE
+        #      matching: repeatedly take the (colour, target) pair with the
+        #      smallest mismatch over unassigned colours × available targets —
+        #      the map family is injective, so two colours never share a
+        #      target (collisions were the dominant few-demo failure).
+        #   3. TIES prefer identity (colour keeps its colour), then the lowest
+        #      indices — deterministic, no tuned threshold (count vectors are
+        #      integer, so genuine ties are exact).
+        var assigned = InlineArray[Int, COLOR_DIM](fill=0)
+        var taken = InlineArray[Int, COLOR_DIM](fill=0)
+        var n_seen = 0
         for c in range(COLOR_DIM):
-            # Subtract the row minimum so the sharp softmax never underflows to
-            # 0/0 (the best match always contributes exp(0) = 1).
-            var best = Float32(1.0e30)
-            for c2 in range(COLOR_DIM):
-                var m = mismatch[c * COLOR_DIM + c2] * inv_d
-                if m < best:
-                    best = m
-            var z = Float32(0.0)
-            var val = Float32(0.0)
-            for c2 in range(COLOR_DIM):
-                var m = mismatch[c * COLOR_DIM + c2] * inv_d
-                var w = exp(-GEOMCOLOR_TAU * (m - best))
-                z += w
-                val += w * Float32(c2)
-            weights[GEOMCOLOR_V_OFF + c] = val / z
+            if seen[c] == 0:
+                weights[GEOMCOLOR_V_OFF + c] = Float32(c)
+                assigned[c] = 1
+            else:
+                n_seen += 1
+        for _ in range(n_seen):
+            var best_m = Float32(1.0e30)
+            var best_c = -1
+            var best_t = -1
+            for c in range(COLOR_DIM):
+                if assigned[c] == 1:
+                    continue
+                for t in range(COLOR_DIM):
+                    if taken[t] == 1:
+                        continue
+                    var m = mismatch[c * COLOR_DIM + t]
+                    var better = m < best_m
+                    if m == best_m:
+                        # Tie: prefer an identity pair, then lower indices.
+                        var new_id = 1 if c == t else 0
+                        var cur_id = 1 if best_c == best_t else 0
+                        if new_id > cur_id:
+                            better = True
+                    if better:
+                        best_m = m
+                        best_c = c
+                        best_t = t
+            weights[GEOMCOLOR_V_OFF + best_c] = Float32(best_t)
+            assigned[best_c] = 1
+            taken[best_t] = 1
 
 
 # ==========================================

@@ -922,3 +922,37 @@ commuting representation, fit each factor on the signal the other cannot touch, 
 Colour maps commute with permutations via cellwise-ness; count rules commute via
 translation-covariance on the lattice the permutations preserve. The candidates for "what commutes"
 are becoming the real design questions for shape change and the CMS chain.
+
+**08:31 — FEW-DEMO ROBUSTNESS DONE (roadmap #1): measured the degradation curves, hardened by
+evidence, recovered d511f180 to 1.0.** The corpus median is 3 demos; every synth proof used 8.
+Measurement first (200 fits, 5 families × n∈{2,3,5,8} × 10 per-task-seeded tasks, diagnostics read
+off the written state so the identical probe re-measures after hardening).
+
+**The measurement split the problem in two, and the split was NOT the one predicted.**
+(1) `write_color` failed exactly as expected: at n=3, 3–5/10 tasks had a wrong or COLLIDING V (two
+colours assigned the same target — the independent per-colour softmax has no injectivity), and
+unseen colours got nonsense. (2) `write_content` was **never wrong — 0 errors in all 80 tasks even
+at n=2** — no hardening allowed (it must earn its way in; it didn't). Its flip-family degradation
+(6/10 at n=3) was the GEOMETRY ES: refitting the same tasks at full budget solved 9/10 — budget
+starvation, not ambiguity (fewer demos ⇒ weaker fitness contrast on the demo average, while each
+iteration is CHEAPER ∝ n_demos).
+
+**Two task-independent mechanisms, each matched to its measured failure:**
+- `write_color` → **global-min greedy INJECTIVE assignment** (the map family is injective — use the
+  class structure, not a threshold), **identity defaults for unseen colours**, and **identity
+  preference on exact ties** (count vectors are integers; ties are exact — the same maximum-prior
+  convention as the ES identity anchor). The old soft softmax (and GEOMCOLOR_TAU) is gone.
+- both composed fit drivers → **constant-compute budgeting**: iters × FIT_DEMO_REF(=8) / n_demos —
+  every task gets the same total demo-evaluations regardless of demo count. At n=8 the factor is 1,
+  so every existing proof is bit-unchanged.
+
+**Before → after at the corpus median n=3** (solved/10, mean held-out):
+recolor 7→**9** (0.91→0.98, collisions 3→0); flip_h 4→**8** (0.69→0.83, V-wrong 4→0);
+flip_h∘recolor 4→**7** (0.67→0.88, V-wrong 5→0); flip_h∘countmap 6→**9** (0.71→0.93).
+n=8 all 1.0 (no regression). n=2 stays honestly rough (recolor V-wrong 7/10: at 32 cells, exact
+signature ties are GENUINELY unknowable — identity-on-tie is the wrong guess for a +1 permutation
+and the right one for real-ARC unchanged colours; the underdetermination ceiling is documented, not
+fought). **d511f180 — the block's real-corpus exhibit — recovered: held-out 1.0, train 1.0** at the
+v2 corpus budget (was 0.75/0.80; M8's full-budget ES-fit LUT had solved it, the un-hardened write
+had lost it). `test_few_demo` (full tier, ~63s) locks the bars: n=3 aggregate ≥0.85 (measured 0.87;
+pre-hardening 0.74), n=8 per-family ≥0.95.

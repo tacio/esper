@@ -236,6 +236,15 @@ Concise, milestone-level; each links to `docs/JOURNAL.md` for the full narrative
   M, A=5/B=5, toroidal Moore-8. The twice-proven design pattern, now named: **find the factor pair's
   commuting representation, fit each factor on the signal the other cannot touch, compose forward.**
   (JOURNAL 2026-07-03 07:35.)
+- **Few-demo robustness.** Measured degradation curves (5 families × n∈{2,3,5,8} × 10 tasks) split
+  the failure: `write_color` lost 3-5/10 tasks at n=3 to non-injective/tied assignments (fixed:
+  global-min greedy INJECTIVE matching + identity for unseen/tied — no thresholds); `write_content`
+  was **never wrong (0/80 even at n=2)** so it earned no hardening; the geometry ES was budget-starved
+  at few demos (fixed: **constant-compute budgeting**, iters × 8/n_demos — same total demo-evaluations
+  per task, factor 1 at n=8 so all proofs unchanged). n=3 before→after: 21/40 → **33/40** solved;
+  **d511f180 recovered to held-out 1.0** at the corpus budget. n=2's remaining failures are
+  measured UNDERDETERMINATION (exact signature ties — unknowable), documented not fought.
+  (JOURNAL 2026-07-03 08:31.)
 
 ## Next — the path to full ARC-AGI 2 (Vision A)
 
@@ -250,18 +259,12 @@ max 900), so real-grid scale is a *compute* constraint (hence the windowed gathe
 corpus fit-budgets); and **median 3 demos per task (min 2)** vs the synth suite's 8, so every
 in-context write rule must hold at 2–3 demonstrations.
 
-1. **Few-demo robustness.** The synth proofs fit from 8 demos; the corpus median is 3 (min 2). The
-   count-signature colour write and the self-write rules lose statistical footing at 2–3 demos
-   (signature ties, noisier salience statistics) — real exhibit: d511f180, solved by M8's ES-fit LUT
-   but lost by the colour write in v2. Measure each memory's degradation curve on synth families at
-   `n_train ∈ {2,3,5,8}` and harden what breaks — without per-task tuning (the cold-fit bar applies
-   to the *rule*, not per task).
-2. **Shape change.** Handle outputs whose dims ≠ inputs — a Domain / output-size generalization
+1. **Shape change.** Handle outputs whose dims ≠ inputs — a Domain / output-size generalization
    (the output shape itself must be *inferred in-context* from the demos, like any other rule
    parameter — never a hand-coded size heuristic). Unlocks the excluded 32% of both splits.
-3. **Multi-block CMS chain** (NL §7). Stack memories at multiple update frequencies for multi-step /
+2. **Multi-block CMS chain** (NL §7). Stack memories at multiple update frequencies for multi-step /
    object-level reasoning — the (now twice-proven) composition pattern chained in depth, not just in pairs.
-4. **Persistent slow weights + task-stream (continual meta-learning).** Stop re-seeding cold per
+3. **Persistent slow weights + task-stream (continual meta-learning).** Stop re-seeding cold per
    task: the engine processes a **stream** of tasks and its slow weights **persist**, Reptile-nudged
    after each in-context fit (M9's outer loop made continual — the prior is never reset). Measurable,
    in order of strength: (a) at a fixed *narrow* eval budget, solve rate / fit speed **improves with
@@ -271,7 +274,7 @@ in-context write rule must hold at 2–3 demonstrations.
    prior). Known hazard to design around (the M9 lesson: priors help within a *family*): a single
    flat prior across a heterogeneous stream washes out — the fix is per-family structure that is
    itself emergent (the Schug hypernetwork route, RESEARCH-NOTES #2: per-task code × shared
-   templates) and/or the CMS frequency hierarchy (#3), where slow blocks consolidate what fast
+   templates) and/or the CMS frequency hierarchy (#2), where slow blocks consolidate what fast
    blocks keep re-discovering. **Serves both visions**: on Vision A it is the meta-learned prior at
    corpus scale; it is also the tabled **first rung of Vision B** — the same persistence machinery,
    later driven by self-generated novelty instead of demonstration pairs.
