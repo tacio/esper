@@ -9,9 +9,14 @@ from std.algorithm import parallelize
 # Dom is a Domain (the Example type + metrics). It consumes generic ExamplePair/
 # Task containers so the same fitness loop serves any domain. The concrete
 # OperatorMemory + ArcGrid are used only by the grid convenience wrapper below.
-from memory import Memory, SelfModMemory
+from memory import Memory, SelfModMemory, ShapeMemory
 from memory_es import OperatorMemory, AttnGatherMemory, ATTN_DIM
-from memory_composed import GeomColorComposedMemory, GeomCountComposedMemory
+from memory_composed import (
+    GeomColorComposedMemory,
+    GeomCountComposedMemory,
+    ShapeGeomComposedMemory,
+    SHAPEGEOM_DIM,
+)
 from hope import ExamplePair, Task, ArcTaskPair, HopeNode, ArcGrid
 
 # Default in-context fit schedule, shared by forward_with_learning and the solve
@@ -763,6 +768,215 @@ def fit_geomcount(
         ws,
         slow,
         mapped,
+        n_fit,
+        alpha0,
+        alpha1,
+        sigma0,
+        sigma1,
+        iters_scaled,
+        reg_lambda,
+    )
+    slow.free()
+
+
+# ==========================================
+# Shape-changing memory fit (Vision A / Next #1 — the output-size seam)
+# ==========================================
+# The shape-aware analogue of `fitness[M]` for a ShapeMemory. The key departure:
+# the memory PREDICTS its own output shape from the input (`out_rows`/`out_cols`,
+# read off the written shape rule) and writes that many cells, which are scored
+# against the demo output at the OUTPUT area. If the predicted shape's area does
+# not match the demo output's, the demo is inexpressible under the current shape
+# rule — a heavy penalty (the honest analogue of the same-shape guard in
+# `fitness`, and it prevents the OOB a mismatched compare would cause). The L2
+# anchor is over the full param vector; the frozen shape-rule slots contribute a
+# constant that cancels in the antithetic F+ - F- (they never move), so only the
+# content (attention) slots feel it.
+def fitness_shape[
+    M: ShapeMemory
+](
+    state: UnsafePointer[Float32, MutAnyOrigin],
+    slow: UnsafePointer[Float32, MutAnyOrigin],
+    demos: List[ExamplePair[M.Dom.Example]],
+    op_output: UnsafePointer[Float32, MutAnyOrigin],
+    reg_lambda: Float32,
+) -> Float32:
+    var num = len(demos)
+    if num == 0:
+        return 0.0
+
+    var total = Float32(0.0)
+    for d in range(num):
+        var pr = M.out_rows(state, demos[d].input_grid)
+        var pc = M.out_cols(state, demos[d].input_grid)
+        var out_n = M.Dom.capacity(demos[d].output_grid)
+        # Predicted output shape wrong for this demo ⇒ inexpressible here.
+        if pr * pc != out_n:
+            total += Float32(-1.0e9)
+            continue
+        M.apply(state, demos[d].input_grid, pr, pc, op_output)
+        total += M.Dom.distance(op_output, demos[d].output_grid, out_n)
+    total = total / Float32(num)
+
+    var pdim = M.param_dim()
+    var anchor = Float32(0.0)
+    for i in range(pdim):
+        var diff = state[i] - slow[i]
+        anchor += diff * diff
+    return total - reg_lambda * anchor / Float32(pdim)
+
+
+# Annealed antithetic ES over a ShapeMemory's params — the shape-aware sibling
+# of fit_operator/evolve_fast_weights, self-contained (its own scratch, like
+# meta_fit_selfmod) since it drives `fitness_shape` and sizes the forward
+# scratch to the OUTPUT capacity. Only the scaled params move: the shape rule is
+# written by `M.write` before the call and frozen (its `fill_scale` is 0), so
+# this search touches only the content (attention) slots. Determinism mirrors
+# evolve_fast_weights: serial epsilons in fixed order, parallel independent
+# antithetic evals in disjoint per-sample scratch, serial reduction in sample
+# order.
+def fit_shape[
+    M: ShapeMemory
+](
+    state: UnsafePointer[Float32, MutAnyOrigin],
+    slow: UnsafePointer[Float32, MutAnyOrigin],
+    demos: List[ExamplePair[M.Dom.Example]],
+    grid_capacity: Int,
+    N: Int,
+    alpha0: Float32,
+    alpha1: Float32,
+    sigma0: Float32,
+    sigma1: Float32,
+    iters: Int,
+    reg_lambda: Float32,
+):
+    if iters <= 0 or N <= 0:
+        return
+    var pdim = M.param_dim()
+    var remainder = pdim % nelts
+    var rem_start = pdim - remainder
+
+    var eps_all = alloc[Float32](N * pdim)
+    var pert_all = alloc[Float32](N * pdim)
+    var op_all = alloc[Float32](N * grid_capacity)
+    var coeff = alloc[Float32](N)
+    var grad = alloc[Float32](pdim)
+    var scale = alloc[Float32](pdim)
+    M.fill_scale(scale, pdim)
+
+    var alpha_rate = log(alpha1 / alpha0) / Float32(iters)
+    var sigma_rate = log(sigma1 / sigma0) / Float32(iters)
+
+    for it in range(iters):
+        var alpha = alpha0 * exp(alpha_rate * Float32(it))
+        var sigma = sigma0 * exp(sigma_rate * Float32(it))
+
+        # Serial: draw all N epsilon vectors (fixed RNG order -> reproducible).
+        for s in range(N):
+            var eps_s = eps_all + s * pdim
+            for j in range(pdim):
+                eps_s[j] = Float32(randn_float64(0.0, 1.0))
+
+        # Parallel: antithetic fitness in disjoint per-sample scratch.
+        @parameter
+        def sample(s: Int):
+            var eps_s = eps_all + s * pdim
+            var pert = pert_all + s * pdim
+            var op = op_all + s * grid_capacity
+
+            var pos = SIMD[DType.float32, nelts](sigma)
+            for j in range(0, pdim - nelts + 1, nelts):
+                var w_vec = state.load[width=nelts](j)
+                var seps = eps_s.load[width=nelts](j) * scale.load[width=nelts](
+                    j
+                )
+                pert.store[width=nelts](j, fma(seps, pos, w_vec))
+            if remainder > 0:
+                for j in range(rem_start, pdim):
+                    pert[j] = fma(eps_s[j] * scale[j], sigma, state[j])
+            var f_plus = fitness_shape[M](pert, slow, demos, op, reg_lambda)
+
+            var neg = SIMD[DType.float32, nelts](-sigma)
+            for j in range(0, pdim - nelts + 1, nelts):
+                var w_vec = state.load[width=nelts](j)
+                var seps = eps_s.load[width=nelts](j) * scale.load[width=nelts](
+                    j
+                )
+                pert.store[width=nelts](j, fma(seps, neg, w_vec))
+            if remainder > 0:
+                for j in range(rem_start, pdim):
+                    pert[j] = fma(eps_s[j] * scale[j], -sigma, state[j])
+            var f_minus = fitness_shape[M](pert, slow, demos, op, reg_lambda)
+
+            coeff[s] = f_plus - f_minus
+
+        parallelize[sample](N)
+
+        # Serial reduce + step (same shape as evolve_fast_weights).
+        memset_zero(grad, pdim)
+        for s in range(N):
+            var eps_s = eps_all + s * pdim
+            var c_vec = SIMD[DType.float32, nelts](coeff[s])
+            for j in range(0, pdim - nelts + 1, nelts):
+                var g = grad.load[width=nelts](j)
+                grad.store[width=nelts](
+                    j, fma(eps_s.load[width=nelts](j), c_vec, g)
+                )
+            if remainder > 0:
+                for j in range(rem_start, pdim):
+                    grad[j] = fma(eps_s[j], coeff[s], grad[j])
+
+        var fac = alpha / (2.0 * Float32(N) * sigma)
+        var fac_vec = SIMD[DType.float32, nelts](fac)
+        for j in range(0, pdim - nelts + 1, nelts):
+            var w_vec = state.load[width=nelts](j)
+            var sg = grad.load[width=nelts](j) * scale.load[width=nelts](j)
+            state.store[width=nelts](j, fma(sg, fac_vec, w_vec))
+        if remainder > 0:
+            for j in range(rem_start, pdim):
+                state[j] = fma(grad[j] * scale[j], fac, state[j])
+
+    eps_all.free()
+    pert_all.free()
+    op_all.free()
+    coeff.free()
+    grad.free()
+    scale.free()
+
+
+# The per-task in-context fit for ShapeGeomComposedMemory (the shape-change seam
+# driver, parallel to fit_geomcolor): write the shape rule closed-form from the
+# demos, then run the annealed shape-aware ES on the geometry slots. Constant-
+# compute normalization (iters × FIT_DEMO_REF / n_demos) matches the other
+# composed drivers — same total demo-evaluations per task. The written shape-
+# rule slots are frozen by fill_scale, so the ES moves only the 7 attention
+# params, on the proven B3 landscape but now reading the OUTPUT grid.
+def fit_shape_geom(
+    state: UnsafePointer[Float32, MutAnyOrigin],
+    demos: List[ArcTaskPair],
+    grid_capacity: Int,
+    n_fit: Int,
+    alpha0: Float32,
+    alpha1: Float32,
+    sigma0: Float32,
+    sigma1: Float32,
+    iters: Int,
+    reg_lambda: Float32,
+) raises:
+    ShapeGeomComposedMemory.write(state, demos)
+
+    var n_demos = len(demos)
+    if n_demos < 1:
+        n_demos = 1
+    var iters_scaled = iters * FIT_DEMO_REF // n_demos
+
+    var slow = alloc[Float32](SHAPEGEOM_DIM)
+    ShapeGeomComposedMemory.seed(slow)
+    fit_shape[ShapeGeomComposedMemory](
+        state,
+        slow,
+        demos,
+        grid_capacity,
         n_fit,
         alpha0,
         alpha1,

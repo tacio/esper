@@ -245,6 +245,22 @@ Concise, milestone-level; each links to `docs/JOURNAL.md` for the full narrative
   **d511f180 recovered to held-out 1.0** at the corpus budget. n=2's remaining failures are
   measured UNDERDETERMINATION (exact signature ties — unknowable), documented not fought.
   (JOURNAL 2026-07-03 08:31.)
+- **Shape change — the output-size seam + first family (Next #1, in progress).** The engine was
+  hard-wired same-shape (every `apply` wrote input-shape cells; `fitness` penalized `in_n ≠ out_n`);
+  output shape was never a represented quantity. New **`ShapeMemory` trait** (parallel to
+  `SelfModMemory`, so the same-shape core and all existing memories are untouched): the output shape
+  is INFERRED IN-CONTEXT — a per-axis affine `out = round(k·in + b)` WRITTEN closed-form by
+  least-squares over the demo dim-pairs — and produced by the proven AttnGather gather, generalized
+  so its query grid is the OUTPUT grid and it reads the INPUT grid (`apply_shaped`; same-shape path
+  bit-identical). The shape rule is frozen (`fill_scale`=0) so the ES still fits only the 7 attention
+  params, on the B3 landscape. `fitness_shape`/`fit_shape`/`fit_shape_geom` are the shape-aware
+  generic sibling of the ES core. Proof (`test_shape_change`, cold, held-out at a FRESH input size —
+  demos drawn at varying sizes so the rule is identifiable, not memorized): `{crop1, flip_h_crop1,
+  subsample2}` each **held-out 1.0** (subsample2 needed `M=2I`, a 2× scale-up, found cold); shape-
+  ablation control (no write) **0.0** — the inferred shape rule is load-bearing. Synth
+  `SHAPE_TRANSFORMS` + `generate_shape_task_groups` (varies demo sizes). **Deferred to follow-on
+  rungs on this same seam:** upscale/tiling (need a floor/modular gather), wiring `arc_solve --report`
+  to score the real 32%, and colour composition on top of shape. (JOURNAL 2026-07-03 13:12.)
 
 ## Next — the path to full ARC-AGI 2 (Vision A)
 
@@ -261,7 +277,13 @@ in-context write rule must hold at 2–3 demonstrations.
 
 1. **Shape change.** Handle outputs whose dims ≠ inputs — a Domain / output-size generalization
    (the output shape itself must be *inferred in-context* from the demos, like any other rule
-   parameter — never a hand-coded size heuristic). Unlocks the excluded 32% of both splits.
+   parameter — never a hand-coded size heuristic). Unlocks the excluded 32% of both splits. **The
+   seam is built** (the `ShapeMemory` trait + closed-form shape rule + output-shaped gather;
+   crop/subsample family proven cold — see Status above). **Remaining rungs on this same seam:**
+   (a) **upscale/tiling** (a floor/modular content gather — the affine gather provably can't express
+   blocky replication); (b) **wire `arc_solve --report`** to score shape-changing test pairs (stop
+   auto-scoring them 0) and report the honest real ARC-AGI-2 number on the 32%; (c) **colour on top
+   of shape** (a `write_color` pre-map, which commutes cellwise).
 2. **Multi-block CMS chain** (NL §7). Stack memories at multiple update frequencies for multi-step /
    object-level reasoning — the (now twice-proven) composition pattern chained in depth, not just in pairs.
 3. **Persistent slow weights + task-stream (continual meta-learning).** Stop re-seeding cold per

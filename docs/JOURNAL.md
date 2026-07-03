@@ -956,3 +956,74 @@ fought). **d511f180 — the block's real-corpus exhibit — recovered: held-out 
 v2 corpus budget (was 0.75/0.80; M8's full-budget ES-fit LUT had solved it, the un-hardened write
 had lost it). `test_few_demo` (full tier, ~63s) locks the bars: n=3 aggregate ≥0.85 (measured 0.87;
 pre-hardening 0.74), n=8 per-family ≥0.95.
+
+---
+
+## 2026-07-03 13:12 — Shape change: the output-size seam + first shape-change family (Vision A, Next #1)
+
+The roadmap's Next #1, and the binding constraint the 07-03 re-measure named: 32% of both corpus
+splits change shape (out dims ≠ in dims), and the whole engine was hard-wired same-shape — every
+memory's `apply` wrote exactly `inp.rows × inp.cols` cells, `fitness[M]` slammed `-1e9` on any demo
+with `in_n ≠ out_n`, and `arc_solve` scored shape-changing pairs 0. Output shape was never even
+*represented* as a quantity distinct from the input. This block builds the reusable seam and proves
+one shape-change family cold.
+
+**Why a new trait, not an extension of `Memory`.** A same-shape `Memory.apply(weights, inp, dst)`
+has no place to learn a different output size, and giving all 10+ existing memories an output-shape
+method (defaulting to input shape) would churn every one and reintroduce the OOB the `-1e9` guard
+exists to prevent. So `ShapeMemory` is a distinct trait (parallel to `SelfModMemory`, the B4
+precedent): `write(state, demos)` infers the shape rule closed-form, `out_rows`/`out_cols` predict
+the output dims, and `apply(state, inp, out_rows, out_cols, dst)` produces that many cells. The
+same-shape core and every existing memory are untouched; the shape-aware fitness/fit driver is a
+generic `[M: ShapeMemory]` sibling. Additive, zero regressions.
+
+**Why the composition pattern again.** A shape-change task factors — like block 5 and the
+content×geometry block — into two factors fit on signals invariant to each other:
+1. a **shape rule** `out = round(k·in + b)` per axis, WRITTEN closed-form by least-squares over the
+   demo dim-pairs (position-free shape arithmetic, no geometry knowledge, one pass, never
+   ES-searched); and
+2. the **content** — the *proven* AttnGather gather, generalized so its query grid is the OUTPUT grid
+   and it reads the INPUT grid. `M=I` reads a centred crop, `M=sI` a subsample, `M=±perm` a
+   flip/transpose within the resize. ES-fit over the same 7 attention params, on the same B3
+   landscape, only reading a differently-sized output.
+
+**Why an output-shaped gather is a one-variable change.** `AttnGatherMemory.apply` already loops the
+query over the grid centred on `inp` and gathers from `inp`. Decoupling the *query* extent/centre
+(now the output's) from the *source* extent/centre (still the input's) — plus the output stride on
+`dst` — is the whole mechanism. For out==in it reduces to the old code bit-identically, so the new
+`apply_shaped` is what `apply` now delegates to; `test_attn_memory`/the fast gate stay 1.0 unchanged.
+
+**Why the demos must vary input size.** With one input size the shape rule's slope/intercept are
+underdetermined (only their combination at that size is pinned) — the honest analogue of the n=2
+signature ties. So the proof draws each demo (and the held-out test) at a RANDOM size in [4,8]:
+`≥2` distinct sizes identify `(k,b)`, and the fresh-size test is an uncheatable probe that the *rule*
+generalizes, not a memorized size. The least-squares fallback (mean ratio, b=0) keeps the write exact
+at a fixed size for the underdetermined case; documented, not fought.
+
+**Where the ES search lands.** `fill_scale` zeros the shape-rule slots (the GeomColor freeze trick),
+so the ES moves only the 7 attention params; the written shape rule rides along frozen. `fitness_shape`
+scores at the OUTPUT area and heavy-penalizes a predicted-shape/true-shape area mismatch (the honest
+successor to the same-shape guard — a wrong shape rule can't be rescued by content). The L2 anchor's
+frozen-slot terms cancel in the antithetic F+−F−, so only content feels it. `fit_shape` is a
+self-contained annealed ES (its own scratch, sized to output capacity, like `meta_fit_selfmod`);
+`fit_shape_geom` is the per-task driver (write → fit, constant-compute budgeted).
+
+**Result — `test_shape_change` (full tier), cold, held-out at a fresh size:**
+- Ckpt A: the least-squares write recovers crop1's `(k=1, b=−2)` per axis exactly.
+- Ckpt B: `{crop1, flip_h_crop1, subsample2}` each **held-out 1.0**, per-task cold — including
+  subsample2, where the ES had to find `M=2I, t=(−0.5,−0.5)` (a 2× scale-up) from the identity seed.
+- Control: the SAME content fit WITHOUT the shape write (identity shape rule) predicts the wrong
+  output size on every pair → **held-out 0.0** — the inferred shape rule is load-bearing, not
+  scaffolding.
+- Fast gate + `mojo format` clean; same-shape numbers unchanged (bit-identical gather).
+
+Synth side: `SHAPE_TRANSFORMS` (crop1, flip_h_crop1, subsample2) + `generate_shape_task_groups`
+(varies input size across a task's demos); `corpus_stats` reports the emitted bundles as 0% same-shape
+(the `.task` format already self-describes per-grid dims — the seam was always consumer-side).
+
+**Deferred (documented):** upscale/tiling (need a floor/modular gather — a follow-on family on this
+same seam; the affine gather provably can't express blocky replication); wiring `arc_solve --report`
+to score the real 32% (follow-on — keeps this a clean synth proof); colour composition on top of shape
+(a `write_color` pre-map, which commutes cellwise). Latent same-shape assumptions in
+`_selfmod_meta_fitness` and the selfmod-grid `adapt` output reads are left as-is (those stay same-shape
+families). Base for the next entry: 0e138cf.

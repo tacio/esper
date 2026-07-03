@@ -372,6 +372,28 @@ struct AttnGatherMemory(Memory):
         inp: ArcGrid,
         dst: UnsafePointer[Float32, MutAnyOrigin],
     ):
+        # Same-shape path: query grid == input grid. Delegates to the
+        # output-shape-aware gather with out dims = in dims, so this is
+        # BIT-IDENTICAL to the pre-shape-seam apply (the query centre, source
+        # centre, projection and windowed softmax all reduce to the old code).
+        Self.apply_shaped(weights, inp, inp.rows, inp.cols, dst)
+
+    # Output-shape-aware gather (the shape-change seam, Vision A / Next #1). The
+    # QUERY grid is (out_rows, out_cols) centred on the OUTPUT extent, while the
+    # gather still reads the INPUT grid (inp.rows/cols) centred on the INPUT
+    # extent — the learned projection q = M*v_out + t maps an output coordinate
+    # into the input's centred frame. Decoupling query size from source size is
+    # the whole change: M = I, t = 0 reads the centred input (a centred crop),
+    # M = sI a subsample by s, M = ±perm a flip/transpose within the resize.
+    # For out == in this is exactly the same-shape gather above.
+    @staticmethod
+    def apply_shaped(
+        weights: UnsafePointer[Float32, MutAnyOrigin],
+        inp: ArcGrid,
+        out_rows: Int,
+        out_cols: Int,
+        dst: UnsafePointer[Float32, MutAnyOrigin],
+    ):
         var m00 = weights[ATTN_M_OFF + 0]
         var m01 = weights[ATTN_M_OFF + 1]
         var m10 = weights[ATTN_M_OFF + 2]
@@ -380,15 +402,19 @@ struct AttnGatherMemory(Memory):
         var t_c = weights[ATTN_T_OFF + 1]
         var beta_raw = weights[ATTN_BETA_OFF]
         var beta = beta_raw * beta_raw  # >= 0, no exp overflow risk
+        # Source (gather) grid: the input's extent and centre.
         var rows = inp.rows
         var cols = inp.cols
         var cr = Float32(rows - 1) * Float32(0.5)
         var cc = Float32(cols - 1) * Float32(0.5)
+        # Query grid: the OUTPUT extent and centre (== input's when out == in).
+        var cr_out = Float32(out_rows - 1) * Float32(0.5)
+        var cc_out = Float32(out_cols - 1) * Float32(0.5)
 
-        for r in range(rows):
-            var vr = Float32(r) - cr
-            for c in range(cols):
-                var vc = Float32(c) - cc
+        for r in range(out_rows):
+            var vr = Float32(r) - cr_out
+            for c in range(out_cols):
+                var vc = Float32(c) - cc_out
                 # Read target q = M*v + t (where in coord space to gather from).
                 var qr = fma(m00, vr, fma(m01, vc, t_r))
                 var qc = fma(m10, vr, fma(m11, vc, t_c))
@@ -452,4 +478,4 @@ struct AttnGatherMemory(Memory):
                         var w = exp(score - max_score)
                         z += w
                         s = fma(w, inp.data[rj * cols + cj], s)
-                dst[r * cols + c] = s / z
+                dst[r * out_cols + c] = s / z

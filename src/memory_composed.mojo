@@ -3,7 +3,7 @@ from std.math import round, exp
 from std.collections import List, InlineArray
 from hope import ArcGrid, ArcTaskPair, COLOR_DIM
 from arc_io import GridDomain
-from memory import Memory
+from memory import Memory, ShapeMemory
 from memory_es import AttnGatherMemory, ATTN_DIM
 
 # ==========================================
@@ -379,3 +379,156 @@ struct GeomCountComposedMemory(Memory):
         mh.free()
         nh.free()
         m_try.free()
+
+
+# ==========================================
+# Composed SHAPE × geometry memory (Vision A / Next #1 — the shape-change seam)
+# ==========================================
+# The first ShapeMemory: outputs whose dims DIFFER from the input, with the
+# output shape INFERRED IN-CONTEXT (never a hand-coded size heuristic). It lifts
+# the composition pattern once more — a shape factor written closed-form from the
+# demos, composed with the proven AttnGather content gather:
+#
+# - SHAPE RULE — a per-axis affine out = round(k*in + b), WRITTEN closed-form by
+#   least-squares over the demo dim-pairs (`write`). Position-free shape
+#   arithmetic (like write_color/write_content), so it needs no geometry
+#   knowledge and runs before any search. Covers crop (k=1, b<0), subsample
+#   (k=1/s), constant output (k=0). When the demos share ONE input size the
+#   slope/intercept are UNDERDETERMINED (only their combination at that size is
+#   pinned) — the honest analogue of the few-demo signature ties; the least-
+#   squares fallback stays exact at the observed size. Identifying k and b (and
+#   thus generalizing to an UNSEEN input size) requires >= 2 distinct input
+#   sizes among the demos — which is exactly what the held-out proof supplies.
+# - GEOMETRY — the proven AttnGatherMemory.apply_shaped run on the OUTPUT grid:
+#   M = I reads a centred crop, M = sI a subsample, M = ±perm a flip/transpose
+#   within the resize. ES-fit over the 7 attention slots (the shape rule is
+#   frozen: fill_scale zeros its slots, the GeomColor freeze trick).
+#
+# Layout: [0:7] AttnGather content | [7:11] shape rule (kr, br, kc, bc). Colour
+# composition (a write_color pre-map, which commutes cellwise) is a documented
+# next-family extension; this first block proves the shape seam + geometry.
+comptime SHAPEGEOM_SHAPE_OFF = ATTN_DIM  # kr, br, kc, bc
+comptime SHAPEGEOM_DIM = ATTN_DIM + 4
+
+
+struct ShapeGeomComposedMemory(ShapeMemory):
+    comptime Dom = GridDomain
+
+    @staticmethod
+    def param_dim() -> Int:
+        return SHAPEGEOM_DIM
+
+    @staticmethod
+    def seed(state: UnsafePointer[Float32, MutAnyOrigin]):
+        # Identity gather + identity shape rule (out == in): the unfit,
+        # unwritten memory is the same-shape identity.
+        AttnGatherMemory.seed(state)
+        state[SHAPEGEOM_SHAPE_OFF + 0] = 1.0  # kr
+        state[SHAPEGEOM_SHAPE_OFF + 1] = 0.0  # br
+        state[SHAPEGEOM_SHAPE_OFF + 2] = 1.0  # kc
+        state[SHAPEGEOM_SHAPE_OFF + 3] = 0.0  # bc
+
+    @staticmethod
+    def fill_scale(scale: UnsafePointer[Float32, MutAnyOrigin], n: Int):
+        # Attention keeps its preconditioner; the shape-rule slots are WRITTEN,
+        # never searched (scale 0 freezes them on any ES path).
+        AttnGatherMemory.fill_scale(scale, ATTN_DIM)
+        for i in range(4):
+            scale[SHAPEGEOM_SHAPE_OFF + i] = 0.0
+
+    # Least-squares slope/intercept of `out` on `in` over the demos for one
+    # axis, written into state[k_off]/state[b_off]. `axis == 0` fits rows,
+    # `axis == 1` fits cols. Falls back to the mean ratio (b = 0) when the input
+    # dimension does not vary — underdetermined but exact at the observed size
+    # (see the struct comment).
+    @staticmethod
+    def _write_axis(
+        state: UnsafePointer[Float32, MutAnyOrigin],
+        demos: List[ArcTaskPair],
+        axis: Int,
+        k_off: Int,
+        b_off: Int,
+    ):
+        var nd = len(demos)
+        var s_in = Float32(0.0)
+        var s_out = Float32(0.0)
+        var s_in2 = Float32(0.0)
+        var s_io = Float32(0.0)
+        for d in range(nd):
+            var din = demos[d].input_grid.rows
+            var dout = demos[d].output_grid.rows
+            if axis != 0:
+                din = demos[d].input_grid.cols
+                dout = demos[d].output_grid.cols
+            var fi = Float32(din)
+            var fo = Float32(dout)
+            s_in += fi
+            s_out += fo
+            s_in2 += fi * fi
+            s_io += fi * fo
+        var fnd = Float32(nd)
+        var denom = fnd * s_in2 - s_in * s_in
+        # denom == 0 <=> every demo shares one input size (variance 0).
+        if denom > Float32(1.0e-6) or denom < Float32(-1.0e-6):
+            var k = (fnd * s_io - s_in * s_out) / denom
+            state[k_off] = k
+            state[b_off] = (s_out - k * s_in) / fnd
+        else:
+            # Fallback: the mean out/in ratio with zero intercept.
+            var k = Float32(1.0)
+            if s_in > Float32(0.0):
+                k = s_out / s_in
+            state[k_off] = k
+            state[b_off] = Float32(0.0)
+
+    @staticmethod
+    def write(
+        state: UnsafePointer[Float32, MutAnyOrigin],
+        demos: List[ArcTaskPair],
+    ):
+        if len(demos) == 0:
+            return
+        Self._write_axis(
+            state, demos, 0, SHAPEGEOM_SHAPE_OFF + 0, SHAPEGEOM_SHAPE_OFF + 1
+        )
+        Self._write_axis(
+            state, demos, 1, SHAPEGEOM_SHAPE_OFF + 2, SHAPEGEOM_SHAPE_OFF + 3
+        )
+
+    @staticmethod
+    def out_rows(
+        state: UnsafePointer[Float32, MutAnyOrigin], inp: ArcGrid
+    ) -> Int:
+        var v = round(
+            state[SHAPEGEOM_SHAPE_OFF + 0] * Float32(inp.rows)
+            + state[SHAPEGEOM_SHAPE_OFF + 1]
+        )
+        var r = Int(v)
+        if r < 1:
+            r = 1
+        return r
+
+    @staticmethod
+    def out_cols(
+        state: UnsafePointer[Float32, MutAnyOrigin], inp: ArcGrid
+    ) -> Int:
+        var v = round(
+            state[SHAPEGEOM_SHAPE_OFF + 2] * Float32(inp.cols)
+            + state[SHAPEGEOM_SHAPE_OFF + 3]
+        )
+        var c = Int(v)
+        if c < 1:
+            c = 1
+        return c
+
+    @staticmethod
+    def apply(
+        state: UnsafePointer[Float32, MutAnyOrigin],
+        inp: ArcGrid,
+        out_rows: Int,
+        out_cols: Int,
+        dst: UnsafePointer[Float32, MutAnyOrigin],
+    ):
+        # The shape rule (in state[7:11]) is inert to the gather — the attention
+        # slots [0:7] are `state` itself, so the AttnGather read is unchanged.
+        AttnGatherMemory.apply_shaped(state, inp, out_rows, out_cols, dst)

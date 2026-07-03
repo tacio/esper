@@ -65,6 +65,32 @@ def _shift(grid):
     return [[row[-1]] + row[:-1] for row in grid]
 
 
+# ---------------------------------------------------------------------------
+# SHAPE-CHANGING transforms (Vision A / Next #1). Unlike everything above these
+# return a grid whose dims DIFFER from the input — the output shape is a rule to
+# be inferred in-context (never a hand-coded size heuristic). They are the
+# ground truth the engine's ShapeMemory must rediscover: a closed-form shape
+# rule (out = k*in + b per axis) composed with the AttnGather content gather.
+# ---------------------------------------------------------------------------
+def _crop1(grid):
+    # Drop the 1-cell border: (r-2, c-2). Centred crop -> identity content.
+    return [row[1:-1] for row in grid[1:-1]]
+
+
+def _flip_h_crop1(grid):
+    # Crop the 1-cell border, then reverse columns (a flip within the resize).
+    return [list(reversed(row[1:-1])) for row in grid[1:-1]]
+
+
+def _subsample2(grid):
+    # Take every 2nd cell on each axis: (ceil(r/2), ceil(c/2)). Exactly r/2, c/2
+    # for even dims (the shape rule k=1/2, b=0 is then integer-exact).
+    return [
+        [grid[i][j] for j in range(0, len(grid[0]), 2)]
+        for i in range(0, len(grid), 2)
+    ]
+
+
 TRANSFORMS = {
     "identity": _identity,
     "flip_h": _flip_h,
@@ -72,6 +98,15 @@ TRANSFORMS = {
     "transpose": _transpose,
     "recolor": _recolor,
     "shift": _shift,
+}
+
+# Shape-changing families kept in a SEPARATE table: they need their own group
+# generator (input size must VARY across a task's demos so the shape rule is
+# identifiable, not memorized). `subsample2` requires even input dims.
+SHAPE_TRANSFORMS = {
+    "crop1": _crop1,
+    "flip_h_crop1": _flip_h_crop1,
+    "subsample2": _subsample2,
 }
 
 
@@ -139,6 +174,54 @@ def generate_task_groups(transform, out_dir, num_tasks, n_train, rows, cols, see
             grid_in = _random_grid(rows, cols, rng)
             train.append((grid_in, fn(grid_in)))
         test_in = _random_grid(rows, cols, rng)
+        test = [(test_in, fn(test_in))]
+
+        path = os.path.join(out_dir, "%s_%d.task" % (transform, t))
+        _save_task(train, test, path)
+        paths.append(path)
+
+    return paths
+
+
+def _rand_shape_size(rng, even):
+    """A random grid size in [4, 8] per axis; even-only when `even` (subsample)."""
+    if even:
+        r = 4 + 2 * rng.randrange(3)  # {4, 6, 8}
+        c = 4 + 2 * rng.randrange(3)
+    else:
+        r = 4 + rng.randrange(5)  # [4, 8]
+        c = 4 + rng.randrange(5)
+    return r, c
+
+
+def generate_shape_task_groups(transform, out_dir, num_tasks, n_train, seed):
+    """Emit `num_tasks` SHAPE-CHANGING task bundles (`.task`) for `transform`.
+
+    Unlike `generate_task_groups`, each demo (and the held-out test) is drawn at
+    a RANDOM input size, so the per-axis shape rule out = k*in + b is genuinely
+    IDENTIFIABLE from the demos (>= 2 distinct sizes) rather than memorized, and
+    the unseen-size test pair is an uncheatable generalization probe. Returns the
+    bundle paths written.
+    """
+    if transform not in SHAPE_TRANSFORMS:
+        raise ValueError(
+            "Unknown shape transform %r; choose from %s"
+            % (transform, ", ".join(sorted(SHAPE_TRANSFORMS)))
+        )
+    os.makedirs(out_dir, exist_ok=True)
+    fn = SHAPE_TRANSFORMS[transform]
+    even = transform == "subsample2"
+    rng = _random.Random(seed)
+
+    paths = []
+    for t in range(num_tasks):
+        train = []
+        for _ in range(n_train):
+            r, c = _rand_shape_size(rng, even)
+            grid_in = _random_grid(r, c, rng)
+            train.append((grid_in, fn(grid_in)))
+        r, c = _rand_shape_size(rng, even)
+        test_in = _random_grid(r, c, rng)
         test = [(test_in, fn(test_in))]
 
         path = os.path.join(out_dir, "%s_%d.task" % (transform, t))
