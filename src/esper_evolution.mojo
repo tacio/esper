@@ -11,7 +11,7 @@ from std.algorithm import parallelize
 # OperatorMemory + ArcGrid are used only by the grid convenience wrapper below.
 from memory import Memory, SelfModMemory
 from memory_es import OperatorMemory, AttnGatherMemory, ATTN_DIM
-from memory_composed import GeomColorComposedMemory
+from memory_composed import GeomColorComposedMemory, GeomCountComposedMemory
 from hope import ExamplePair, Task, ArcTaskPair, HopeNode, ArcGrid
 
 # Default in-context fit schedule, shared by forward_with_learning and the solve
@@ -652,6 +652,78 @@ def fit_geomcolor(
             min_g.data[k] = GeomColorComposedMemory._v_lookup(
                 state, demos[d].input_grid.data[k]
             )
+        var mout = ArcGrid(demos[d].output_grid.rows, demos[d].output_grid.cols)
+        memcpy(
+            dest=mout.data,
+            src=demos[d].output_grid.data,
+            count=mout.rows * mout.cols,
+        )
+        mapped.append(ArcTaskPair(min_g^, mout^))
+
+    # 3. Proven attention-gather fit on the geometry slots, identity anchor.
+    var slow = alloc[Float32](ATTN_DIM)
+    AttnGatherMemory.seed(slow)
+    var ws = ESWorkspace[AttnGatherMemory](grid_capacity, n_fit)
+    fit_operator[AttnGatherMemory](
+        state,
+        ws,
+        slow,
+        mapped,
+        n_fit,
+        alpha0,
+        alpha1,
+        sigma0,
+        sigma1,
+        iters,
+        reg_lambda,
+    )
+    slow.free()
+
+
+# ==========================================
+# Composed geometry × count-rule fit (the content×geometry block)
+# ==========================================
+# The per-task in-context fit for GeomCountComposedMemory — fit_geomcolor's
+# recipe one level up (see the struct comment in memory_composed.mojo):
+#
+#   1. CONTENT: write (P, V) closed-form from the demos' histogram signatures
+#      (geometry-invariant — histograms ignore position; one pass, no search).
+#   2. PRE-MAP: rebuild the demo list with inputs mapped through the inferred
+#      content rule (content-then-gather; the toroidal count rule and the
+#      permutation geometry COMMUTE, so the geometry search runs on the exact,
+#      proven B3 fitness landscape of integer-valued grids).
+#   3. GEOMETRY: the standard annealed fit_operator[AttnGatherMemory] over the
+#      state's 7 attention slots, anchored to the identity seed.
+#
+# The pre-map list is built once per task fit (not per ES iteration), so the
+# hot loop stays allocation-free.
+def fit_geomcount(
+    state: UnsafePointer[Float32, MutAnyOrigin],
+    demos: List[ArcTaskPair],
+    grid_capacity: Int,
+    n_fit: Int,
+    alpha0: Float32,
+    alpha1: Float32,
+    sigma0: Float32,
+    sigma1: Float32,
+    iters: Int,
+    reg_lambda: Float32,
+) raises:
+    # 1. Content self-write (fills the P-selection + V slots).
+    GeomCountComposedMemory.write_content(state, demos)
+    var p = GeomCountComposedMemory._selected_p(state)
+
+    # 2. Pre-map demo inputs through the written content rule.
+    var mapped = List[ArcTaskPair]()
+    for d in range(len(demos)):
+        var min_g = ArcGrid(demos[d].input_grid.rows, demos[d].input_grid.cols)
+        for r in range(min_g.rows):
+            for c in range(min_g.cols):
+                min_g.data[
+                    r * min_g.cols + c
+                ] = GeomCountComposedMemory.content_at(
+                    state, demos[d].input_grid, r, c, p
+                )
         var mout = ArcGrid(demos[d].output_grid.rows, demos[d].output_grid.cols)
         memcpy(
             dest=mout.data,

@@ -883,3 +883,42 @@ train same-shape subset (680): expressiveness gap (train<0.3) only **12.5%**, fi
 Train ≈ held-out on nearly all top tasks — **what the memory learns DOES generalize; it simply
 cannot express the full rule.** The binding constraint is expressiveness of local/content rules,
 exactly roadmap #2 (compose content + geometry) — confirmed by measurement, not guessed.
+
+**07:35 — CONTENT×GEOMETRY COMPOSED (roadmap #1, the v2-confirmed binding constraint):
+`GeomCountComposedMemory` solves `out = geom(M(count_P(in)))` — a class NO single memory
+expresses — held-out 1.0 cold on all four task types, first full run.** The block-5 recipe lifted
+one level, and it lifted CLEANLY.
+
+The structural insight that made it a one-probe block: the count rule is local and
+translation-covariant on the toroidal Moore-8 lattice, and flips/transpose are SYMMETRIES of that
+lattice (each cell's neighbour-set maps exactly) — so **the content rule and the permutation
+geometry COMMUTE**, exactly like block 5's cellwise colour map but one level up. That gives both
+halves of the invariant-decoupling for free:
+1. **Content write, geometry-invariant:** block 4's correspondence salience (per-cell (count,out)
+   pairs) is scrambled by an unknown geometry — but HISTOGRAMS are position-free. For candidate
+   colour p, the per-demo count-bin histograms n_j^d must reproduce the output-colour histograms
+   m_c^d (m_c = n_{M⁻¹(c)} for every demo, whatever the permutation), so each bin is matched to the
+   colour whose across-demo signature it explains, and P is selected by the residual of the best
+   assignment. Closed-form, one pass. Probe: exact 12/12; test Ckpt A: exact under
+   identity/flip/transpose.
+2. **Geometry, the proven pinned fit:** premap demos through the inferred content rule →
+   fit_operator[AttnGatherMemory] on the exact B3 landscape (fit_geomcount mirrors fit_geomcolor
+   verbatim).
+
+Results (test_composed_content, full tier, 34s; budget N=64/2000 probe-validated — full FIT_* at
+6×6 would bloat the suite; the cold bar is about no per-task staging, and the budget is uniform):
+Ckpt B = identity/flip_h/flip_v/transpose ∘ countmap ALL **held-out 1.0, per-task cold**. Honesty
+controls: (i) the block-4 correspondence statistic collapses under flip (variance-reduction 1.0
+identity → **0.12** flipped) while the histogram route stays exact — the invariance is
+load-bearing, not decoration; (ii) content-ablated (perfect geometry, seed content) → **0.18**.
+Scope honest: injective M (a permutation of bins), A=5/B=5, toroidal Moore-8; non-injective M and
+shift geometry noted as extensions. Additive: new struct in memory_composed.mojo + fit_geomcount +
+the test; zero core change. One recurring Mojo gotcha rediscovered twice: `var g =
+demos[d].input_grid` implicitly copies an ArcGrid (not ImplicitlyCopyable) — borrow through the
+subscript expression instead.
+
+The deeper pattern is now twice-proven and worth naming for the roadmap: **find the factor pair's
+commuting representation, fit each factor on the signal the other cannot touch, compose forward.**
+Colour maps commute with permutations via cellwise-ness; count rules commute via
+translation-covariance on the lattice the permutations preserve. The candidates for "what commutes"
+are becoming the real design questions for shape change and the CMS chain.

@@ -1,4 +1,4 @@
-from std.memory import UnsafePointer
+from std.memory import alloc, UnsafePointer
 from std.math import round, exp
 from std.collections import List, InlineArray
 from hope import ArcGrid, ArcTaskPair, COLOR_DIM
@@ -149,3 +149,200 @@ struct GeomColorComposedMemory(Memory):
                 z += w
                 val += w * Float32(c2)
             weights[GEOMCOLOR_V_OFF + c] = val / z
+
+
+# ==========================================
+# Composed geometry × count-rule memory (the content×geometry block)
+# ==========================================
+# The block-5 recipe lifted one level: from cellwise colour maps to
+# neighbourhood-count CONTENT rules. Task class: out = geom(M(count_P(in)))
+# with geometry ∈ the permutation class AttnGather fits, predicate colour P and
+# an injective count→colour map M inferred per task. No existing single memory
+# expresses this class (AttnGather has no content rule; GridCountMap has no
+# geometry; GeomColorComposed composes only a cellwise map).
+#
+# The structural fact the design rests on: the count rule is local and
+# translation-covariant on the TOROIDAL Moore-8 lattice, and flips/transpose
+# are symmetries of that lattice (each cell's neighbour-SET maps exactly), so
+# the content rule and the geometry COMMUTE — content-then-gather is exact,
+# just like block 5's colour-then-gather.
+#
+# - CONTENT module — a geometry-invariant self-WRITE from HISTOGRAMS. The
+#   block-4 correspondence salience (per-cell (count, out) pairs) is scrambled
+#   by an unknown geometry; histograms are position-free. For candidate colour
+#   p the per-demo count-bin histogram n_j^d and the output-colour histogram
+#   m_c^d satisfy m_c^d = n_{M⁻¹(c)}^d for EVERY demo regardless of the
+#   permutation — so each bin j is matched to the colour whose across-demo
+#   signature it reproduces, and P is selected by the RESIDUAL of the best
+#   assignment (probe: exact 12/12 over flip/transpose/identity tasks).
+#   Closed-form, one pass, never ES-searched.
+# - GEOMETRY module — the proven pinned AttnGather fit on demos pre-mapped
+#   through the inferred content rule (fit_geomcount in esper_evolution.mojo).
+#
+# Layout: [0:7] attn | [7:12] P-selection (one-hot written) | [12:17] the
+# count→colour value table V. fill_scale zeroes the 10 content slots.
+comptime GEOMCOUNT_A = 5  # colour alphabet (the count-rule family's scope)
+comptime GEOMCOUNT_B = 5  # count bins; Moore-8 counts clamped to B-1
+comptime GEOMCOUNT_P_OFF = ATTN_DIM
+comptime GEOMCOUNT_V_OFF = ATTN_DIM + GEOMCOUNT_A
+comptime GEOMCOUNT_DIM = ATTN_DIM + GEOMCOUNT_A + GEOMCOUNT_B
+
+
+struct GeomCountComposedMemory(Memory):
+    comptime Dom = GridDomain
+
+    @staticmethod
+    def param_dim() -> Int:
+        return GEOMCOUNT_DIM
+
+    @staticmethod
+    def seed(weights: UnsafePointer[Float32, MutAnyOrigin]):
+        # Identity gather; uniform (uninformative) P-selection; V = identity
+        # over bins — the unfit memory maps every cell to its own count value,
+        # which is NOT the identity transform: unlike the colour memories a
+        # count rule has no identity element, so an unwritten content module is
+        # honestly uninformative rather than a do-nothing prior.
+        AttnGatherMemory.seed(weights)
+        for i in range(GEOMCOUNT_A):
+            weights[GEOMCOUNT_P_OFF + i] = 1.0 / Float32(GEOMCOUNT_A)
+        for j in range(GEOMCOUNT_B):
+            weights[GEOMCOUNT_V_OFF + j] = Float32(j)
+
+    @staticmethod
+    def fill_scale(scale: UnsafePointer[Float32, MutAnyOrigin], n: Int):
+        # Attention group keeps its preconditioner; the content groups are
+        # WRITTEN from the demos, never searched (scale 0 freezes them on any
+        # ES path — perturbation and update are both scale-multiplied).
+        AttnGatherMemory.fill_scale(scale, ATTN_DIM)
+        for i in range(GEOMCOUNT_A + GEOMCOUNT_B):
+            scale[ATTN_DIM + i] = 0.0
+
+    # Toroidal Moore-8 count of colour p at (r,c), clamped to B-1 (the same
+    # clamped-bin convention as GridCountMapSelfModMemory).
+    @staticmethod
+    def _count_at(g: ArcGrid, r: Int, c: Int, p: Int) -> Int:
+        var rows = g.rows
+        var cols = g.cols
+        var k = 0
+        for dr in range(-1, 2):
+            for dc in range(-1, 2):
+                if dr == 0 and dc == 0:
+                    continue
+                var rr = (r + dr + rows) % rows
+                var cc = (c + dc + cols) % cols
+                if Int(round(g.data[rr * cols + cc])) == p:
+                    k += 1
+        if k > GEOMCOUNT_B - 1:
+            k = GEOMCOUNT_B - 1
+        return k
+
+    @staticmethod
+    def _selected_p(weights: UnsafePointer[Float32, MutAnyOrigin]) -> Int:
+        var best = Float32(-1.0e30)
+        var p = 0
+        for i in range(GEOMCOUNT_A):
+            if weights[GEOMCOUNT_P_OFF + i] > best:
+                best = weights[GEOMCOUNT_P_OFF + i]
+                p = i
+        return p
+
+    # Cellwise content read: V[count_P(g)] at (r,c), hard (integer table).
+    @staticmethod
+    def content_at(
+        weights: UnsafePointer[Float32, MutAnyOrigin],
+        g: ArcGrid,
+        r: Int,
+        c: Int,
+        p: Int,
+    ) -> Float32:
+        return round(weights[GEOMCOUNT_V_OFF + Self._count_at(g, r, c, p)])
+
+    @staticmethod
+    def apply(
+        weights: UnsafePointer[Float32, MutAnyOrigin],
+        inp: ArcGrid,
+        dst: UnsafePointer[Float32, MutAnyOrigin],
+    ):
+        # Content-THEN-gather (the proven order; they commute for this
+        # geometry class, and the content read must see the ORIGINAL
+        # neighbourhoods). Needs a temp grid for the content image — this is
+        # the EVAL path only: the fit driver (fit_geomcount) pre-maps the
+        # demos once per task instead of calling apply, so no allocation ever
+        # lands in an ES hot loop.
+        var p = Self._selected_p(weights)
+        var tmp = ArcGrid(inp.rows, inp.cols)
+        for r in range(inp.rows):
+            for c in range(inp.cols):
+                tmp.data[r * inp.cols + c] = Self.content_at(
+                    weights, inp, r, c, p
+                )
+        AttnGatherMemory.apply(weights, tmp, dst)
+
+    @staticmethod
+    def write_content(
+        weights: UnsafePointer[Float32, MutAnyOrigin],
+        demos: List[ArcTaskPair],
+    ):
+        """Write (P, V) from the demos' histogram signatures.
+
+        For each candidate colour p: per-demo count-bin histograms n_j^d are
+        matched, bin by bin, to the output-colour histograms m_c^d (the
+        across-demo squared-difference signature); the residual of the best
+        assignment scores p. The winning p is written one-hot into the
+        P-selection slots and its assignment into V. Geometry-invariant by
+        construction (histograms ignore position). Allocation is once per
+        write (never in an ES loop).
+        """
+        var nd = len(demos)
+        if nd == 0:
+            return
+        # Output-colour histograms m_c^d (shared across candidates).
+        var mh = alloc[Float32](nd * GEOMCOUNT_A)
+        for d in range(nd):
+            for c in range(GEOMCOUNT_A):
+                mh[d * GEOMCOUNT_A + c] = 0.0
+            var n = demos[d].output_grid.rows * demos[d].output_grid.cols
+            for k in range(n):
+                var col = Int(round(demos[d].output_grid.data[k]))
+                if col >= 0 and col < GEOMCOUNT_A:
+                    mh[d * GEOMCOUNT_A + col] += 1.0
+        var nh = alloc[Float32](nd * GEOMCOUNT_B)
+        var m_try = alloc[Int](GEOMCOUNT_B)
+        var best_res = Float32(1.0e30)
+        for p in range(GEOMCOUNT_A):
+            for d in range(nd):
+                for j in range(GEOMCOUNT_B):
+                    nh[d * GEOMCOUNT_B + j] = 0.0
+                for r in range(demos[d].input_grid.rows):
+                    for c in range(demos[d].input_grid.cols):
+                        nh[
+                            d * GEOMCOUNT_B
+                            + Self._count_at(demos[d].input_grid, r, c, p)
+                        ] += 1.0
+            var res = Float32(0.0)
+            for j in range(GEOMCOUNT_B):
+                var bj = Float32(1.0e30)
+                var bc = 0
+                for c in range(GEOMCOUNT_A):
+                    var s = Float32(0.0)
+                    for d in range(nd):
+                        var diff = (
+                            nh[d * GEOMCOUNT_B + j] - mh[d * GEOMCOUNT_A + c]
+                        )
+                        s += diff * diff
+                    if s < bj:
+                        bj = s
+                        bc = c
+                res += bj
+                m_try[j] = bc
+            if res < best_res:
+                best_res = res
+                for i in range(GEOMCOUNT_A):
+                    weights[GEOMCOUNT_P_OFF + i] = 1.0 if i == p else Float32(
+                        0.0
+                    )
+                for j in range(GEOMCOUNT_B):
+                    weights[GEOMCOUNT_V_OFF + j] = Float32(m_try[j])
+        mh.free()
+        nh.free()
+        m_try.free()

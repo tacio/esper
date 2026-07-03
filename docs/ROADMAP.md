@@ -225,6 +225,17 @@ Concise, milestone-level; each links to `docs/JOURNAL.md` for the full narrative
   held-out on nearly all top tasks and the expressiveness gap is only ~13% — what the memory learns
   generalizes; it cannot yet EXPRESS most rules. Content composition (Next #1) is the binding
   constraint, confirmed by measurement. (JOURNAL 2026-07-03 07:00.)
+- **Content × geometry composed.** `GeomCountComposedMemory` solves `out = geom(M(count_P(in)))` — a
+  class NO single memory expresses. The block-5 recipe lifted one level via the commutation insight:
+  local translation-covariant count rules commute with the lattice-symmetry geometry class, so the
+  content module is written **geometry-invariantly from histogram signatures** (per-demo count-bin
+  histograms must reproduce the output-colour histograms whatever the permutation; P selected by
+  assignment residual) and the geometry ES runs on content-premapped demos (the proven B3 landscape).
+  All four task types **held-out 1.0 per-task cold**; controls: the block-4 correspondence statistic
+  collapses under flip (1.0→0.12) while histograms stay exact; content-ablated 0.18. Scope: injective
+  M, A=5/B=5, toroidal Moore-8. The twice-proven design pattern, now named: **find the factor pair's
+  commuting representation, fit each factor on the signal the other cannot touch, compose forward.**
+  (JOURNAL 2026-07-03 07:35.)
 
 ## Next — the path to full ARC-AGI 2 (Vision A)
 
@@ -239,26 +250,18 @@ max 900), so real-grid scale is a *compute* constraint (hence the windowed gathe
 corpus fit-budgets); and **median 3 demos per task (min 2)** vs the synth suite's 8, so every
 in-context write rule must hold at 2–3 demonstrations.
 
-1. **Compose content + geometry.** Extend the block-5 composition pattern to the content self-writes
-   (`GridNbhdSelfModMemory` / `GridCountMapSelfModMemory` / `DeltaSelfModMemory`) — geometry × content
-   rules, the biggest expressiveness jump the same-shape 68% needs. **Confirmed by the v2 re-measure
-   as the binding constraint** (expressiveness gap ~13%, train ≈ held-out on top tasks, 437/680 near
-   misses — the memory generalizes what it learns but cannot express most rules). The proven recipe:
-   fit each module on a signal invariant to the other's factor; the full annealed summed-energy solver
-   over outputs (RESEARCH-NOTES #1) becomes necessary once modules give only PARTIAL constraints (no
-   closed-form composition).
-2. **Few-demo robustness.** The synth proofs fit from 8 demos; the corpus median is 3 (min 2). The
+1. **Few-demo robustness.** The synth proofs fit from 8 demos; the corpus median is 3 (min 2). The
    count-signature colour write and the self-write rules lose statistical footing at 2–3 demos
    (signature ties, noisier salience statistics) — real exhibit: d511f180, solved by M8's ES-fit LUT
    but lost by the colour write in v2. Measure each memory's degradation curve on synth families at
    `n_train ∈ {2,3,5,8}` and harden what breaks — without per-task tuning (the cold-fit bar applies
    to the *rule*, not per task).
-3. **Shape change.** Handle outputs whose dims ≠ inputs — a Domain / output-size generalization
+2. **Shape change.** Handle outputs whose dims ≠ inputs — a Domain / output-size generalization
    (the output shape itself must be *inferred in-context* from the demos, like any other rule
    parameter — never a hand-coded size heuristic). Unlocks the excluded 32% of both splits.
-4. **Multi-block CMS chain** (NL §7). Stack memories at multiple update frequencies for multi-step /
-   object-level reasoning — the composition pattern (#1) chained in depth, not just in pairs.
-5. **Persistent slow weights + task-stream (continual meta-learning).** Stop re-seeding cold per
+3. **Multi-block CMS chain** (NL §7). Stack memories at multiple update frequencies for multi-step /
+   object-level reasoning — the (now twice-proven) composition pattern chained in depth, not just in pairs.
+4. **Persistent slow weights + task-stream (continual meta-learning).** Stop re-seeding cold per
    task: the engine processes a **stream** of tasks and its slow weights **persist**, Reptile-nudged
    after each in-context fit (M9's outer loop made continual — the prior is never reset). Measurable,
    in order of strength: (a) at a fixed *narrow* eval budget, solve rate / fit speed **improves with
@@ -268,7 +271,7 @@ in-context write rule must hold at 2–3 demonstrations.
    prior). Known hazard to design around (the M9 lesson: priors help within a *family*): a single
    flat prior across a heterogeneous stream washes out — the fix is per-family structure that is
    itself emergent (the Schug hypernetwork route, RESEARCH-NOTES #2: per-task code × shared
-   templates) and/or the CMS frequency hierarchy (#4), where slow blocks consolidate what fast
+   templates) and/or the CMS frequency hierarchy (#3), where slow blocks consolidate what fast
    blocks keep re-discovering. **Serves both visions**: on Vision A it is the meta-learned prior at
    corpus scale; it is also the tabled **first rung of Vision B** — the same persistence machinery,
    later driven by self-generated novelty instead of demonstration pairs.
