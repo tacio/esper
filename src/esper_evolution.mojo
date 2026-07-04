@@ -10,12 +10,19 @@ from std.algorithm import parallelize
 # Task containers so the same fitness loop serves any domain. The concrete
 # OperatorMemory + ArcGrid are used only by the grid convenience wrapper below.
 from memory import Memory, SelfModMemory, ShapeMemory
-from memory_es import OperatorMemory, AttnGatherMemory, ATTN_DIM
+from memory_es import (
+    OperatorMemory,
+    AttnGatherMemory,
+    ATTN_DIM,
+    ATTN_BETA_OFF,
+)
 from memory_composed import (
     GeomColorComposedMemory,
     GeomCountComposedMemory,
     ShapeGeomComposedMemory,
+    ShapeGeomSettleMemory,
     SHAPEGEOM_DIM,
+    SHAPEGEOM_TREL_OFF,
 )
 from hope import ExamplePair, Task, ArcTaskPair, HopeNode, ArcGrid
 
@@ -944,13 +951,39 @@ def fit_shape[
     scale.free()
 
 
+# The shape fit's schedule constants (see the ShapeGeomComposedMemory
+# temperature comment for the measured failure grid that forces the design).
+# DISCOVER runs the standard wide anneal down to SHAPE_SIGMA_FLOOR — the
+# sharp-fitness staircase's step scale; below it the antithetic differences
+# are almost always zero and the update is pure noise (measured: sigma → 0.05
+# diverges). SETTLE then holds sigma at the floor at the HARD read
+# (SHAPE_BETA_READ: beta = 16, probe-exact for the fractional-offset reads,
+# frozen via ShapeGeomSettleMemory) and decays alpha — the exact solution is
+# a deep plateau there, and the edge gradient parks the state in its interior
+# (measured to centre t/trel to ~0.01). Uniform for every task; never
+# per-task staging.
+comptime SHAPE_BETA_READ = Float32(4.0)  # beta = 16: probe-exact hard read
+comptime SHAPE_SIGMA_FLOOR = Float32(0.15)  # the staircase step scale
+comptime SHAPE_SETTLE_DIV = 4  # settle budget = iters / DIV (discovery keeps rest)
+comptime SHAPE_SETTLE_ALPHA0 = Float32(0.01)
+comptime SHAPE_SETTLE_ALPHA1 = Float32(0.0005)
+
+
 # The per-task in-context fit for ShapeGeomComposedMemory (the shape-change seam
 # driver, parallel to fit_geomcolor): write the shape rule closed-form from the
 # demos, then run the annealed shape-aware ES on the geometry slots. Constant-
 # compute normalization (iters × FIT_DEMO_REF / n_demos) matches the other
 # composed drivers — same total demo-evaluations per task. The written shape-
-# rule slots are frozen by fill_scale, so the ES moves only the 7 attention
-# params, on the proven B3 landscape but now reading the OUTPUT grid.
+# rule slots are frozen by fill_scale, so the ES moves only the attention +
+# trel params, on the proven B3 landscape but now reading the OUTPUT grid.
+# Structure (see the SHAPE_* comment above and the two-frame comment on
+# ShapeGeomComposedMemory): the SAME TWO cold starts for every task — seed A
+# (resized-plane identity) and seed B (periodic-plane identity, from the
+# written slope) — each run DISCOVER (wide soft anneal, temperature searched)
+# then SETTLE (hard frozen read, sigma held at the staircase step scale,
+# alpha decayed), inside the SAME total budget (each start gets half). The
+# winner by demo fitness at the hard read is kept: an honest multi-start —
+# selection by the task's own train signal, never a task-specific stage.
 def fit_shape_geom(
     state: UnsafePointer[Float32, MutAnyOrigin],
     demos: List[ArcTaskPair],
@@ -968,21 +1001,74 @@ def fit_shape_geom(
     var n_demos = len(demos)
     if n_demos < 1:
         n_demos = 1
-    var iters_scaled = iters * FIT_DEMO_REF // n_demos
+    # Same total budget as every composed driver; each start gets half.
+    var iters_scaled = iters * FIT_DEMO_REF // n_demos // 2
+    var settle_iters = iters_scaled // SHAPE_SETTLE_DIV
+    var discover_iters = iters_scaled - settle_iters
+
+    # The staircase-viable sigma endpoint (callers pass the generic smooth-
+    # landscape FIT_SIGMA1, which is below the step scale — floor it).
+    var sigma_floor = sigma1
+    if sigma_floor < SHAPE_SIGMA_FLOOR:
+        sigma_floor = SHAPE_SIGMA_FLOOR
 
     var slow = alloc[Float32](SHAPEGEOM_DIM)
-    ShapeGeomComposedMemory.seed(slow)
-    fit_shape[ShapeGeomComposedMemory](
-        state,
-        slow,
-        demos,
-        grid_capacity,
-        n_fit,
-        alpha0,
-        alpha1,
-        sigma0,
-        sigma1,
-        iters_scaled,
-        reg_lambda,
-    )
+    var cand = alloc[Float32](SHAPEGEOM_DIM)
+    var fit_out = alloc[Float32](grid_capacity)
+    var best_fitness = Float32(-3.0e38)
+
+    for start in range(2):
+        # Both starts share the written shape rule; only the content frame
+        # differs.
+        copy_weights(cand, state, SHAPEGEOM_DIM)
+        AttnGatherMemory.seed(cand)  # M = I, t = 0, soft temperature
+        cand[SHAPEGEOM_TREL_OFF + 0] = 0.0
+        cand[SHAPEGEOM_TREL_OFF + 1] = 0.0
+        if start == 1:
+            ShapeGeomComposedMemory.seed_periodic(cand)
+        copy_weights(slow, cand, SHAPEGEOM_DIM)
+
+        # DISCOVER: wide annealed search on the soft landscape.
+        fit_shape[ShapeGeomComposedMemory](
+            cand,
+            slow,
+            demos,
+            grid_capacity,
+            n_fit,
+            alpha0,
+            alpha1,
+            sigma0,
+            sigma_floor,
+            discover_iters,
+            reg_lambda,
+        )
+
+        # SETTLE: hard frozen read, sigma held at the step scale, alpha
+        # decayed — parks the state inside the exact-solution plateau.
+        cand[ATTN_BETA_OFF] = SHAPE_BETA_READ
+        fit_shape[ShapeGeomSettleMemory](
+            cand,
+            slow,
+            demos,
+            grid_capacity,
+            n_fit,
+            SHAPE_SETTLE_ALPHA0,
+            SHAPE_SETTLE_ALPHA1,
+            sigma_floor,
+            sigma_floor,
+            settle_iters,
+            reg_lambda,
+        )
+
+        # Keep the better start by demo fitness at the hard read (anchor-free:
+        # slow = cand zeroes the L2 term — pure data signal).
+        var f = fitness_shape[ShapeGeomSettleMemory](
+            cand, cand, demos, fit_out, reg_lambda
+        )
+        if f > best_fitness:
+            best_fitness = f
+            copy_weights(state, cand, SHAPEGEOM_DIM)
+
     slow.free()
+    cand.free()
+    fit_out.free()

@@ -261,6 +261,19 @@ Concise, milestone-level; each links to `docs/JOURNAL.md` for the full narrative
   `SHAPE_TRANSFORMS` + `generate_shape_task_groups` (varies demo sizes). **Deferred to follow-on
   rungs on this same seam:** upscale/tiling (need a floor/modular gather), wiring `arc_solve --report`
   to score the real 32%, and colour composition on top of shape. (JOURNAL 2026-07-03 13:12.)
+- **Upscale/tiling — the output-growing shape families (Next #1 rung a).** Correction en route: the
+  affine gather DOES express blocky upscale exactly (`floor(r/s) = round((r−(s−1)/2)/s)`, no ties) —
+  only tiling's sawtooth `r mod n` is provably outside it. The mechanism: a **toroidal** output-shaped
+  gather (wrapped source images — substrate, not primitive), an **extent-relative translation** trel
+  (absorbs tiling's size-dependent phase), and the query **normalized by the written shape slope**
+  (resize-as-identity: content never re-learns the scale the shape rule knows; tolerances size-free).
+  The fit, fixed by a measured grid of ~12 failed configs: a k-fold size change has **two canonical
+  identity frames** (rescaled plane `M=I`; periodic plane `M=kI, trel=(k−1)/2`), so `fit_shape_geom`
+  runs the same two cold starts per task — each DISCOVER (soft, temperature searched) then SETTLE
+  (hard-frozen read, sigma held at the sharp landscape's staircase step scale, alpha decayed) —
+  winner by demo fitness: an honest multi-start, never task staging. Whole family cold, held-out at
+  fresh sizes: crop1/flip_h_crop1/subsample2/tile2 **1.0**, upscale2 **0.98**; controls: plain
+  (non-toroidal) gather fails tile2 (0.14), no-shape-write 0.0. (JOURNAL 2026-07-04 07:40.)
 
 ## Next — the path to full ARC-AGI 2 (Vision A)
 
@@ -278,12 +291,14 @@ in-context write rule must hold at 2–3 demonstrations.
 1. **Shape change.** Handle outputs whose dims ≠ inputs — a Domain / output-size generalization
    (the output shape itself must be *inferred in-context* from the demos, like any other rule
    parameter — never a hand-coded size heuristic). Unlocks the excluded 32% of both splits. **The
-   seam is built** (the `ShapeMemory` trait + closed-form shape rule + output-shaped gather;
-   crop/subsample family proven cold — see Status above). **Remaining rungs on this same seam:**
-   (a) **upscale/tiling** (a floor/modular content gather — the affine gather provably can't express
-   blocky replication); (b) **wire `arc_solve --report`** to score shape-changing test pairs (stop
-   auto-scoring them 0) and report the honest real ARC-AGI-2 number on the 32%; (c) **colour on top
-   of shape** (a `write_color` pre-map, which commutes cellwise).
+   seam is built and both direction families are proven cold** (the `ShapeMemory` trait +
+   closed-form shape rule + toroidal output-shaped gather; crop/subsample AND upscale/tiling — see
+   Status above). **Remaining rungs on this same seam:** (b) **wire `arc_solve --report`** to score
+   shape-changing test pairs (stop auto-scoring them 0) and report the honest real ARC-AGI-2 number
+   on the 32% — re-measure BOTH splits at the documented budget; (c) **colour on top of shape** (a
+   `write_color` pre-map — note the count-signature write assumes count conservation, which
+   crop/subsample break: a real research rung, not a free composition); (d) small expected-free
+   extensions: k=3 factors, mirror-tilings (near seed B).
 2. **Multi-block CMS chain** (NL §7). Stack memories at multiple update frequencies for multi-step /
    object-level reasoning — the (now twice-proven) composition pattern chained in depth, not just in pairs.
 3. **Persistent slow weights + task-stream (continual meta-learning).** Stop re-seeding cold per

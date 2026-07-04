@@ -91,6 +91,27 @@ def _subsample2(grid):
     ]
 
 
+def _upscale2(grid):
+    # Blocky replication: each cell becomes a 2x2 block -> (2r, 2c). The shape
+    # rule is k=2, b=0; the content is out[r][c] = in[r//2][c//2] (a floor
+    # gather, which the affine attention gather expresses exactly at sharp
+    # temperature: M = I/2, t = 0).
+    return [
+        [grid[i // 2][j // 2] for j in range(2 * len(grid[0]))]
+        for i in range(2 * len(grid))
+    ]
+
+
+def _tile2(grid):
+    # Tile the grid 2x2 -> (2r, 2c). Same shape rule as upscale2 (k=2, b=0) but
+    # the content out[r][c] = in[r % rows][c % cols] is a sawtooth — genuinely
+    # NON-affine, the family that forces modular (wrapped) source addressing.
+    return [
+        [grid[i % len(grid)][j % len(grid[0])] for j in range(2 * len(grid[0]))]
+        for i in range(2 * len(grid))
+    ]
+
+
 TRANSFORMS = {
     "identity": _identity,
     "flip_h": _flip_h,
@@ -107,6 +128,8 @@ SHAPE_TRANSFORMS = {
     "crop1": _crop1,
     "flip_h_crop1": _flip_h_crop1,
     "subsample2": _subsample2,
+    "upscale2": _upscale2,
+    "tile2": _tile2,
 }
 
 

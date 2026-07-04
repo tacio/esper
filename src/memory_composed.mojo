@@ -4,7 +4,13 @@ from std.collections import List, InlineArray
 from hope import ArcGrid, ArcTaskPair, COLOR_DIM
 from arc_io import GridDomain
 from memory import Memory, ShapeMemory
-from memory_es import AttnGatherMemory, ATTN_DIM
+from memory_es import (
+    AttnGatherMemory,
+    ATTN_DIM,
+    ATTN_M_OFF,
+    ATTN_BETA_OFF,
+    attn_gather_toroidal,
+)
 
 # ==========================================
 # Composed geometry × colour memory (ARC-AGI-2 block 5): retire the operator
@@ -399,16 +405,53 @@ struct GeomCountComposedMemory(Memory):
 #   squares fallback stays exact at the observed size. Identifying k and b (and
 #   thus generalizing to an UNSEEN input size) requires >= 2 distinct input
 #   sizes among the demos — which is exactly what the held-out proof supplies.
-# - GEOMETRY — the proven AttnGatherMemory.apply_shaped run on the OUTPUT grid:
-#   M = I reads a centred crop, M = sI a subsample, M = ±perm a flip/transpose
-#   within the resize. ES-fit over the 7 attention slots (the shape rule is
-#   frozen: fill_scale zeros its slots, the GeomColor freeze trick).
+# - GEOMETRY — the proven AttnGather read run on the OUTPUT grid, through the
+#   TOROIDAL output-shaped gather (attn_gather_toroidal — the upscale/tiling
+#   rung), with the query NORMALIZED by the written shape-rule slope
+#   (resize-as-identity: the content search never re-learns the scale the
+#   shape rule already knows). M = I is then EVERY pure resize — centred crop,
+#   subsample, blocky upscale (floor(r/s) = round((r-(s-1)/2)/s) exactly —
+#   probe-verified); M = ±perm a flip/transpose within the resize; and
+#   M = kI with an extent-relative translation trel = 1/2 a k x k tiling (the
+#   sawtooth `r mod n` is the nearest WRAPPED cell of an affine map; a
+#   constant t cannot cancel tiling's size-dependent n/2 phase across varying
+#   demo sizes, so that translation is learned in units of the source extent).
+#   ES-fit over the 6 attention geometry slots + 2 trel slots (the shape rule
+#   is frozen: fill_scale zeros its slots, the GeomColor freeze trick; the
+#   temperature is frozen too — see below).
 #
-# Layout: [0:7] AttnGather content | [7:11] shape rule (kr, br, kc, bc). Colour
-# composition (a write_color pre-map, which commutes cellwise) is a documented
-# next-family extension; this first block proves the shape seam + geometry.
-comptime SHAPEGEOM_SHAPE_OFF = ATTN_DIM  # kr, br, kc, bc
-comptime SHAPEGEOM_DIM = ATTN_DIM + 4
+# Layout: [0:7] AttnGather content | [7:9] trel (trel_r, trel_c) | [9:13] shape
+# rule (kr, br, kc, bc). Colour composition (a write_color pre-map, which
+# commutes cellwise) is a documented next-family extension; this block proves
+# the shape seam + geometry incl. the modular (upscale/tiling) families.
+comptime SHAPEGEOM_TREL_OFF = ATTN_DIM  # trel_r, trel_c
+comptime SHAPEGEOM_SHAPE_OFF = ATTN_DIM + 2  # kr, br, kc, bc
+comptime SHAPEGEOM_DIM = ATTN_DIM + 6
+# ES step scale for trel (see fill_scale: extent-multiplied, seeded at its
+# solution — refinement only).
+comptime SHAPEGEOM_TREL_SCALE = Float32(0.2)
+# TWO IDENTITY FRAMES, TWO FIT REGIMES (a measured grid of ~10 failed
+# configurations fixes this design — JOURNAL). A k-fold size change has TWO
+# canonical "identity" content maps, and they cannot share one seed: the
+# RESIZED plane (M = I under the normalized query — crop, subsample, blocky
+# upscale) and the PERIODIC plane (M = kI, trel = (k-1)/2 — tiling reads the
+# input as a torus, corner-aligned). Whichever frame a task lives in, its
+# geometry is AT or NEAR that frame's seed; asking one seed to travel to the
+# other's solution reliably falls into degenerate basins (measured both
+# directions). So the fit driver runs the SAME TWO cold starts for every task
+# (both derived from the WRITTEN shape slope — never from the task) and keeps
+# the better demo fitness: an honest multi-start, not a selector.
+# TEMPERATURE: the resize families read at FRACTIONAL offsets (upscale ±1/4),
+# so they need a SHARP final read — but a searched temperature is driven soft
+# by the ES (it optimizes the Gaussian-smoothed objective, where a soft read
+# is robust to the sampler's own jitter), the soft optimum sits displaced
+# from the exact solution by more than the snap tolerance, and freezing or
+# force-sharpening it during the WIDE search breaks basin discovery. So each
+# start runs DISCOVER (temperature searched from the soft seed — the proven
+# smooth landscape) then SETTLE (temperature hard-frozen at SHAPE_BETA_READ
+# via the ShapeGeomSettleMemory variant, sigma held at the staircase step
+# scale, alpha decayed — parks the state inside the exact-solution plateau).
+# Uniform across tasks, never per-task staging.
 
 
 struct ShapeGeomComposedMemory(ShapeMemory):
@@ -420,9 +463,13 @@ struct ShapeGeomComposedMemory(ShapeMemory):
 
     @staticmethod
     def seed(state: UnsafePointer[Float32, MutAnyOrigin]):
-        # Identity gather + identity shape rule (out == in): the unfit,
-        # unwritten memory is the same-shape identity.
+        # Identity gather (trel = 0: no extent-relative shift) + identity shape
+        # rule (out == in): the unfit, unwritten memory is the same-shape
+        # identity. The read temperature starts at AttnGather's soft seed; the
+        # fit driver owns its sharpening (see the struct comment).
         AttnGatherMemory.seed(state)
+        state[SHAPEGEOM_TREL_OFF + 0] = 0.0  # trel_r
+        state[SHAPEGEOM_TREL_OFF + 1] = 0.0  # trel_c
         state[SHAPEGEOM_SHAPE_OFF + 0] = 1.0  # kr
         state[SHAPEGEOM_SHAPE_OFF + 1] = 0.0  # br
         state[SHAPEGEOM_SHAPE_OFF + 2] = 1.0  # kc
@@ -430,11 +477,32 @@ struct ShapeGeomComposedMemory(ShapeMemory):
 
     @staticmethod
     def fill_scale(scale: UnsafePointer[Float32, MutAnyOrigin], n: Int):
-        # Attention keeps its preconditioner; the shape-rule slots are WRITTEN,
-        # never searched (scale 0 freezes them on any ES path).
+        # Attention keeps its whole preconditioner (temperature SEARCHED — the
+        # discover phase runs on the proven soft landscape; the settle variant
+        # below freezes it). trel gets a SMALL scale: it multiplies the source
+        # extent, so unit-scale jitter swings reads by half the grid — and
+        # since the two-frame seeds already place trel AT its solution, it
+        # only ever needs sub-cell refinement. The shape-rule slots are
+        # WRITTEN, never searched (scale 0 freezes them on any ES path).
         AttnGatherMemory.fill_scale(scale, ATTN_DIM)
+        scale[SHAPEGEOM_TREL_OFF + 0] = SHAPEGEOM_TREL_SCALE
+        scale[SHAPEGEOM_TREL_OFF + 1] = SHAPEGEOM_TREL_SCALE
         for i in range(4):
             scale[SHAPEGEOM_SHAPE_OFF + i] = 0.0
+
+    # Seed B — the PERIODIC identity frame (see the struct comment): the
+    # content map that reads the input as a corner-aligned torus, M = kI with
+    # the wrap phase trel = (k-1)/2 that corner-aligns the centred frames
+    # (k x k tiling is exactly this map). Reads the WRITTEN shape slopes, so
+    # it must be called AFTER `write`.
+    @staticmethod
+    def seed_periodic(state: UnsafePointer[Float32, MutAnyOrigin]):
+        var kr = state[SHAPEGEOM_SHAPE_OFF + 0]
+        var kc = state[SHAPEGEOM_SHAPE_OFF + 2]
+        state[ATTN_M_OFF + 0] = kr
+        state[ATTN_M_OFF + 3] = kc
+        state[SHAPEGEOM_TREL_OFF + 0] = (kr - 1.0) * Float32(0.5)
+        state[SHAPEGEOM_TREL_OFF + 1] = (kc - 1.0) * Float32(0.5)
 
     # Least-squares slope/intercept of `out` on `in` over the demos for one
     # axis, written into state[k_off]/state[b_off]. `axis == 0` fits rows,
@@ -529,6 +597,71 @@ struct ShapeGeomComposedMemory(ShapeMemory):
         out_cols: Int,
         dst: UnsafePointer[Float32, MutAnyOrigin],
     ):
-        # The shape rule (in state[7:11]) is inert to the gather — the attention
-        # slots [0:7] are `state` itself, so the AttnGather read is unchanged.
-        AttnGatherMemory.apply_shaped(state, inp, out_rows, out_cols, dst)
+        # The attention slots [0:7] are `state` itself; trel and the written
+        # shape-rule slopes ride in explicitly (the slopes NORMALIZE the query:
+        # resize-as-identity — see attn_gather_toroidal). The source is
+        # toroidal, which is what makes the modular families (tiling)
+        # expressible.
+        attn_gather_toroidal(
+            state,
+            state[SHAPEGEOM_TREL_OFF + 0],
+            state[SHAPEGEOM_TREL_OFF + 1],
+            state[SHAPEGEOM_SHAPE_OFF + 0],
+            state[SHAPEGEOM_SHAPE_OFF + 2],
+            inp,
+            out_rows,
+            out_cols,
+            dst,
+        )
+
+
+# The SETTLE-phase variant of ShapeGeomComposedMemory (same layout, same
+# gather, same writes — pure delegation) with ONE difference: the temperature
+# slot is FROZEN (fill_scale 0). The settle phase runs at the hard read
+# (SHAPE_BETA_READ, set by the driver) and a searched temperature would be
+# driven soft again by the ES; fill_scale is a static per-type property, so
+# the phase difference is a type. See the temperature comment above.
+struct ShapeGeomSettleMemory(ShapeMemory):
+    comptime Dom = GridDomain
+
+    @staticmethod
+    def param_dim() -> Int:
+        return SHAPEGEOM_DIM
+
+    @staticmethod
+    def seed(state: UnsafePointer[Float32, MutAnyOrigin]):
+        ShapeGeomComposedMemory.seed(state)
+
+    @staticmethod
+    def fill_scale(scale: UnsafePointer[Float32, MutAnyOrigin], n: Int):
+        ShapeGeomComposedMemory.fill_scale(scale, n)
+        scale[ATTN_BETA_OFF] = 0.0
+
+    @staticmethod
+    def write(
+        state: UnsafePointer[Float32, MutAnyOrigin],
+        demos: List[ArcTaskPair],
+    ):
+        ShapeGeomComposedMemory.write(state, demos)
+
+    @staticmethod
+    def out_rows(
+        state: UnsafePointer[Float32, MutAnyOrigin], inp: ArcGrid
+    ) -> Int:
+        return ShapeGeomComposedMemory.out_rows(state, inp)
+
+    @staticmethod
+    def out_cols(
+        state: UnsafePointer[Float32, MutAnyOrigin], inp: ArcGrid
+    ) -> Int:
+        return ShapeGeomComposedMemory.out_cols(state, inp)
+
+    @staticmethod
+    def apply(
+        state: UnsafePointer[Float32, MutAnyOrigin],
+        inp: ArcGrid,
+        out_rows: Int,
+        out_cols: Int,
+        dst: UnsafePointer[Float32, MutAnyOrigin],
+    ):
+        ShapeGeomComposedMemory.apply(state, inp, out_rows, out_cols, dst)

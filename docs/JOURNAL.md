@@ -1027,3 +1027,104 @@ to score the real 32% (follow-on — keeps this a clean synth proof); colour com
 (a `write_color` pre-map, which commutes cellwise). Latent same-shape assumptions in
 `_selfmod_meta_fitness` and the selfmod-grid `adapt` output reads are left as-is (those stay same-shape
 families). Base for the next entry: 0e138cf.
+
+## 2026-07-03 17:12 — Re-ran the real ARC-AGI-2 public-eval split (120 tasks), 6 workers, budget 64/1500
+
+Re-measured `arc_solve --report` against `data_bin/arc2_eval` (`eval_parallel.sh data_bin/arc2_eval
+scratch/arc2_eval_results.txt 6 64 1500`) at the documented corpus budget, same as every prior
+real-corpus number. `arc_solve.mojo` still fits `GeomColorComposedMemory` only (block 5) — the
+shape-change seam (`ShapeGeomComposedMemory`/`fit_shape_geom`, landed this session) is **not yet
+wired into `arc_solve`** (a documented deferral), so this run is a direct like-for-like comparison to
+the prior eval-split baseline, not a measurement of the shape work.
+
+**Result:** `Solved 0 / 120 (solve rate: 0.000%, mean held-out: 0.387962)`, scored in 8204s (~137 min
+wall on 6 workers — noticeably slower than the ~56 min a prior run logged at the same budget; the
+machine had only ~1-3GB free RAM for most of the run, so this looks like memory-pressure/swap
+slowdown, not a change in per-task cost).
+
+Mean held-out **0.388** vs the last-logged eval-split number of **0.319** (both 0/120 exact-solved —
+the corpus's genuine shape-changing/multi-rule tasks are still out of reach without the shape seam
+wired in). The improvement is consistent with noise across the run-to-run seeded ES stochasticity
+already documented for these composed memories) rather than a code change on the eval path — no
+`arc_solve`/`memory_composed` edits landed between the two measurements. Exact-solve stays 0 because
+the composed memory is still same-shape-only on this driver; the shape-change seam is the natural next
+rung to wire in before the number can move on the ~32% shape-changing slice this run still can't touch.
+
+Raw dump: `scratch/arc2_eval_results.txt` (gitignored, reproducible per-task via the per-task RNG
+seed).
+
+## 2026-07-04 07:40 — Upscale/tiling: the output-GROWING families land (Next #1 rung a) — via a measured grid of 12 configurations
+
+The roadmap's shape rung (a): outputs LARGER than the input — blocky upscale (each cell → an s×s
+block) and tiling (the grid replicated k×k). The shape rules (k=s, b=0) were already covered by the
+least-squares shape write; the whole battle was the CONTENT gather. This block took ~12 measured
+fit-configurations to land honestly; the failures fixed the design, so they're recorded.
+
+**Correction to the last entry's claim.** "The affine gather provably can't express blocky
+replication" is WRONG for upscale: `floor(r/s) = round((r−(s−1)/2)/s)` is an exact identity with no
+ties, so nearest-cell reading of an affine map expresses blocky upscale exactly (probe-verified:
+hand-set `M = I/s` scores 1.0 at sharp temperature, both parities, s∈{2,3}). What is genuinely
+outside any affine `(M, t)` is TILING — `out[r] = in[r mod n]` is a sawtooth. And even for upscale
+the EXPRESSIBILITY was never the issue — the FIT was.
+
+**The mechanism (memory side).** `attn_gather_toroidal` (memory_es) — the output-shaped AttnGather
+read with three additions, used by `ShapeGeomComposedMemory.apply`:
+1. **Toroidal source**: per-axis displacements wrap into (−extent/2, extent/2], so a query past the
+   edge reads the input's periodic image — tiling's sawtooth is the nearest WRAPPED cell of an
+   affine map. A substrate choice (precedent: the selfmod-grid memories' toroidal neighbourhoods),
+   not a task primitive. Window span capped at the torus period (else a cell is scanned twice).
+2. **Extent-relative translation** `trel` (2 new slots, SHAPEGEOM_DIM 11→13): the centred frames
+   leave tiling with a size-dependent phase (n/2 for k=2) that no constant t can cancel across
+   varying demo sizes; `q += trel·extent` absorbs it with one size-free parameter.
+3. **Query normalization by the WRITTEN shape slope** (`v_out/k`): resize-as-identity. Without it a
+   resize family's `M = 1/k` and its exactness tolerance shrinks with the output extent (upscale-2's
+   m11 needed ±0.045 — under the ES's settling noise at any workable sigma; measured: fits parked at
+   0.554, the plateau EDGE, four runs in a row). Normalized, `M = I` IS every pure resize and all
+   tolerances are size-free. The shape factor informing the content factor's coordinate frame is the
+   composition pattern once more.
+
+**The fit (driver side) — what the 12 configs taught.** The permutation families read at integer
+positions (temperature-insensitive); upscale reads at ±1/4 offsets and NEEDS a sharp read. The
+failure grid, each cell measured (fit_shape_geom):
+- Temperature SEARCHED (any seed, any preconditioner): the ES drives it SOFT — it optimizes the
+  Gaussian-smoothed objective, where a soft read is robust to the sampler's own jitter. Geometry
+  converges exactly; the read blurs; held-out ~0.12. Seeded sharp (raw 3.0) it re-softens to 1.4.
+- Temperature ANNEALED up mid-fit (soft→sharp alongside sigma/alpha, wide or narrow): the staircase
+  landscape + shrinking sigma = a noise walk; the geometry itself diverges (t drifted to ±1.5).
+- Temperature FROZEN sharp, sigma annealed to 0.01/0.05: below the staircase's ~0.25 step scale the
+  antithetic differences are almost always zero — divergence (M diag hit 2.24).
+- Temperature FROZEN sharp, sigma floored at 0.15 (the step scale): tile2 1.0/1.0 — the DISCRETE
+  regime works when the ES is run as the stochastic hill-climber it then is. But upscale parked at
+  the plateau edge (its pre-normalization tolerance was under the floor), and one seed frame cannot
+  serve both families (below).
+- An L2-anchor-parks-at-plateau-edge hypothesis was falsified cleanly (reg=0 reproduced the same
+  trajectory to 5 decimals — the 1e-4 anchor is ~2e-6 in fitness, negligible).
+**Two identity frames.** With the normalized query, upscale's solution is the SEED (`M = I`) — and
+tiling's moved to `M = kI, trel = (k−1)/2` (corner-aligned periodic read), one unit of travel away;
+fits from the wrong frame reliably fall into a degenerate constant-read basin (measured both
+directions: whichever family's solution is at the seed solves, the other collapses). A k-fold size
+change simply HAS two canonical identity continuations — the rescaled plane and the periodic plane —
+both derivable from the WRITTEN slope. So `fit_shape_geom` runs the SAME TWO cold starts for every
+task, each DISCOVER (wide soft anneal, temperature searched — the proven-smooth landscape) then
+SETTLE (temperature hard-frozen at `SHAPE_BETA_READ` via `ShapeGeomSettleMemory` — fill_scale is
+static per type, so the phase difference is a thin delegating type — sigma HELD at the 0.15 step
+floor where the plateau-edge gradient stays alive, alpha decayed: measured to centre t/trel to
+~0.01), inside the same total budget (half each), winner by demo fitness at the hard read.
+An honest multi-start — selection by the task's own train signal; no task-specific staging anywhere.
+`trel` gets a small ES scale (0.2): it multiplies the extent, and the frame seeds already place it
+at its solution — refinement only.
+
+**Result — `test_shape_change` (full tier, 4m48s):** all five families cold, held-out at fresh
+sizes: crop1 **1.0**, flip_h_crop1 **1.0** (the real-travel case, still discovered at the halved
+per-start budget), subsample2 **1.0**, upscale2 **0.98**, tile2 **1.0**. Controls: tile2 through the
+PLAIN gather **0.14** (the toroidal wrap is load-bearing); no-shape-write **0.0** (unchanged). The
+experiment battery's final config: upscale2 1.0/1.0 (M≈I, |t|,|trel| ≤ 0.02), tile2 1.0/1.0
+(M≈2I, trel = 0.4998 — the settle phase centres to ~3 decimal places).
+
+Synth: `upscale2`/`tile2` added to `SHAPE_TRANSFORMS`. The doubling families' test dims are [3,6]
+(outputs ≤ 12×12) to keep the full-budget fit cheap; identifiability (≥2 distinct sizes) unchanged.
+
+**Deferred (documented):** non-uniform factors (upscale3, tile3 — expected free: seed B's
+trel = (k−1)/2 is exact for every k, `1 ≡ 0 (mod 1)` for k=3); mirror-tilings (sign flips near seed
+B); wiring `arc_solve --report` (rung b — the user wants BOTH corpus splits re-measured when it
+lands); colour on top of shape (rung c).
