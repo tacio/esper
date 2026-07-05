@@ -1174,3 +1174,37 @@ Raw dumps: `scratch/arc2_eval_v3.txt` / `scratch/arc2_train_v3.txt` (gitignored;
 reproducible via SOLVE_SEED). The v3 verdict for the roadmap: the shape seam is now measurable and
 productive on the real corpus (train), and the eval split's shape slice names rung (c) — colour on
 top of shape — plus content-dependent output sizes as the binding constraints there.
+
+## 2026-07-04 23:40 — v3 diagnostic breakdown → the expressiveness rung plan (ROADMAP "Next" rewritten)
+
+Mined the v3 dumps (`scratch/arc2_{train,eval}_v3.txt`, per-task lines with `mem:` markers; all
+numbers below reproducible with awk over held-out = field 4, train-fit = field 6) to rank the next
+expressiveness rungs on evidence rather than intuition:
+
+**Train same-shape (680):** 13 solved | **88 near-misses at held-out 0.90–0.99, mean train-fit
+0.93** (fail on a FEW cells — the biggest shallow-headroom pool) | 238 at 0.7–0.9 | 146 at <0.4
+with mean train-fit **0.34** — the deep floor: these can't even fit their demos (multi-step /
+object-level rules; CMS-chain territory).
+**Train shape (320):** 9 solved | quadrants: only 3 tasks are train-high/held-low (what the memory
+expresses, it generalizes — again) | **107 with train-fit ≥0.5** (dims + most content fit —
+convertible by better content, i.e. colour-on-shape) | **63 with train-fit exactly 0.0** — the
+affine-in-dims rule fits NO demo: content-dependent output sizes.
+**Eval shape (39):** 19/39 in that dims-never-fit class, 14 partial, 6 with train-fit ≥0.5 —
+content-dependent sizes DOMINATE eval's shape slice.
+
+The ROADMAP "Next" section is rewritten as the evidence-ranked rung ladder, each with its
+research/implementation split and named blocker: **C** colour-on-shape (kernel: count signatures
+aren't conserved under shape change; validate area-ratio normalization, measure crop's border-loss
+robustness at n=3; fallback = correspondence write after a geometry prefit), **S** shape-from-
+content (shape WRITE over a small content-statistic basis, residual-selected — bbox-crop the
+headline class; audit the 63 ids first), **A** the near-miss audit (measure-first; leading
+candidate a self-written mask/gate), **D** k=3/mirror-tiling cheap extensions, **CMS** the depth
+chain (expect a wall past depth 2 — literature pass planned at it), with the **GPU gate** as an
+explicit zero-capability infrastructure block scheduled immediately before CMS: CPU suffices
+through C/S/A/D; the blocker is the `mojo==1.0.0b2` pin (no `gpu` package — MAX migration, all
+proof numbers re-proven), not kernel design (the ES is embarrassingly parallel; ~10–30×/fit
+realistic).
+
+Overall split: roughly half research, but each rung's research kernel is ONE identifiable question
+— the pattern of the last three landed blocks. No engine code in this entry; next session starts
+Rung C.

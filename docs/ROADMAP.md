@@ -290,27 +290,59 @@ Each is its own block, held to the **cold-fit bar** (a scaffolded pass is a nega
 emergent memories are each measured on the subset they express; the north-star metric is the raw
 held-out ARC-AGI-2 number.
 
-**Corpus funnel evidence** (2026-07-02, `tools/corpus_stats.py` — the facts the ordering below rests
-on): **68% of both splits are same-shape** (680/1000 train, 81/120 eval), so expressiveness — not
-shape — is the first binding constraint; median max-grid is **196 cells (train) / 525 (eval)** (ARC
-max 900), so real-grid scale is a *compute* constraint (hence the windowed gather and documented
-corpus fit-budgets); and **median 3 demos per task (min 2)** vs the synth suite's 8, so every
-in-context write rule must hold at 2–3 demonstrations.
+**Corpus funnel evidence** (2026-07-02, `tools/corpus_stats.py` — plus the 2026-07-05 v3 diagnostic
+breakdown, JOURNAL): **68% of both splits are same-shape** (680/1000 train, 81/120 eval); median
+max-grid is **196 cells (train) / 525 (eval)** (ARC max 900), so real-grid scale is a *compute*
+constraint (hence the windowed gather and documented corpus fit-budgets); **median 3 demos per task
+(min 2)** vs the synth suite's 8, so every in-context write rule must hold at 2–3 demonstrations.
+The v3 marker breakdown grounds the rung ranking below: train same-shape has **88 near-misses at
+held-out 0.90–0.99** (train-fit 0.93 — a few wrong cells) and **146 tasks at a deep floor**
+(held-out <0.4, train-fit 0.34 — can't even fit the demos); train shape has **107 tasks with
+train-fit ≥0.5** (convertible) and **63 where the affine dims rule fits NO demo**; eval's shape
+slice is dominated by that last class (19/39).
 
-1. **Shape change.** Handle outputs whose dims ≠ inputs — a Domain / output-size generalization
-   (the output shape itself must be *inferred in-context* from the demos, like any other rule
-   parameter — never a hand-coded size heuristic). Unlocks the excluded 32% of both splits. **The
-   seam is built, both direction families are proven cold, and (b) the seam is WIRED into
-   `arc_solve` and corpus-measured** (v3: 9 real shape-changing solves on train — the slice was 0
-   by construction before; eval's shape slice mean 0.054 names the gaps — see Status/JOURNAL
-   2026-07-04). **Remaining rungs on this same seam:** (c) **colour on top of shape** (a
-   `write_color` pre-map — note the count-signature write assumes count conservation, which
-   crop/subsample break: a real research rung, not a free composition; the eval split's binding
-   constraint together with content-dependent output sizes); (d) small expected-free extensions:
-   k=3 factors, mirror-tilings (near seed B).
-2. **Multi-block CMS chain** (NL §7). Stack memories at multiple update frequencies for multi-step /
-   object-level reasoning — the (now twice-proven) composition pattern chained in depth, not just in pairs.
-3. **Persistent slow weights + task-stream (continual meta-learning).** Stop re-seeding cold per
+1. **Rung C — colour on top of shape** (~50% research / 50% implementation). Colour is cellwise, so
+   it commutes with the shape rule and the gather: write V, pre-map the demos, run the existing
+   `fit_shape_geom` (the block-5 recipe). Research kernel: the count-signature write assumes count
+   CONSERVATION, which shape change breaks — validate normalizing output signatures by the written
+   rule's area ratio (kr·kc; exact for upscale/tile, approximate under crop's border loss — measure
+   the injective assignment's robustness at n=3 with the few-demo battery). Fallback if crop breaks
+   it: write V from cell correspondences after a geometry-only prefit. Targets part of the 107
+   convertible train shape tasks + eval analogues.
+2. **Rung S — shape-from-content** (~40% research / 60% implementation). The 63 train + 19 eval
+   tasks where NO affine-in-dims rule fits any demo: generalize the shape WRITE (not the gather) to
+   an affine rule over a small basis of per-demo content statistics — input dims,
+   non-background bounding-box dims (bbox-crop is a major ARC class), distinct-colour count — basis
+   selected by least-squares residual across demos (precedent: GeomCount's P-by-residual, block 4's
+   scoring salience; statistics are representational substrate, not task primitives). Research
+   part: the emergence-bar argument for the basis, identifiability at 2–3 demos (documented
+   underdetermination ceiling), background-colour inference. Audit the 63 task ids before coding.
+3. **Rung A — the same-shape near-miss audit** (measure-first). The 88 tasks at held-out 0.90–0.99
+   fail on a FEW cells: build a tools/ diagnostic that dumps predicted-vs-truth cell diffs for
+   those ids, clustered by pattern (global colour error vs localized region vs border), and let the
+   audit name the mechanism — leading candidate: a self-written content MASK/GATE (rule where mask,
+   identity elsewhere), also the first step toward content-gated composition. Do not design before
+   the audit; the long-tail hazard (fragmentation into many small classes) is what the audit
+   decides.
+4. **Rung D — small paid-for extensions** (pure implementation). k=3 factors and mirror-tilings
+   (near the periodic seed B on the two-frame seam); trivial finds from the audit.
+5. **Rung CMS — multi-block chain** (NL §7; mostly research). The deep floor (146 train same-shape
+   tasks at train-fit 0.34, most of eval): multi-step / object-level rules no single memory or pair
+   expresses — the (twice-proven) composition pattern chained in DEPTH (3+ stages, grid-in/grid-out
+   intermediates keep the Domain seam). Open questions: per-stage invariant-signal fitting past
+   depth 2 (no commuting factorization exists for arbitrary triples — expect a block-5-style wall
+   and plan the literature pass at it), and capacity control (the Schug guardrail).
+   **GPU gate (infrastructure block, scheduled immediately BEFORE this rung):** CPU is sufficient
+   through rungs C/S/A/D (synth proofs in minutes; corpus runs overnight at documented budgets) —
+   the CMS chain and the task-stream (#6) are the 10–100× compute jump. The ES inner loop is
+   embarrassingly parallel (2N samples × demos × cells × window per iteration; iterations
+   sequential, so per-launch latency is the kernel-design risk; realistic 10–30× per fit plus
+   task-level sharding). The REAL blocker is the toolchain: the pinned `mojo==1.0.0b2` slim wheel
+   has no `gpu` package — GPU means the MAX-platform migration off the hard pin, mechanical but
+   risky (API churn everywhere; proof numbers must be RE-PROVEN — bit-identity will not survive).
+   Do it as its own zero-new-capability block with full suite re-verification, never mid-research-
+   rung (a moving toolchain confounds negative results).
+6. **Persistent slow weights + task-stream (continual meta-learning).** Stop re-seeding cold per
    task: the engine processes a **stream** of tasks and its slow weights **persist**, Reptile-nudged
    after each in-context fit (M9's outer loop made continual — the prior is never reset). Measurable,
    in order of strength: (a) at a fixed *narrow* eval budget, solve rate / fit speed **improves with
@@ -320,7 +352,7 @@ in-context write rule must hold at 2–3 demonstrations.
    prior). Known hazard to design around (the M9 lesson: priors help within a *family*): a single
    flat prior across a heterogeneous stream washes out — the fix is per-family structure that is
    itself emergent (the Schug hypernetwork route, RESEARCH-NOTES #2: per-task code × shared
-   templates) and/or the CMS frequency hierarchy (#2), where slow blocks consolidate what fast
+   templates) and/or the CMS frequency hierarchy (#5), where slow blocks consolidate what fast
    blocks keep re-discovering. **Serves both visions**: on Vision A it is the meta-learned prior at
    corpus scale; it is also the tabled **first rung of Vision B** — the same persistence machinery,
    later driven by self-generated novelty instead of demonstration pairs.
