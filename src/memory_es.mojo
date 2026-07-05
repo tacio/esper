@@ -372,6 +372,28 @@ struct AttnGatherMemory(Memory):
         inp: ArcGrid,
         dst: UnsafePointer[Float32, MutAnyOrigin],
     ):
+        # Same-shape path: query grid == input grid. Delegates to the
+        # output-shape-aware gather with out dims = in dims, so this is
+        # BIT-IDENTICAL to the pre-shape-seam apply (the query centre, source
+        # centre, projection and windowed softmax all reduce to the old code).
+        Self.apply_shaped(weights, inp, inp.rows, inp.cols, dst)
+
+    # Output-shape-aware gather (the shape-change seam, Vision A / Next #1). The
+    # QUERY grid is (out_rows, out_cols) centred on the OUTPUT extent, while the
+    # gather still reads the INPUT grid (inp.rows/cols) centred on the INPUT
+    # extent — the learned projection q = M*v_out + t maps an output coordinate
+    # into the input's centred frame. Decoupling query size from source size is
+    # the whole change: M = I, t = 0 reads the centred input (a centred crop),
+    # M = sI a subsample by s, M = ±perm a flip/transpose within the resize.
+    # For out == in this is exactly the same-shape gather above.
+    @staticmethod
+    def apply_shaped(
+        weights: UnsafePointer[Float32, MutAnyOrigin],
+        inp: ArcGrid,
+        out_rows: Int,
+        out_cols: Int,
+        dst: UnsafePointer[Float32, MutAnyOrigin],
+    ):
         var m00 = weights[ATTN_M_OFF + 0]
         var m01 = weights[ATTN_M_OFF + 1]
         var m10 = weights[ATTN_M_OFF + 2]
@@ -380,15 +402,19 @@ struct AttnGatherMemory(Memory):
         var t_c = weights[ATTN_T_OFF + 1]
         var beta_raw = weights[ATTN_BETA_OFF]
         var beta = beta_raw * beta_raw  # >= 0, no exp overflow risk
+        # Source (gather) grid: the input's extent and centre.
         var rows = inp.rows
         var cols = inp.cols
         var cr = Float32(rows - 1) * Float32(0.5)
         var cc = Float32(cols - 1) * Float32(0.5)
+        # Query grid: the OUTPUT extent and centre (== input's when out == in).
+        var cr_out = Float32(out_rows - 1) * Float32(0.5)
+        var cc_out = Float32(out_cols - 1) * Float32(0.5)
 
-        for r in range(rows):
-            var vr = Float32(r) - cr
-            for c in range(cols):
-                var vc = Float32(c) - cc
+        for r in range(out_rows):
+            var vr = Float32(r) - cr_out
+            for c in range(out_cols):
+                var vc = Float32(c) - cc_out
                 # Read target q = M*v + t (where in coord space to gather from).
                 var qr = fma(m00, vr, fma(m01, vc, t_r))
                 var qc = fma(m10, vr, fma(m11, vc, t_c))
@@ -452,4 +478,144 @@ struct AttnGatherMemory(Memory):
                         var w = exp(score - max_score)
                         z += w
                         s = fma(w, inp.data[rj * cols + cj], s)
-                dst[r * cols + c] = s / z
+                dst[r * out_cols + c] = s / z
+
+
+# TOROIDAL output-shaped gather (the upscale/tiling family, Vision A / Next #1
+# rung a). Same learned attention read as `apply_shaped` (`weights` is the same
+# 7-slot attention block) with two changes that make MODULAR content rules
+# expressible:
+#
+# - The source grid is a TORUS: the coordinate displacement per axis is wrapped
+#   into (-extent/2, extent/2] (`d -= extent*round(d/extent)`), so a query past
+#   the input's edge reads the input's periodic image — tiling's sawtooth
+#   `out[r] = in[r mod rows]`, provably outside any single affine (M, t), is
+#   the nearest wrapped cell of an affine map. Toroidal topology is a substrate
+#   choice (precedent: the selfmod-grid memories' toroidal neighbourhoods), not
+#   a task primitive: which modular rule (if any) is read is entirely in the
+#   learned (M, t, trel, beta). For queries that stay in range (crop / flip /
+#   subsample / upscale) the wrap touches only the far softmax tail — at any
+#   sharp temperature the nearest source cell is unchanged.
+# - `trel_r`/`trel_c` are EXTENT-RELATIVE translations: q += trel*extent. The
+#   centred query/source frames leave tiling with a size-dependent phase
+#   (n/2 for tile-2) that a constant t cannot cancel across the varying demo
+#   sizes; a translation in units of the source extent absorbs it with one
+#   size-independent parameter (trel = 1/2 for tile-2), fit by the ES exactly
+#   like t.
+# - `kr`/`kc` NORMALIZE the query by the (written, frozen) shape-rule slope:
+#   q = M*(v_out/k) + ... — resize-as-identity. The content search must not
+#   re-learn the scale the shape rule already knows: without this, a resize
+#   family's M is 1/k and its exactness tolerance shrinks with the output
+#   extent (measured: upscale-2's m11 needs ±0.045, far below the ES's
+#   settling noise at the staircase-viable sigma — the fit reliably parked
+#   just off the plateau). Normalized, M = I (the seed) IS the pure-resize
+#   solution for every k, and all tolerances are size-free. k <= 0 (a written
+#   constant-output rule) falls back to 1.
+#
+# The window scan is the wrapped analogue of `apply_shaped`'s: the span is
+# capped at the torus period (scanning more would visit a source cell twice
+# through its periodic images), the centre is wrapped into bounds, and indices
+# wrap modularly. For extents <= 2*ATTN_WINDOW+1 every source cell is scanned,
+# so synth-scale results have no window truncation at all.
+def attn_gather_toroidal(
+    weights: UnsafePointer[Float32, MutAnyOrigin],
+    trel_r: Float32,
+    trel_c: Float32,
+    kr: Float32,
+    kc: Float32,
+    inp: ArcGrid,
+    out_rows: Int,
+    out_cols: Int,
+    dst: UnsafePointer[Float32, MutAnyOrigin],
+):
+    var m00 = weights[ATTN_M_OFF + 0]
+    var m01 = weights[ATTN_M_OFF + 1]
+    var m10 = weights[ATTN_M_OFF + 2]
+    var m11 = weights[ATTN_M_OFF + 3]
+    var t_r = weights[ATTN_T_OFF + 0]
+    var t_c = weights[ATTN_T_OFF + 1]
+    var beta_raw = weights[ATTN_BETA_OFF]
+    var beta = beta_raw * beta_raw
+    var rows = inp.rows
+    var cols = inp.cols
+    var frows = Float32(rows)
+    var fcols = Float32(cols)
+    var cr = Float32(rows - 1) * Float32(0.5)
+    var cc = Float32(cols - 1) * Float32(0.5)
+    var cr_out = Float32(out_rows - 1) * Float32(0.5)
+    var cc_out = Float32(out_cols - 1) * Float32(0.5)
+
+    # Query normalization by the shape-rule slope (see the header).
+    var inv_kr = Float32(1.0)
+    if kr > Float32(1.0e-3):
+        inv_kr = 1.0 / kr
+    var inv_kc = Float32(1.0)
+    if kc > Float32(1.0e-3):
+        inv_kc = 1.0 / kc
+
+    # Window span, capped at the torus period per axis (see the header).
+    var span_r = 2 * ATTN_WINDOW + 1
+    if span_r > rows:
+        span_r = rows
+    var span_c = 2 * ATTN_WINDOW + 1
+    if span_c > cols:
+        span_c = cols
+
+    for r in range(out_rows):
+        var vr = (Float32(r) - cr_out) * inv_kr
+        for c in range(out_cols):
+            var vc = (Float32(c) - cc_out) * inv_kc
+            # q = M*v + t + trel*extent, in the input's centred frame.
+            var qr = fma(m00, vr, fma(m01, vc, t_r)) + trel_r * frows
+            var qc = fma(m10, vr, fma(m11, vc, t_c)) + trel_c * fcols
+
+            # Window start: centre the span on q's wrapped source index.
+            var ctr_r = Int(round(qr + cr)) % rows
+            if ctr_r < 0:
+                ctr_r += rows
+            var ctr_c = Int(round(qc + cc)) % cols
+            if ctr_c < 0:
+                ctr_c += cols
+            var r0 = ctr_r - ATTN_WINDOW
+            var c0 = ctr_c - ATTN_WINDOW
+
+            # Pass 1: max score over the wrapped window (numerical stability).
+            var max_score = Float32(-1.0e30)
+            for kr in range(span_r):
+                var rj = (r0 + kr) % rows
+                if rj < 0:
+                    rj += rows
+                var dvr = qr - (Float32(rj) - cr)
+                dvr -= frows * round(dvr / frows)
+                var dvr2 = dvr * dvr
+                for kc in range(span_c):
+                    var cj = (c0 + kc) % cols
+                    if cj < 0:
+                        cj += cols
+                    var dvc = qc - (Float32(cj) - cc)
+                    dvc -= fcols * round(dvc / fcols)
+                    var score = -beta * (dvr2 + dvc * dvc)
+                    if score > max_score:
+                        max_score = score
+
+            # Pass 2: softmax-weighted gather (streaming, no per-cell buffer).
+            var z = Float32(0.0)
+            var s = Float32(0.0)
+            for kr in range(span_r):
+                var rj = (r0 + kr) % rows
+                if rj < 0:
+                    rj += rows
+                var dvr = qr - (Float32(rj) - cr)
+                dvr -= frows * round(dvr / frows)
+                var dvr2 = dvr * dvr
+                for kc in range(span_c):
+                    var cj = (c0 + kc) % cols
+                    if cj < 0:
+                        cj += cols
+                    var dvc = qc - (Float32(cj) - cc)
+                    dvc -= fcols * round(dvc / fcols)
+                    var score = -beta * (dvr2 + dvc * dvc)
+                    var w = exp(score - max_score)
+                    z += w
+                    s = fma(w, inp.data[rj * cols + cj], s)
+            dst[r * out_cols + c] = s / z

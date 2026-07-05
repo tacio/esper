@@ -956,3 +956,323 @@ fought). **d511f180 — the block's real-corpus exhibit — recovered: held-out 
 v2 corpus budget (was 0.75/0.80; M8's full-budget ES-fit LUT had solved it, the un-hardened write
 had lost it). `test_few_demo` (full tier, ~63s) locks the bars: n=3 aggregate ≥0.85 (measured 0.87;
 pre-hardening 0.74), n=8 per-family ≥0.95.
+
+---
+
+## 2026-07-03 13:12 — Shape change: the output-size seam + first shape-change family (Vision A, Next #1)
+
+The roadmap's Next #1, and the binding constraint the 07-03 re-measure named: 32% of both corpus
+splits change shape (out dims ≠ in dims), and the whole engine was hard-wired same-shape — every
+memory's `apply` wrote exactly `inp.rows × inp.cols` cells, `fitness[M]` slammed `-1e9` on any demo
+with `in_n ≠ out_n`, and `arc_solve` scored shape-changing pairs 0. Output shape was never even
+*represented* as a quantity distinct from the input. This block builds the reusable seam and proves
+one shape-change family cold.
+
+**Why a new trait, not an extension of `Memory`.** A same-shape `Memory.apply(weights, inp, dst)`
+has no place to learn a different output size, and giving all 10+ existing memories an output-shape
+method (defaulting to input shape) would churn every one and reintroduce the OOB the `-1e9` guard
+exists to prevent. So `ShapeMemory` is a distinct trait (parallel to `SelfModMemory`, the B4
+precedent): `write(state, demos)` infers the shape rule closed-form, `out_rows`/`out_cols` predict
+the output dims, and `apply(state, inp, out_rows, out_cols, dst)` produces that many cells. The
+same-shape core and every existing memory are untouched; the shape-aware fitness/fit driver is a
+generic `[M: ShapeMemory]` sibling. Additive, zero regressions.
+
+**Why the composition pattern again.** A shape-change task factors — like block 5 and the
+content×geometry block — into two factors fit on signals invariant to each other:
+1. a **shape rule** `out = round(k·in + b)` per axis, WRITTEN closed-form by least-squares over the
+   demo dim-pairs (position-free shape arithmetic, no geometry knowledge, one pass, never
+   ES-searched); and
+2. the **content** — the *proven* AttnGather gather, generalized so its query grid is the OUTPUT grid
+   and it reads the INPUT grid. `M=I` reads a centred crop, `M=sI` a subsample, `M=±perm` a
+   flip/transpose within the resize. ES-fit over the same 7 attention params, on the same B3
+   landscape, only reading a differently-sized output.
+
+**Why an output-shaped gather is a one-variable change.** `AttnGatherMemory.apply` already loops the
+query over the grid centred on `inp` and gathers from `inp`. Decoupling the *query* extent/centre
+(now the output's) from the *source* extent/centre (still the input's) — plus the output stride on
+`dst` — is the whole mechanism. For out==in it reduces to the old code bit-identically, so the new
+`apply_shaped` is what `apply` now delegates to; `test_attn_memory`/the fast gate stay 1.0 unchanged.
+
+**Why the demos must vary input size.** With one input size the shape rule's slope/intercept are
+underdetermined (only their combination at that size is pinned) — the honest analogue of the n=2
+signature ties. So the proof draws each demo (and the held-out test) at a RANDOM size in [4,8]:
+`≥2` distinct sizes identify `(k,b)`, and the fresh-size test is an uncheatable probe that the *rule*
+generalizes, not a memorized size. The least-squares fallback (mean ratio, b=0) keeps the write exact
+at a fixed size for the underdetermined case; documented, not fought.
+
+**Where the ES search lands.** `fill_scale` zeros the shape-rule slots (the GeomColor freeze trick),
+so the ES moves only the 7 attention params; the written shape rule rides along frozen. `fitness_shape`
+scores at the OUTPUT area and heavy-penalizes a predicted-shape/true-shape area mismatch (the honest
+successor to the same-shape guard — a wrong shape rule can't be rescued by content). The L2 anchor's
+frozen-slot terms cancel in the antithetic F+−F−, so only content feels it. `fit_shape` is a
+self-contained annealed ES (its own scratch, sized to output capacity, like `meta_fit_selfmod`);
+`fit_shape_geom` is the per-task driver (write → fit, constant-compute budgeted).
+
+**Result — `test_shape_change` (full tier), cold, held-out at a fresh size:**
+- Ckpt A: the least-squares write recovers crop1's `(k=1, b=−2)` per axis exactly.
+- Ckpt B: `{crop1, flip_h_crop1, subsample2}` each **held-out 1.0**, per-task cold — including
+  subsample2, where the ES had to find `M=2I, t=(−0.5,−0.5)` (a 2× scale-up) from the identity seed.
+- Control: the SAME content fit WITHOUT the shape write (identity shape rule) predicts the wrong
+  output size on every pair → **held-out 0.0** — the inferred shape rule is load-bearing, not
+  scaffolding.
+- Fast gate + `mojo format` clean; same-shape numbers unchanged (bit-identical gather).
+
+Synth side: `SHAPE_TRANSFORMS` (crop1, flip_h_crop1, subsample2) + `generate_shape_task_groups`
+(varies input size across a task's demos); `corpus_stats` reports the emitted bundles as 0% same-shape
+(the `.task` format already self-describes per-grid dims — the seam was always consumer-side).
+
+**Deferred (documented):** upscale/tiling (need a floor/modular gather — a follow-on family on this
+same seam; the affine gather provably can't express blocky replication); wiring `arc_solve --report`
+to score the real 32% (follow-on — keeps this a clean synth proof); colour composition on top of shape
+(a `write_color` pre-map, which commutes cellwise). Latent same-shape assumptions in
+`_selfmod_meta_fitness` and the selfmod-grid `adapt` output reads are left as-is (those stay same-shape
+families). Base for the next entry: 0e138cf.
+
+## 2026-07-03 17:12 — Re-ran the real ARC-AGI-2 public-eval split (120 tasks), 6 workers, budget 64/1500
+
+Re-measured `arc_solve --report` against `data_bin/arc2_eval` (`eval_parallel.sh data_bin/arc2_eval
+scratch/arc2_eval_results.txt 6 64 1500`) at the documented corpus budget, same as every prior
+real-corpus number. `arc_solve.mojo` still fits `GeomColorComposedMemory` only (block 5) — the
+shape-change seam (`ShapeGeomComposedMemory`/`fit_shape_geom`, landed this session) is **not yet
+wired into `arc_solve`** (a documented deferral), so this run is a direct like-for-like comparison to
+the prior eval-split baseline, not a measurement of the shape work.
+
+**Result:** `Solved 0 / 120 (solve rate: 0.000%, mean held-out: 0.387962)`, scored in 8204s (~137 min
+wall on 6 workers — noticeably slower than the ~56 min a prior run logged at the same budget; the
+machine had only ~1-3GB free RAM for most of the run, so this looks like memory-pressure/swap
+slowdown, not a change in per-task cost).
+
+Mean held-out **0.388** vs the last-logged eval-split number of **0.319** (both 0/120 exact-solved —
+the corpus's genuine shape-changing/multi-rule tasks are still out of reach without the shape seam
+wired in). The improvement is consistent with noise across the run-to-run seeded ES stochasticity
+already documented for these composed memories) rather than a code change on the eval path — no
+`arc_solve`/`memory_composed` edits landed between the two measurements. Exact-solve stays 0 because
+the composed memory is still same-shape-only on this driver; the shape-change seam is the natural next
+rung to wire in before the number can move on the ~32% shape-changing slice this run still can't touch.
+
+Raw dump: `scratch/arc2_eval_results.txt` (gitignored, reproducible per-task via the per-task RNG
+seed).
+
+## 2026-07-04 07:40 — Upscale/tiling: the output-GROWING families land (Next #1 rung a) — via a measured grid of 12 configurations
+
+The roadmap's shape rung (a): outputs LARGER than the input — blocky upscale (each cell → an s×s
+block) and tiling (the grid replicated k×k). The shape rules (k=s, b=0) were already covered by the
+least-squares shape write; the whole battle was the CONTENT gather. This block took ~12 measured
+fit-configurations to land honestly; the failures fixed the design, so they're recorded.
+
+**Correction to the last entry's claim.** "The affine gather provably can't express blocky
+replication" is WRONG for upscale: `floor(r/s) = round((r−(s−1)/2)/s)` is an exact identity with no
+ties, so nearest-cell reading of an affine map expresses blocky upscale exactly (probe-verified:
+hand-set `M = I/s` scores 1.0 at sharp temperature, both parities, s∈{2,3}). What is genuinely
+outside any affine `(M, t)` is TILING — `out[r] = in[r mod n]` is a sawtooth. And even for upscale
+the EXPRESSIBILITY was never the issue — the FIT was.
+
+**The mechanism (memory side).** `attn_gather_toroidal` (memory_es) — the output-shaped AttnGather
+read with three additions, used by `ShapeGeomComposedMemory.apply`:
+1. **Toroidal source**: per-axis displacements wrap into (−extent/2, extent/2], so a query past the
+   edge reads the input's periodic image — tiling's sawtooth is the nearest WRAPPED cell of an
+   affine map. A substrate choice (precedent: the selfmod-grid memories' toroidal neighbourhoods),
+   not a task primitive. Window span capped at the torus period (else a cell is scanned twice).
+2. **Extent-relative translation** `trel` (2 new slots, SHAPEGEOM_DIM 11→13): the centred frames
+   leave tiling with a size-dependent phase (n/2 for k=2) that no constant t can cancel across
+   varying demo sizes; `q += trel·extent` absorbs it with one size-free parameter.
+3. **Query normalization by the WRITTEN shape slope** (`v_out/k`): resize-as-identity. Without it a
+   resize family's `M = 1/k` and its exactness tolerance shrinks with the output extent (upscale-2's
+   m11 needed ±0.045 — under the ES's settling noise at any workable sigma; measured: fits parked at
+   0.554, the plateau EDGE, four runs in a row). Normalized, `M = I` IS every pure resize and all
+   tolerances are size-free. The shape factor informing the content factor's coordinate frame is the
+   composition pattern once more.
+
+**The fit (driver side) — what the 12 configs taught.** The permutation families read at integer
+positions (temperature-insensitive); upscale reads at ±1/4 offsets and NEEDS a sharp read. The
+failure grid, each cell measured (fit_shape_geom):
+- Temperature SEARCHED (any seed, any preconditioner): the ES drives it SOFT — it optimizes the
+  Gaussian-smoothed objective, where a soft read is robust to the sampler's own jitter. Geometry
+  converges exactly; the read blurs; held-out ~0.12. Seeded sharp (raw 3.0) it re-softens to 1.4.
+- Temperature ANNEALED up mid-fit (soft→sharp alongside sigma/alpha, wide or narrow): the staircase
+  landscape + shrinking sigma = a noise walk; the geometry itself diverges (t drifted to ±1.5).
+- Temperature FROZEN sharp, sigma annealed to 0.01/0.05: below the staircase's ~0.25 step scale the
+  antithetic differences are almost always zero — divergence (M diag hit 2.24).
+- Temperature FROZEN sharp, sigma floored at 0.15 (the step scale): tile2 1.0/1.0 — the DISCRETE
+  regime works when the ES is run as the stochastic hill-climber it then is. But upscale parked at
+  the plateau edge (its pre-normalization tolerance was under the floor), and one seed frame cannot
+  serve both families (below).
+- An L2-anchor-parks-at-plateau-edge hypothesis was falsified cleanly (reg=0 reproduced the same
+  trajectory to 5 decimals — the 1e-4 anchor is ~2e-6 in fitness, negligible).
+**Two identity frames.** With the normalized query, upscale's solution is the SEED (`M = I`) — and
+tiling's moved to `M = kI, trel = (k−1)/2` (corner-aligned periodic read), one unit of travel away;
+fits from the wrong frame reliably fall into a degenerate constant-read basin (measured both
+directions: whichever family's solution is at the seed solves, the other collapses). A k-fold size
+change simply HAS two canonical identity continuations — the rescaled plane and the periodic plane —
+both derivable from the WRITTEN slope. So `fit_shape_geom` runs the SAME TWO cold starts for every
+task, each DISCOVER (wide soft anneal, temperature searched — the proven-smooth landscape) then
+SETTLE (temperature hard-frozen at `SHAPE_BETA_READ` via `ShapeGeomSettleMemory` — fill_scale is
+static per type, so the phase difference is a thin delegating type — sigma HELD at the 0.15 step
+floor where the plateau-edge gradient stays alive, alpha decayed: measured to centre t/trel to
+~0.01), inside the same total budget (half each), winner by demo fitness at the hard read.
+An honest multi-start — selection by the task's own train signal; no task-specific staging anywhere.
+`trel` gets a small ES scale (0.2): it multiplies the extent, and the frame seeds already place it
+at its solution — refinement only.
+
+**Result — `test_shape_change` (full tier, 4m48s):** all five families cold, held-out at fresh
+sizes: crop1 **1.0**, flip_h_crop1 **1.0** (the real-travel case, still discovered at the halved
+per-start budget), subsample2 **1.0**, upscale2 **0.98**, tile2 **1.0**. Controls: tile2 through the
+PLAIN gather **0.14** (the toroidal wrap is load-bearing); no-shape-write **0.0** (unchanged). The
+experiment battery's final config: upscale2 1.0/1.0 (M≈I, |t|,|trel| ≤ 0.02), tile2 1.0/1.0
+(M≈2I, trel = 0.4998 — the settle phase centres to ~3 decimal places).
+
+Synth: `upscale2`/`tile2` added to `SHAPE_TRANSFORMS`. The doubling families' test dims are [3,6]
+(outputs ≤ 12×12) to keep the full-budget fit cheap; identifiability (≥2 distinct sizes) unchanged.
+
+**Deferred (documented):** non-uniform factors (upscale3, tile3 — expected free: seed B's
+trel = (k−1)/2 is exact for every k, `1 ≡ 0 (mod 1)` for k=3); mirror-tilings (sign flips near seed
+B); wiring `arc_solve --report` (rung b — the user wants BOTH corpus splits re-measured when it
+lands); colour on top of shape (rung c).
+
+## 2026-07-04 11:54 — Rung (b): the shape seam wired into arc_solve; real ARC-AGI-2 v3 measure
+
+`arc_solve.mojo` now DISPATCHES per task on a closed-form observable of the demos: any train pair
+whose dims differ → `ShapeGeomComposedMemory` via `fit_shape_geom` (the rung-(a) two-frame
+multi-start); all-same-dims → the unchanged `GeomColorComposedMemory` path (byte-identical for the
+same-shape 68%). This is driver-level routing, not a runtime memory-selector — the same-shape
+memory PROVABLY scores 0 on the dispatched class, so nothing is being "chosen" that the data
+doesn't force. Shape-path scoring: the memory predicts its own output dims from the written rule;
+a predicted/true dims mismatch scores that pair 0 (never applied — no OOB). The old
+skip-if-every-test-shape-changes shortcut survives only for same-shape-dispatched tasks (where it
+remains exact). Each per-task line now carries a trailing `mem: same|shape` marker (appended after
+the existing fields — `eval_parallel.sh` reads held-out positionally), giving corpus breakdowns for
+free. CI: the full tier's arc_solve leg adds one crop1 shape bundle (fast gate unchanged, ~2 min).
+Smoke proof: mixed synth dir {flip_h, crop1, upscale2} → 3/3 solved, markers correct.
+
+**Eval split v3** (`eval_parallel.sh data_bin/arc2_eval scratch/arc2_eval_v3.txt 10 64 1500`,
+10 workers, 11197s): **0 / 120 solved, mean held-out 0.404** (v2: 0.388). Breakdown from the
+markers: 39/120 tasks dispatched shape (32.5% — matches corpus_stats exactly); their mean held-out
+is **0.054, 0 solved** — the honest first number on the previously-untouchable slice. The
+like-for-like control holds: the 81 same-shape tasks mean 0.572 vs v2's implied 0.575 (seeded-ES
+noise) — the wiring changed nothing on the same-shape path. Top shape near-misses: 136b0064 (0.66,
+gap 0.03) and eee78d87 (0.61) — right predicted dims, partial content. The verdict matches the
+rung's documented limits: real eval-split shape tasks overwhelmingly have CONTENT-dependent output
+sizes (outside the affine-in-dims rule) or need colour on top of shape (rung c) — the seam is
+measured, the expressiveness gaps are now named and quantified.
+
+**Train split v3** (same harness/budget, 10 workers, 38808s ≈ 10.8h): **22 / 1000 solved (2.2%),
+mean held-out 0.501** — more than DOUBLE v2's 10/1000. The marker breakdown decomposes the gain
+exactly:
+- **shape-dispatched: 320/1000 (32%), 9 solved, mean 0.239** — the first real-ARC shape-changing
+  solves ever (v2 scored this whole slice 0 by construction): 2dee498d, 60c09cac, 68b67ca3,
+  8597cfd7, 8d5021e8, 963e52fc, a416b8f3, be03b35f, c59eb873. Near-misses at 0.89 (53b68214,
+  2dc579da). Train's shape slice scores far above eval's (0.239 vs 0.054) — smaller grids, more
+  affine-in-dims size rules.
+- **same-shape: 680/1000, 13 solved, mean 0.625** — net +3 vs v2's 10. Not from this rung: the
+  same-shape path is byte-identical here; the delta is the **few-demo hardening** (0e138cf), which
+  landed AFTER the v2 measure and is corpus-measured for the first time now: +5 new solves
+  (3c9b0459, 5582e5ca, 74dd1130, 9dfd6313, and its designed exhibit **d511f180 — solved at corpus
+  budget, as the block predicted**), −2 lost (b1948b0a 0.94, ed36ccf7 0.78 — the identity-on-tie
+  convention's documented trade).
+
+Raw dumps: `scratch/arc2_eval_v3.txt` / `scratch/arc2_train_v3.txt` (gitignored; per-task
+reproducible via SOLVE_SEED). The v3 verdict for the roadmap: the shape seam is now measurable and
+productive on the real corpus (train), and the eval split's shape slice names rung (c) — colour on
+top of shape — plus content-dependent output sizes as the binding constraints there.
+
+## 2026-07-04 23:40 — v3 diagnostic breakdown → the expressiveness rung plan (ROADMAP "Next" rewritten)
+
+Mined the v3 dumps (`scratch/arc2_{train,eval}_v3.txt`, per-task lines with `mem:` markers; all
+numbers below reproducible with awk over held-out = field 4, train-fit = field 6) to rank the next
+expressiveness rungs on evidence rather than intuition:
+
+**Train same-shape (680):** 13 solved | **88 near-misses at held-out 0.90–0.99, mean train-fit
+0.93** (fail on a FEW cells — the biggest shallow-headroom pool) | 238 at 0.7–0.9 | 146 at <0.4
+with mean train-fit **0.34** — the deep floor: these can't even fit their demos (multi-step /
+object-level rules; CMS-chain territory).
+**Train shape (320):** 9 solved | quadrants: only 3 tasks are train-high/held-low (what the memory
+expresses, it generalizes — again) | **107 with train-fit ≥0.5** (dims + most content fit —
+convertible by better content, i.e. colour-on-shape) | **63 with train-fit exactly 0.0** — the
+affine-in-dims rule fits NO demo: content-dependent output sizes.
+**Eval shape (39):** 19/39 in that dims-never-fit class, 14 partial, 6 with train-fit ≥0.5 —
+content-dependent sizes DOMINATE eval's shape slice.
+
+The ROADMAP "Next" section is rewritten as the evidence-ranked rung ladder, each with its
+research/implementation split and named blocker: **C** colour-on-shape (kernel: count signatures
+aren't conserved under shape change; validate area-ratio normalization, measure crop's border-loss
+robustness at n=3; fallback = correspondence write after a geometry prefit), **S** shape-from-
+content (shape WRITE over a small content-statistic basis, residual-selected — bbox-crop the
+headline class; audit the 63 ids first), **A** the near-miss audit (measure-first; leading
+candidate a self-written mask/gate), **D** k=3/mirror-tiling cheap extensions, **CMS** the depth
+chain (expect a wall past depth 2 — literature pass planned at it), with the **GPU gate** as an
+explicit zero-capability infrastructure block scheduled immediately before CMS: CPU suffices
+through C/S/A/D; the blocker is the `mojo==1.0.0b2` pin (no `gpu` package — MAX migration, all
+proof numbers re-proven), not kernel design (the ES is embarrassingly parallel; ~10–30×/fit
+realistic).
+
+Overall split: roughly half research, but each rung's research kernel is ONE identifiable question
+— the pattern of the last three landed blocks. No engine code in this entry; next session starts
+Rung C.
+
+## 2026-07-05 — Rung C: colour on top of shape (ShapeGeomColorComposedMemory)
+
+The top-ranked expressiveness rung. The shape path (`ShapeGeomComposedMemory`) expressed
+shape+geometry but had NO colour remapping, so the ~107 convertible train-shape tasks (train-fit
+≥0.5, "dims + most content fit") plus eval analogues lost the recolored cells. Rung C composes a
+written colour table V on top — the block-5 recipe's THIRD application (after GeomColor, GeomCount):
+`out = shape_geom_gather(V(in))`. Colour is cellwise, so it commutes with the copy gather
+(colour-then-gather); V is written closed-form, then the unchanged two-frame `fit_shape_geom` runs
+on V-pre-mapped demos (the geometry search never sees V — exactly how `fit_geomcolor` reuses
+`fit_operator[AttnGatherMemory]`).
+
+**New surface (all additive; the same-shape core and every existing memory untouched):**
+`ShapeGeomColorComposedMemory` (a thin ShapeMemory wrapper: prefix `[0:SHAPEGEOM_DIM]` the
+shape+geometry state, suffix `[+COLOR_DIM]` the written V; `apply` = the toroidal shape gather then a
+hard V-lookup; `fill_scale` freezes V), `write_color_shaped`, and the `fit_shape_color` driver.
+`arc_solve` routes the shape-dispatch branch through it; V=identity makes it byte-identical to the
+old shape path. Synth `recolor_{crop1,subsample2,upscale2,tile2}` families + `tests/test_shape_color`.
+
+**Research kernel #1 — the count-signature write breaks under shape change.** `write_color`
+matches per-colour COUNT vectors, assuming count CONSERVATION; shape change breaks it (upscale/tile
+multiply every count by the area ratio kr·kc EXACTLY; crop/subsample scale it approximately —
+crop drops a colour-dependent border). Fix: normalize each demo's histogram to FRACTIONS (÷ cell
+total) before the mismatch — scale-invariant, so `frac_in[c]` matches `frac_out[V(c)]` under any
+proportion-preserving resize. Exact for upscale/tile; robust for crop/subsample.
+
+**Research kernel #2 — the write needs colour-count CONTRAST (measured).** The fraction match
+identifies a permutation only when colours have DISTINGUISHABLE frequencies. Under EXACT same-shape
+conservation (GeomColor) even a uniform-random grid's tiny fluctuations match exactly; shape change
+is LOSSY, so the signal must be REAL contrast — which real ARC grids have (background + sparse
+objects, very different counts) and uniform-random grids lack. First measured exhibit:
+`recolor_crop1` Ckpt A missed 5/10 colours on uniform grids, recovered fully once grids were drawn
+from a per-task palette of distinct frequencies (real-ARC-like). The uniform-crop ceiling is kept
+as a control (6/10 missed — the precondition is load-bearing, documented not fought).
+
+**The strict-superset trap (found via the arc_solve smoke, fixed).** A pure-shape crop task on
+UNIFORM grids has no recolor, but the greedy-injective assignment overfits the border-loss noise and
+writes a SCRAMBLED V — regressing pure-shape crop from held-out 1.0 to 0.17 (diagnostic:
+`V=[6 1 2 4 4 5 6 7 8 3]` instead of identity). Since real corpus shape tasks are overwhelmingly
+pure-shape, this would have silently regressed the v3 shape slice. Fix, MEASURED not guessed:
+keep `write_color`'s complete greedy-injective matching (full recolor recovery) but add a GLOBAL
+ACCEPTANCE GATE — accept the whole map only if its total fraction-mismatch `R_assign < 0.4·R_id`
+(the identity assignment's total). A forced injective permutation on a task with NO recolor has a
+HIGH residual (measured greedy R_assign/R_id **0.82–1.35** on uniform pure crop across 7 seeds —
+forcing a permutation *costs*); a genuine recolor's true permutation has a LOW one (**0.15**
+palette crop, **~0** exact-conservation upscale/tile). The 0.4 gate sits wide in that gap
+(insensitive across [0.3, 0.55]; real-ARC contrast pushes recolor toward 0). A GLOBAL ratio, not
+per-colour — noise averages out (a per-colour 0.5 gate failed: min-over-targets is systematically
+below identity on pure noise; and a MUTUAL-best assignment protected pure-shape but under-recovered
+recolor, 0.875 — the greedy complete matching is what recovers all colours). `test_shape_color`
+guards this: a pure UNIFORM crop1 must keep V=identity AND held-out ≥0.95.
+
+**Also measured:** subsample-recolor needs adequate output cells (a 2×2 subsampled output starves
+the low-frequency colours) — synth subsample dims lifted to {8,10,12}. Real-ARC subsample tasks
+aren't 4×4; the identifiability precondition, not a fudge.
+
+**Result — `test_shape_color` (full tier, cold, held-out at FRESH sizes):**
+`recolor_{crop1,subsample2,upscale2,tile2}` each **1.0**; colour-ablation (V=identity) **0.0** (the
+colour module is load-bearing); pure tile2 through the colour memory **1.0** and pure uniform crop1
+**1.0 with V=identity** (the strict superset); few-demo n=3 (corpus median) **0.998**; ceiling
+control (uniform crop, no contrast) 6/10 colours missed. arc_solve smoke {flip_h, crop1,
+recolor_crop1}: flip_h 1.0 (same-shape, byte-identical), crop1 1.0 (pure shape preserved),
+recolor_crop1 0.28 (synth uses uniform grids = the documented no-contrast ceiling). CI's full-tier
+arc_solve leg adds a `recolor_crop1` bundle so the `fit_shape_color` path runs end-to-end.
+
+The composition pattern lands a third time; the fraction-signature write + the measured contrast
+precondition + the global recolor gate are the new, reusable pieces. Corpus v4 re-measure
+(both splits, documented budget) is the separate overnight trigger, deferred by scope.

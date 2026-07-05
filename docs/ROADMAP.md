@@ -44,9 +44,10 @@ learns both *what* to think and, eventually, *how* to learn.
 
 - **Vision A — ARC-AGI 2 (current, active).** Raw held-out solve rate on the real ARC-AGI-2 corpus
   (`arc_solve --report`) via composable, emergent, self-modifying memories fit in-context by ES —
-  currently **10/1000 (train) / 0/120 (eval)** at the v2 emergent-composed-memory measure (the M8
-  operator ceiling was 5/1000). See "Next — the path to full ARC-AGI 2" below
-  for the measurable rungs. Still hands the engine *goals* (a task's demonstration pairs are
+  currently **22/1000 (train) / 0/120 (eval)** at the v3 measure (shape seam wired: 9 shape-changing
+  solves + few-demo hardening's +3; v2 was 10/1000, the M8 operator ceiling 5/1000); Rung C
+  (colour-on-shape) is synth-proven and wired, its corpus **v4** re-measure the next overnight
+  trigger. See "Next — the path to full ARC-AGI 2" below for the measurable rungs. Still hands the engine *goals* (a task's demonstration pairs are
   compressed supervision) even though it never hands it a DSL.
 - **Vision B — open-ended mastery (WIP — not yet started, no design work done).** Inspired by
   Random Network Distillation, open-endedness, and unsupervised RL: an agent that masters its
@@ -245,6 +246,58 @@ Concise, milestone-level; each links to `docs/JOURNAL.md` for the full narrative
   **d511f180 recovered to held-out 1.0** at the corpus budget. n=2's remaining failures are
   measured UNDERDETERMINATION (exact signature ties — unknowable), documented not fought.
   (JOURNAL 2026-07-03 08:31.)
+- **Shape change — the output-size seam + first family (Next #1, in progress).** The engine was
+  hard-wired same-shape (every `apply` wrote input-shape cells; `fitness` penalized `in_n ≠ out_n`);
+  output shape was never a represented quantity. New **`ShapeMemory` trait** (parallel to
+  `SelfModMemory`, so the same-shape core and all existing memories are untouched): the output shape
+  is INFERRED IN-CONTEXT — a per-axis affine `out = round(k·in + b)` WRITTEN closed-form by
+  least-squares over the demo dim-pairs — and produced by the proven AttnGather gather, generalized
+  so its query grid is the OUTPUT grid and it reads the INPUT grid (`apply_shaped`; same-shape path
+  bit-identical). The shape rule is frozen (`fill_scale`=0) so the ES still fits only the 7 attention
+  params, on the B3 landscape. `fitness_shape`/`fit_shape`/`fit_shape_geom` are the shape-aware
+  generic sibling of the ES core. Proof (`test_shape_change`, cold, held-out at a FRESH input size —
+  demos drawn at varying sizes so the rule is identifiable, not memorized): `{crop1, flip_h_crop1,
+  subsample2}` each **held-out 1.0** (subsample2 needed `M=2I`, a 2× scale-up, found cold); shape-
+  ablation control (no write) **0.0** — the inferred shape rule is load-bearing. Synth
+  `SHAPE_TRANSFORMS` + `generate_shape_task_groups` (varies demo sizes). **Deferred to follow-on
+  rungs on this same seam:** upscale/tiling (need a floor/modular gather), wiring `arc_solve --report`
+  to score the real 32%, and colour composition on top of shape. (JOURNAL 2026-07-03 13:12.)
+- **Upscale/tiling — the output-growing shape families (Next #1 rung a).** Correction en route: the
+  affine gather DOES express blocky upscale exactly (`floor(r/s) = round((r−(s−1)/2)/s)`, no ties) —
+  only tiling's sawtooth `r mod n` is provably outside it. The mechanism: a **toroidal** output-shaped
+  gather (wrapped source images — substrate, not primitive), an **extent-relative translation** trel
+  (absorbs tiling's size-dependent phase), and the query **normalized by the written shape slope**
+  (resize-as-identity: content never re-learns the scale the shape rule knows; tolerances size-free).
+  The fit, fixed by a measured grid of ~12 failed configs: a k-fold size change has **two canonical
+  identity frames** (rescaled plane `M=I`; periodic plane `M=kI, trel=(k−1)/2`), so `fit_shape_geom`
+  runs the same two cold starts per task — each DISCOVER (soft, temperature searched) then SETTLE
+  (hard-frozen read, sigma held at the sharp landscape's staircase step scale, alpha decayed) —
+  winner by demo fitness: an honest multi-start, never task staging. Whole family cold, held-out at
+  fresh sizes: crop1/flip_h_crop1/subsample2/tile2 **1.0**, upscale2 **0.98**; controls: plain
+  (non-toroidal) gather fails tile2 (0.14), no-shape-write 0.0. (JOURNAL 2026-07-04 07:40.)
+- **Rung (b) — shape seam wired into `arc_solve`; real ARC-AGI-2 v3 measure.** Driver-level dispatch
+  on the demos (any train pair's dims differ → the shape memory; the alternative provably scores 0,
+  so it is not a memory-selector), shape-path scoring off the predicted dims, `mem:` markers for
+  free corpus breakdowns. **Train 22/1000 (v2: 10)** — 9 shape-changing solves (a slice that was 0
+  by construction) + the few-demo hardening's net +3 (its exhibit d511f180 solved at corpus budget,
+  as designed; 2 documented tie-convention losses). **Eval 0/120**, mean 0.404 (v2 0.388): the
+  39-task shape slice scores 0.054 — content-dependent output sizes and missing colour-on-shape
+  (rung c) are the named, quantified constraints there. Same-shape subset bit-consistent with v2
+  (the wiring is regression-free). (JOURNAL 2026-07-04 11:54.)
+- **Rung C — colour on top of shape (`ShapeGeomColorComposedMemory`).** The composition pattern's
+  THIRD application: a written colour table V on top of the shape+geometry gather
+  (`out = shape_geom_gather(V(in))`), fit by the unchanged two-frame `fit_shape_geom` on
+  V-pre-mapped demos. Research kernel: count conservation breaks under shape change, so V is written
+  from FRACTION signatures (scale-invariant — exact for upscale/tile, robust for crop/subsample),
+  which need real colour-count CONTRAST (uniform-random grids can't identify a recolor under a lossy
+  shape change; real ARC grids can — measured ceiling control). A strict-superset trap fixed: a
+  greedy write scrambles V on pure-shape low-contrast tasks (crop 1.0→0.17), so a MEASURED global
+  acceptance gate (`R_assign < 0.4·R_id`; measured gap: pure-shape 0.82–1.35 vs recolor 0.15/≈0)
+  keeps V=identity unless a recolor clearly explains the demos. `test_shape_color`: all four
+  `recolor_{crop1,subsample2,upscale2,tile2}` **held-out 1.0 cold at fresh sizes**, colour ablation
+  0.0, pure-shape (incl. uniform crop) V=identity 1.0, few-demo n=3 0.998. `arc_solve` shape path
+  routes through it (byte-identical for pure shape). **Corpus v4 re-measure deferred** (the separate
+  overnight trigger). (JOURNAL 2026-07-05.)
 
 ## Next — the path to full ARC-AGI 2 (Vision A)
 
@@ -252,19 +305,58 @@ Each is its own block, held to the **cold-fit bar** (a scaffolded pass is a nega
 emergent memories are each measured on the subset they express; the north-star metric is the raw
 held-out ARC-AGI-2 number.
 
-**Corpus funnel evidence** (2026-07-02, `tools/corpus_stats.py` — the facts the ordering below rests
-on): **68% of both splits are same-shape** (680/1000 train, 81/120 eval), so expressiveness — not
-shape — is the first binding constraint; median max-grid is **196 cells (train) / 525 (eval)** (ARC
-max 900), so real-grid scale is a *compute* constraint (hence the windowed gather and documented
-corpus fit-budgets); and **median 3 demos per task (min 2)** vs the synth suite's 8, so every
-in-context write rule must hold at 2–3 demonstrations.
+**Corpus funnel evidence** (2026-07-02, `tools/corpus_stats.py` — plus the 2026-07-05 v3 diagnostic
+breakdown, JOURNAL): **68% of both splits are same-shape** (680/1000 train, 81/120 eval); median
+max-grid is **196 cells (train) / 525 (eval)** (ARC max 900), so real-grid scale is a *compute*
+constraint (hence the windowed gather and documented corpus fit-budgets); **median 3 demos per task
+(min 2)** vs the synth suite's 8, so every in-context write rule must hold at 2–3 demonstrations.
+The v3 marker breakdown grounds the rung ranking below: train same-shape has **88 near-misses at
+held-out 0.90–0.99** (train-fit 0.93 — a few wrong cells) and **146 tasks at a deep floor**
+(held-out <0.4, train-fit 0.34 — can't even fit the demos); train shape has **107 tasks with
+train-fit ≥0.5** (convertible) and **63 where the affine dims rule fits NO demo**; eval's shape
+slice is dominated by that last class (19/39).
 
-1. **Shape change.** Handle outputs whose dims ≠ inputs — a Domain / output-size generalization
-   (the output shape itself must be *inferred in-context* from the demos, like any other rule
-   parameter — never a hand-coded size heuristic). Unlocks the excluded 32% of both splits.
-2. **Multi-block CMS chain** (NL §7). Stack memories at multiple update frequencies for multi-step /
-   object-level reasoning — the (now twice-proven) composition pattern chained in depth, not just in pairs.
-3. **Persistent slow weights + task-stream (continual meta-learning).** Stop re-seeding cold per
+1. **Rung C — colour on top of shape — DONE (synth-proven + wired; corpus v4 deferred).** Landed as
+   `ShapeGeomColorComposedMemory` (see "Status — done" above). The count-conservation kernel resolved
+   via scale-invariant FRACTION signatures (contrast-preconditioned) + a measured global recolor
+   acceptance gate that preserves the pure-shape strict superset. Remaining: the **corpus v4
+   re-measure** (both splits, documented budget — the separate overnight trigger) to book the shape-
+   slice gain on the ~107 convertible train tasks + eval analogues; and the crop-border-loss
+   correspondence-write fallback stays documented (not needed — fractions + contrast sufficed).
+2. **Rung S — shape-from-content** (~40% research / 60% implementation). The 63 train + 19 eval
+   tasks where NO affine-in-dims rule fits any demo: generalize the shape WRITE (not the gather) to
+   an affine rule over a small basis of per-demo content statistics — input dims,
+   non-background bounding-box dims (bbox-crop is a major ARC class), distinct-colour count — basis
+   selected by least-squares residual across demos (precedent: GeomCount's P-by-residual, block 4's
+   scoring salience; statistics are representational substrate, not task primitives). Research
+   part: the emergence-bar argument for the basis, identifiability at 2–3 demos (documented
+   underdetermination ceiling), background-colour inference. Audit the 63 task ids before coding.
+3. **Rung A — the same-shape near-miss audit** (measure-first). The 88 tasks at held-out 0.90–0.99
+   fail on a FEW cells: build a tools/ diagnostic that dumps predicted-vs-truth cell diffs for
+   those ids, clustered by pattern (global colour error vs localized region vs border), and let the
+   audit name the mechanism — leading candidate: a self-written content MASK/GATE (rule where mask,
+   identity elsewhere), also the first step toward content-gated composition. Do not design before
+   the audit; the long-tail hazard (fragmentation into many small classes) is what the audit
+   decides.
+4. **Rung D — small paid-for extensions** (pure implementation). k=3 factors and mirror-tilings
+   (near the periodic seed B on the two-frame seam); trivial finds from the audit.
+5. **Rung CMS — multi-block chain** (NL §7; mostly research). The deep floor (146 train same-shape
+   tasks at train-fit 0.34, most of eval): multi-step / object-level rules no single memory or pair
+   expresses — the (twice-proven) composition pattern chained in DEPTH (3+ stages, grid-in/grid-out
+   intermediates keep the Domain seam). Open questions: per-stage invariant-signal fitting past
+   depth 2 (no commuting factorization exists for arbitrary triples — expect a block-5-style wall
+   and plan the literature pass at it), and capacity control (the Schug guardrail).
+   **GPU gate (infrastructure block, scheduled immediately BEFORE this rung):** CPU is sufficient
+   through rungs C/S/A/D (synth proofs in minutes; corpus runs overnight at documented budgets) —
+   the CMS chain and the task-stream (#6) are the 10–100× compute jump. The ES inner loop is
+   embarrassingly parallel (2N samples × demos × cells × window per iteration; iterations
+   sequential, so per-launch latency is the kernel-design risk; realistic 10–30× per fit plus
+   task-level sharding). The REAL blocker is the toolchain: the pinned `mojo==1.0.0b2` slim wheel
+   has no `gpu` package — GPU means the MAX-platform migration off the hard pin, mechanical but
+   risky (API churn everywhere; proof numbers must be RE-PROVEN — bit-identity will not survive).
+   Do it as its own zero-new-capability block with full suite re-verification, never mid-research-
+   rung (a moving toolchain confounds negative results).
+6. **Persistent slow weights + task-stream (continual meta-learning).** Stop re-seeding cold per
    task: the engine processes a **stream** of tasks and its slow weights **persist**, Reptile-nudged
    after each in-context fit (M9's outer loop made continual — the prior is never reset). Measurable,
    in order of strength: (a) at a fixed *narrow* eval budget, solve rate / fit speed **improves with
@@ -274,7 +366,7 @@ in-context write rule must hold at 2–3 demonstrations.
    prior). Known hazard to design around (the M9 lesson: priors help within a *family*): a single
    flat prior across a heterogeneous stream washes out — the fix is per-family structure that is
    itself emergent (the Schug hypernetwork route, RESEARCH-NOTES #2: per-task code × shared
-   templates) and/or the CMS frequency hierarchy (#2), where slow blocks consolidate what fast
+   templates) and/or the CMS frequency hierarchy (#5), where slow blocks consolidate what fast
    blocks keep re-discovering. **Serves both visions**: on Vision A it is the meta-learned prior at
    corpus scale; it is also the tabled **first rung of Vision B** — the same persistence machinery,
    later driven by self-generated novelty instead of demonstration pairs.

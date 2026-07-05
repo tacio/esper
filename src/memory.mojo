@@ -85,3 +85,72 @@ trait SelfModMemory:
         dst: UnsafePointer[Float32, MutAnyOrigin],
     ):
         ...
+
+
+# ==========================================
+# Shape-changing memory trait (Vision A / Next #1 — the output-size seam)
+# ==========================================
+# Every Memory/SelfModMemory above is SAME-SHAPE: `apply` writes exactly
+# `inp` cells and the caller reads back `capacity(inp)` cells. A ShapeMemory
+# breaks that coupling — it produces an output whose shape DIFFERS from the
+# input, with the output shape itself INFERRED IN-CONTEXT from the demos (a rule
+# parameter like any other, never a hand-coded size heuristic). It factors, like
+# every composed memory (block 5), into two parts fit on signals invariant to
+# each other:
+#   * a SHAPE RULE written closed-form from the demos (`write`) — position-free
+#     shape arithmetic (in-dims -> out-dims), read back by `out_rows`/`out_cols`;
+#   * a CONTENT rule (the ES-fit params in `state`) that fills the predicted
+#     output grid via a gather from the input (`apply` takes the output dims).
+# A distinct trait (parallel to SelfModMemory) keeps the same-shape core and all
+# existing memories untouched: the shape-aware fitness/fit driver in
+# esper_evolution.mojo is generic `[M: ShapeMemory]`, and the seam is additive.
+# `param_dim`/`seed`/`fill_scale` mirror Memory (fill_scale ZEROS the written
+# shape-rule slots so the ES never moves them — the GeomColor freeze trick).
+trait ShapeMemory:
+    comptime Dom: Domain
+
+    @staticmethod
+    def param_dim() -> Int:
+        ...
+
+    @staticmethod
+    def seed(state: UnsafePointer[Float32, MutAnyOrigin]):
+        ...
+
+    @staticmethod
+    def fill_scale(scale: UnsafePointer[Float32, MutAnyOrigin], n: Int):
+        ...
+
+    # Write the closed-form factors (the shape rule) from the demos — one
+    # forward pass, never ES-searched.
+    @staticmethod
+    def write(
+        state: UnsafePointer[Float32, MutAnyOrigin],
+        demos: List[ExamplePair[Self.Dom.Example]],
+    ):
+        ...
+
+    # Predicted output dims for `inp` under the written shape rule.
+    @staticmethod
+    def out_rows(
+        state: UnsafePointer[Float32, MutAnyOrigin], inp: Self.Dom.Example
+    ) -> Int:
+        ...
+
+    @staticmethod
+    def out_cols(
+        state: UnsafePointer[Float32, MutAnyOrigin], inp: Self.Dom.Example
+    ) -> Int:
+        ...
+
+    # Produce an `out_rows * out_cols` output into `dst` (the output-shape-aware
+    # apply — the caller supplies the predicted output dims).
+    @staticmethod
+    def apply(
+        state: UnsafePointer[Float32, MutAnyOrigin],
+        inp: Self.Dom.Example,
+        out_rows: Int,
+        out_cols: Int,
+        dst: UnsafePointer[Float32, MutAnyOrigin],
+    ):
+        ...
