@@ -5,12 +5,12 @@ from std.random import seed
 from memory_composed import (
     GeomColorComposedMemory,
     GEOMCOLOR_DIM,
-    ShapeGeomComposedMemory,
-    SHAPEGEOM_DIM,
+    ShapeGeomColorComposedMemory,
+    SHAPEGEOMCOLOR_DIM,
 )
 from esper_evolution import (
     fit_geomcolor,
-    fit_shape_geom,
+    fit_shape_color,
     FIT_N,
     FIT_ALPHA0,
     FIT_ALPHA1,
@@ -33,11 +33,12 @@ from arc_io import load_arc_task, exact_match
 # other memory provably scores 0 on the dispatched class):
 # - all demo dims equal   → GeomColorComposedMemory (block 5: count-signature
 #   colour self-write + windowed attention-gather geometry ES),
-# - any demo changes dims → ShapeGeomComposedMemory (the shape seam: per-axis
+# - any demo changes dims → ShapeGeomColorComposedMemory (the shape seam: per-axis
 #   affine shape rule written closed-form from the demo dims + the toroidal
-#   normalized-query gather, two-frame multi-start fit). Known, documented
-#   limits on the real corpus: no colour module on this path yet (rung c),
-#   and the shape rule is affine in the INPUT DIMS — tasks whose output size
+#   normalized-query gather, two-frame multi-start fit, composed with a written
+#   colour table V — Rung C; V = identity makes it byte-identical to the pure
+#   shape+geometry path). Known, documented limits on the real corpus:
+#   the shape rule is affine in the INPUT DIMS — tasks whose output size
 #   depends on grid CONTENT mispredict and honestly score 0.
 # A task is solved iff every test pair matches above SOLVE_THRESHOLD. Held-out
 # generalization is uncheatable by memorization. We also report the train-fit
@@ -126,13 +127,14 @@ def solve_task(task_path: String, n_fit: Int, iters: Int) raises -> Float32:
     # Cold per-task fit of the dispatched composed memory.
     var state_dim = GEOMCOLOR_DIM
     if shape_task:
-        state_dim = SHAPEGEOM_DIM
+        state_dim = SHAPEGEOMCOLOR_DIM
     var state = alloc[Float32](state_dim)
     if shape_task:
-        # Shape rule written closed-form from the demo dims, then the
-        # two-frame multi-start geometry fit on the output-shaped gather.
-        ShapeGeomComposedMemory.seed(state)
-        fit_shape_geom(
+        # Shape rule + colour table written closed-form from the demos, then the
+        # two-frame multi-start geometry fit on the V-pre-mapped output-shaped
+        # gather (Rung C).
+        ShapeGeomColorComposedMemory.seed(state)
+        fit_shape_color(
             state,
             task.train,
             capacity,
@@ -174,17 +176,17 @@ def solve_task(task_path: String, n_fit: Int, iters: Int) raises -> Float32:
     for i in range(len(task.test)):
         var m = Float32(0.0)
         if shape_task:
-            var pr = ShapeGeomComposedMemory.out_rows(
+            var pr = ShapeGeomColorComposedMemory.out_rows(
                 state, task.test[i].input_grid
             )
-            var pc = ShapeGeomComposedMemory.out_cols(
+            var pc = ShapeGeomColorComposedMemory.out_cols(
                 state, task.test[i].input_grid
             )
             if (
                 pr == task.test[i].output_grid.rows
                 and pc == task.test[i].output_grid.cols
             ):
-                ShapeGeomComposedMemory.apply(
+                ShapeGeomColorComposedMemory.apply(
                     state, task.test[i].input_grid, pr, pc, pred
                 )
                 m = exact_match(pred, task.test[i].output_grid.data, pr * pc)
@@ -206,10 +208,10 @@ def solve_task(task_path: String, n_fit: Int, iters: Int) raises -> Float32:
     var train_sum = Float32(0.0)
     for i in range(len(task.train)):
         if shape_task:
-            var pr = ShapeGeomComposedMemory.out_rows(
+            var pr = ShapeGeomColorComposedMemory.out_rows(
                 state, task.train[i].input_grid
             )
-            var pc = ShapeGeomComposedMemory.out_cols(
+            var pc = ShapeGeomColorComposedMemory.out_cols(
                 state, task.train[i].input_grid
             )
             if (
@@ -217,7 +219,7 @@ def solve_task(task_path: String, n_fit: Int, iters: Int) raises -> Float32:
                 or pc != task.train[i].output_grid.cols
             ):
                 continue
-            ShapeGeomComposedMemory.apply(
+            ShapeGeomColorComposedMemory.apply(
                 state, task.train[i].input_grid, pr, pc, pred
             )
             train_sum += exact_match(

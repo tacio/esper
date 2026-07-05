@@ -45,8 +45,9 @@ learns both *what* to think and, eventually, *how* to learn.
 - **Vision A — ARC-AGI 2 (current, active).** Raw held-out solve rate on the real ARC-AGI-2 corpus
   (`arc_solve --report`) via composable, emergent, self-modifying memories fit in-context by ES —
   currently **22/1000 (train) / 0/120 (eval)** at the v3 measure (shape seam wired: 9 shape-changing
-  solves + few-demo hardening's +3; v2 was 10/1000, the M8 operator ceiling 5/1000). See "Next —
-  the path to full ARC-AGI 2" below for the measurable rungs. Still hands the engine *goals* (a task's demonstration pairs are
+  solves + few-demo hardening's +3; v2 was 10/1000, the M8 operator ceiling 5/1000); Rung C
+  (colour-on-shape) is synth-proven and wired, its corpus **v4** re-measure the next overnight
+  trigger. See "Next — the path to full ARC-AGI 2" below for the measurable rungs. Still hands the engine *goals* (a task's demonstration pairs are
   compressed supervision) even though it never hands it a DSL.
 - **Vision B — open-ended mastery (WIP — not yet started, no design work done).** Inspired by
   Random Network Distillation, open-endedness, and unsupervised RL: an agent that masters its
@@ -283,6 +284,20 @@ Concise, milestone-level; each links to `docs/JOURNAL.md` for the full narrative
   39-task shape slice scores 0.054 — content-dependent output sizes and missing colour-on-shape
   (rung c) are the named, quantified constraints there. Same-shape subset bit-consistent with v2
   (the wiring is regression-free). (JOURNAL 2026-07-04 11:54.)
+- **Rung C — colour on top of shape (`ShapeGeomColorComposedMemory`).** The composition pattern's
+  THIRD application: a written colour table V on top of the shape+geometry gather
+  (`out = shape_geom_gather(V(in))`), fit by the unchanged two-frame `fit_shape_geom` on
+  V-pre-mapped demos. Research kernel: count conservation breaks under shape change, so V is written
+  from FRACTION signatures (scale-invariant — exact for upscale/tile, robust for crop/subsample),
+  which need real colour-count CONTRAST (uniform-random grids can't identify a recolor under a lossy
+  shape change; real ARC grids can — measured ceiling control). A strict-superset trap fixed: a
+  greedy write scrambles V on pure-shape low-contrast tasks (crop 1.0→0.17), so a MEASURED global
+  acceptance gate (`R_assign < 0.4·R_id`; measured gap: pure-shape 0.82–1.35 vs recolor 0.15/≈0)
+  keeps V=identity unless a recolor clearly explains the demos. `test_shape_color`: all four
+  `recolor_{crop1,subsample2,upscale2,tile2}` **held-out 1.0 cold at fresh sizes**, colour ablation
+  0.0, pure-shape (incl. uniform crop) V=identity 1.0, few-demo n=3 0.998. `arc_solve` shape path
+  routes through it (byte-identical for pure shape). **Corpus v4 re-measure deferred** (the separate
+  overnight trigger). (JOURNAL 2026-07-05.)
 
 ## Next — the path to full ARC-AGI 2 (Vision A)
 
@@ -301,14 +316,13 @@ held-out 0.90–0.99** (train-fit 0.93 — a few wrong cells) and **146 tasks at
 train-fit ≥0.5** (convertible) and **63 where the affine dims rule fits NO demo**; eval's shape
 slice is dominated by that last class (19/39).
 
-1. **Rung C — colour on top of shape** (~50% research / 50% implementation). Colour is cellwise, so
-   it commutes with the shape rule and the gather: write V, pre-map the demos, run the existing
-   `fit_shape_geom` (the block-5 recipe). Research kernel: the count-signature write assumes count
-   CONSERVATION, which shape change breaks — validate normalizing output signatures by the written
-   rule's area ratio (kr·kc; exact for upscale/tile, approximate under crop's border loss — measure
-   the injective assignment's robustness at n=3 with the few-demo battery). Fallback if crop breaks
-   it: write V from cell correspondences after a geometry-only prefit. Targets part of the 107
-   convertible train shape tasks + eval analogues.
+1. **Rung C — colour on top of shape — DONE (synth-proven + wired; corpus v4 deferred).** Landed as
+   `ShapeGeomColorComposedMemory` (see "Status — done" above). The count-conservation kernel resolved
+   via scale-invariant FRACTION signatures (contrast-preconditioned) + a measured global recolor
+   acceptance gate that preserves the pure-shape strict superset. Remaining: the **corpus v4
+   re-measure** (both splits, documented budget — the separate overnight trigger) to book the shape-
+   slice gain on the ~107 convertible train tasks + eval analogues; and the crop-border-loss
+   correspondence-write fallback stays documented (not needed — fractions + contrast sufficed).
 2. **Rung S — shape-from-content** (~40% research / 60% implementation). The 63 train + 19 eval
    tasks where NO affine-in-dims rule fits any demo: generalize the shape WRITE (not the gather) to
    an affine rule over a small basis of per-demo content statistics — input dims,

@@ -665,3 +665,256 @@ struct ShapeGeomSettleMemory(ShapeMemory):
         dst: UnsafePointer[Float32, MutAnyOrigin],
     ):
         ShapeGeomComposedMemory.apply(state, inp, out_rows, out_cols, dst)
+
+
+# ==========================================
+# Composed SHAPE × geometry × COLOUR memory (Vision A / Next #1, Rung C)
+# ==========================================
+# Colour on top of the shape seam: the third application of the block-5
+# composition recipe (after GeomColor and GeomCount). The shape path
+# (ShapeGeomComposedMemory) expresses shape + geometry but has NO colour
+# remapping — any shape-change task that also recolors fails on the recolored
+# cells. This wrapper composes a written colour table V on top, bringing the
+# shape path to parity with the same-shape GeomColorComposedMemory.
+#
+#   out = shape_geom_gather( V(in) )
+#
+# Colour is CELLWISE, so it commutes with the copy gather (mapping a cell's
+# colour before or after selecting it is identical) — the same colour-then-gather
+# decoupling as GeomColor. V is written closed-form, then the proven two-frame
+# shape geometry fit runs on demos PRE-MAPPED through V (fit_shape_color in
+# esper_evolution.mojo), so the geometry search is unchanged — it never sees V.
+#
+# THE RESEARCH KERNEL — the count-signature write under shape change. The
+# GeomColor write_color matches per-colour COUNT vectors across demos, which
+# assumes count CONSERVATION; shape change breaks it (upscale/tile multiply every
+# count by the area ratio kr*kc EXACTLY; crop/subsample scale it approximately —
+# crop loses a colour-dependent border). The fix (write_color_shaped): normalize
+# each demo's colour histogram to FRACTIONS (÷ cell total) before the mismatch
+# matrix. Fractions are SCALE-INVARIANT, so frac_in[c] matches frac_out[V(c)]
+# under any proportion-preserving resize — exact for upscale/tile, robust for
+# crop/subsample (only border/subsample sampling noise). This is the ROADMAP's
+# "normalize by the area ratio kr*kc" framing implemented scale-free (handles
+# crop's varying per-demo ratio automatically). Fractions break the integer-exact
+# tie test the few-demo hardening relied on, so the tie test carries a small
+# tolerance (SHAPEGEOMCOLOR_TIE_TOL); the injective-assignment robustness at
+# n=2/3 is measured in test_shape_color (the rung's one research question).
+#
+# Layout: [0:SHAPEGEOM_DIM] the shape+geometry state (attn | trel | shape rule)
+# | [SHAPEGEOM_DIM : +COLOR_DIM] the written colour table V. fill_scale zeroes
+# V (written, never searched) and delegates the prefix to ShapeGeom, so the ES
+# still moves only the attention + trel slots on the proven B3 landscape.
+comptime SHAPEGEOMCOLOR_V_OFF = SHAPEGEOM_DIM  # the 10-entry written colour table
+comptime SHAPEGEOMCOLOR_DIM = SHAPEGEOM_DIM + COLOR_DIM
+# Fraction mismatches are not integer-exact, so genuine assignment ties (two
+# colours with identical across-demo fraction signatures) are compared within a
+# small tolerance rather than by ==; identity is still preferred on a tie.
+comptime SHAPEGEOMCOLOR_TIE_TOL = Float32(1.0e-6)
+# GLOBAL recolor-acceptance gate (see write_color_shaped's assignment). The
+# whole non-identity colour map is accepted only when the mutual-best
+# assignment's total fraction-mismatch is below this fraction of the IDENTITY
+# assignment's total — i.e. a recolor is written only when a permutation
+# explains the demos clearly better than "no colour change". A genuine recolor
+# clears it wide (measured crop-recolor ratio 0.22; exact-conservation upscale/
+# tile ~0); a PURE-shape task on low-contrast/lossy grids does NOT (measured
+# uniform-crop pure ratio 0.61-0.99 across seeds), so V defaults to identity and
+# the colour path stays a STRICT SUPERSET of the pure-shape path (without the
+# gate a noisy uniform crop scrambles V and regresses pure-shape crop 1.0 ->
+# 0.17). A GLOBAL ratio (not per-colour) so the noise averages out; the 0.4
+# threshold sits in the measured gap [0.22 recolor | 0.61 pure] and is
+# insensitive across [0.3, 0.55]. Real-ARC contrast pushes recolor toward 0.
+comptime SHAPEGEOMCOLOR_RECOLOR_GATE = Float32(0.4)
+
+
+struct ShapeGeomColorComposedMemory(ShapeMemory):
+    comptime Dom = GridDomain
+
+    @staticmethod
+    def param_dim() -> Int:
+        return SHAPEGEOMCOLOR_DIM
+
+    @staticmethod
+    def seed(state: UnsafePointer[Float32, MutAnyOrigin]):
+        # Identity shape+geometry (same-shape identity) + identity colour table:
+        # the unfit, unwritten memory is the identity transform.
+        ShapeGeomComposedMemory.seed(state)
+        for s in range(COLOR_DIM):
+            state[SHAPEGEOMCOLOR_V_OFF + s] = Float32(s)
+
+    @staticmethod
+    def fill_scale(scale: UnsafePointer[Float32, MutAnyOrigin], n: Int):
+        # Prefix keeps ShapeGeom's whole preconditioner (attn searched, trel
+        # small, shape rule frozen); the V group gets scale 0 — V is WRITTEN
+        # from the demos, never searched (perturbation AND update are both
+        # scale-multiplied, so V never moves on any ES path).
+        ShapeGeomComposedMemory.fill_scale(scale, SHAPEGEOM_DIM)
+        for s in range(COLOR_DIM):
+            scale[SHAPEGEOMCOLOR_V_OFF + s] = 0.0
+
+    @staticmethod
+    def _v_lookup(
+        state: UnsafePointer[Float32, MutAnyOrigin], val: Float32
+    ) -> Float32:
+        # Hard colour read: nearest-integer index into the written table, output
+        # rounded (the written V entries are ~integer). Mirrors
+        # GeomColorComposedMemory._v_lookup at the shape layout's V offset.
+        var idx = Int(round(val))
+        if idx < 0:
+            idx = 0
+        if idx > COLOR_DIM - 1:
+            idx = COLOR_DIM - 1
+        return round(state[SHAPEGEOMCOLOR_V_OFF + idx])
+
+    @staticmethod
+    def write(
+        state: UnsafePointer[Float32, MutAnyOrigin],
+        demos: List[ArcTaskPair],
+    ):
+        # Shape rule (least-squares affine over the demo dim-pairs) + the colour
+        # table V (fraction-normalized count signatures). Both closed-form, one
+        # pass, never ES-searched; both geometry-invariant, so they run before
+        # any search.
+        ShapeGeomComposedMemory.write(state, demos)
+        Self.write_color_shaped(state, demos)
+
+    @staticmethod
+    def out_rows(
+        state: UnsafePointer[Float32, MutAnyOrigin], inp: ArcGrid
+    ) -> Int:
+        return ShapeGeomComposedMemory.out_rows(state, inp)
+
+    @staticmethod
+    def out_cols(
+        state: UnsafePointer[Float32, MutAnyOrigin], inp: ArcGrid
+    ) -> Int:
+        return ShapeGeomComposedMemory.out_cols(state, inp)
+
+    @staticmethod
+    def apply(
+        state: UnsafePointer[Float32, MutAnyOrigin],
+        inp: ArcGrid,
+        out_rows: Int,
+        out_cols: Int,
+        dst: UnsafePointer[Float32, MutAnyOrigin],
+    ):
+        # Gather-then-colour (the eval order; equals the colour-then-gather of
+        # the fit once the read is sharp — every use runs the fit first, same as
+        # GeomColorComposedMemory.apply). The prefix drives the toroidal
+        # output-shaped gather, then the hard V read maps each output cell.
+        ShapeGeomComposedMemory.apply(state, inp, out_rows, out_cols, dst)
+        for k in range(out_rows * out_cols):
+            dst[k] = Self._v_lookup(state, dst[k])
+
+    @staticmethod
+    def write_color_shaped(
+        state: UnsafePointer[Float32, MutAnyOrigin],
+        demos: List[ArcTaskPair],
+    ):
+        """Write the colour table V from the demos' FRACTION signatures.
+
+        The shape-invariant sibling of GeomColorComposedMemory.write_color: per
+        demo the per-colour input/output histograms are normalized to FRACTIONS
+        (÷ that grid's cell total) before the across-demo squared-difference
+        mismatch, so the match survives the count rescaling a shape change
+        induces (exact for area-ratio families, robust for crop/subsample). The
+        assignment is the same global-min greedy INJECTIVE matching with identity
+        defaults for unseen colours and identity preference on (tolerance-)ties.
+        Stack accumulators only — no allocation.
+        """
+        var num = len(demos)
+        if num == 0:
+            return
+        var mismatch = InlineArray[Float32, COLOR_DIM * COLOR_DIM](fill=0.0)
+        var seen = InlineArray[Int, COLOR_DIM](fill=0)
+        for d in range(num):
+            var cnt_in = InlineArray[Float32, COLOR_DIM](fill=0.0)
+            var cnt_out = InlineArray[Float32, COLOR_DIM](fill=0.0)
+            var in_n = demos[d].input_grid.rows * demos[d].input_grid.cols
+            var out_n = demos[d].output_grid.rows * demos[d].output_grid.cols
+            for k in range(in_n):
+                var ci = Int(round(demos[d].input_grid.data[k]))
+                if ci >= 0 and ci < COLOR_DIM:
+                    cnt_in[ci] += 1.0
+                    seen[ci] = 1
+            for k in range(out_n):
+                var co = Int(round(demos[d].output_grid.data[k]))
+                if co >= 0 and co < COLOR_DIM:
+                    cnt_out[co] += 1.0
+            # Normalize to fractions (÷ cell total) — the scale-invariant fix.
+            var inv_in = Float32(1.0) / Float32(in_n) if in_n > 0 else Float32(
+                0.0
+            )
+            var inv_out = Float32(1.0) / Float32(
+                out_n
+            ) if out_n > 0 else Float32(0.0)
+            for c in range(COLOR_DIM):
+                cnt_in[c] *= inv_in
+                cnt_out[c] *= inv_out
+            for c in range(COLOR_DIM):
+                for c2 in range(COLOR_DIM):
+                    var diff = cnt_in[c] - cnt_out[c2]
+                    mismatch[c * COLOR_DIM + c2] += diff * diff
+        # Assignment: write_color's GLOBAL-MIN GREEDY INJECTIVE matching (the
+        # few-demo-hardened complete permutation — identity for unseen, identity
+        # preference on ties within SHAPEGEOMCOLOR_TIE_TOL since fractions aren't
+        # integer-exact), then a GLOBAL ACCEPTANCE GATE. Greedy alone is safe on
+        # SAME-shape (exact count conservation ⇒ identity is exactly zero and
+        # always wins for pure geometry) but a lossy shape change leaves the
+        # fractions NOISY, so on a pure-shape task greedy still writes SOME
+        # scrambled permutation (measured: pure crop1 1.0 -> 0.17). The gate
+        # decides accept-vs-identity for the WHOLE map: a forced injective
+        # permutation on a task with NO recolor has a HIGH total residual
+        # (measured greedy R_assign/R_id 0.82-1.35 on uniform pure crop across
+        # seeds — forcing a permutation costs), whereas a genuine recolor's true
+        # permutation has a LOW one (0.15 palette crop; ~0 exact-conservation
+        # upscale/tile). So V = the greedy map iff R_assign < gate*R_id, else
+        # identity — full recolor recovery AND the pure-shape strict superset.
+        var target = InlineArray[Int, COLOR_DIM](fill=0)
+        var assigned = InlineArray[Int, COLOR_DIM](fill=0)
+        var taken = InlineArray[Int, COLOR_DIM](fill=0)
+        var n_seen = 0
+        for c in range(COLOR_DIM):
+            target[c] = c  # identity default (unseen colours stay here)
+            if seen[c] == 0:
+                assigned[c] = 1
+            else:
+                n_seen += 1
+        for _ in range(n_seen):
+            var best_m = Float32(1.0e30)
+            var best_c = -1
+            var best_t = -1
+            for c in range(COLOR_DIM):
+                if assigned[c] == 1:
+                    continue
+                for t in range(COLOR_DIM):
+                    if taken[t] == 1:
+                        continue
+                    var m = mismatch[c * COLOR_DIM + t]
+                    var better = m < best_m - SHAPEGEOMCOLOR_TIE_TOL
+                    if abs(m - best_m) <= SHAPEGEOMCOLOR_TIE_TOL:
+                        # Tolerance-tie: prefer an identity pair, then lower idx.
+                        var new_id = 1 if c == t else 0
+                        var cur_id = 1 if best_c == best_t else 0
+                        if new_id > cur_id:
+                            better = True
+                    if better:
+                        best_m = m
+                        best_c = c
+                        best_t = t
+            target[best_c] = best_t
+            assigned[best_c] = 1
+            taken[best_t] = 1
+        # Global acceptance gate (see SHAPEGEOMCOLOR_RECOLOR_GATE). r_id ~ 0
+        # (exact-conservation pure shape) fails the strict `<` ⇒ identity.
+        var r_id = Float32(0.0)
+        var r_assign = Float32(0.0)
+        for c in range(COLOR_DIM):
+            if seen[c] == 0:
+                continue
+            r_id += mismatch[c * COLOR_DIM + c]
+            r_assign += mismatch[c * COLOR_DIM + target[c]]
+        var accept = r_assign < SHAPEGEOMCOLOR_RECOLOR_GATE * r_id
+        for c in range(COLOR_DIM):
+            state[SHAPEGEOMCOLOR_V_OFF + c] = Float32(
+                target[c] if accept else c
+            )

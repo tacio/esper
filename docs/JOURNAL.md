@@ -1208,3 +1208,71 @@ realistic).
 Overall split: roughly half research, but each rung's research kernel is ONE identifiable question
 — the pattern of the last three landed blocks. No engine code in this entry; next session starts
 Rung C.
+
+## 2026-07-05 — Rung C: colour on top of shape (ShapeGeomColorComposedMemory)
+
+The top-ranked expressiveness rung. The shape path (`ShapeGeomComposedMemory`) expressed
+shape+geometry but had NO colour remapping, so the ~107 convertible train-shape tasks (train-fit
+≥0.5, "dims + most content fit") plus eval analogues lost the recolored cells. Rung C composes a
+written colour table V on top — the block-5 recipe's THIRD application (after GeomColor, GeomCount):
+`out = shape_geom_gather(V(in))`. Colour is cellwise, so it commutes with the copy gather
+(colour-then-gather); V is written closed-form, then the unchanged two-frame `fit_shape_geom` runs
+on V-pre-mapped demos (the geometry search never sees V — exactly how `fit_geomcolor` reuses
+`fit_operator[AttnGatherMemory]`).
+
+**New surface (all additive; the same-shape core and every existing memory untouched):**
+`ShapeGeomColorComposedMemory` (a thin ShapeMemory wrapper: prefix `[0:SHAPEGEOM_DIM]` the
+shape+geometry state, suffix `[+COLOR_DIM]` the written V; `apply` = the toroidal shape gather then a
+hard V-lookup; `fill_scale` freezes V), `write_color_shaped`, and the `fit_shape_color` driver.
+`arc_solve` routes the shape-dispatch branch through it; V=identity makes it byte-identical to the
+old shape path. Synth `recolor_{crop1,subsample2,upscale2,tile2}` families + `tests/test_shape_color`.
+
+**Research kernel #1 — the count-signature write breaks under shape change.** `write_color`
+matches per-colour COUNT vectors, assuming count CONSERVATION; shape change breaks it (upscale/tile
+multiply every count by the area ratio kr·kc EXACTLY; crop/subsample scale it approximately —
+crop drops a colour-dependent border). Fix: normalize each demo's histogram to FRACTIONS (÷ cell
+total) before the mismatch — scale-invariant, so `frac_in[c]` matches `frac_out[V(c)]` under any
+proportion-preserving resize. Exact for upscale/tile; robust for crop/subsample.
+
+**Research kernel #2 — the write needs colour-count CONTRAST (measured).** The fraction match
+identifies a permutation only when colours have DISTINGUISHABLE frequencies. Under EXACT same-shape
+conservation (GeomColor) even a uniform-random grid's tiny fluctuations match exactly; shape change
+is LOSSY, so the signal must be REAL contrast — which real ARC grids have (background + sparse
+objects, very different counts) and uniform-random grids lack. First measured exhibit:
+`recolor_crop1` Ckpt A missed 5/10 colours on uniform grids, recovered fully once grids were drawn
+from a per-task palette of distinct frequencies (real-ARC-like). The uniform-crop ceiling is kept
+as a control (6/10 missed — the precondition is load-bearing, documented not fought).
+
+**The strict-superset trap (found via the arc_solve smoke, fixed).** A pure-shape crop task on
+UNIFORM grids has no recolor, but the greedy-injective assignment overfits the border-loss noise and
+writes a SCRAMBLED V — regressing pure-shape crop from held-out 1.0 to 0.17 (diagnostic:
+`V=[6 1 2 4 4 5 6 7 8 3]` instead of identity). Since real corpus shape tasks are overwhelmingly
+pure-shape, this would have silently regressed the v3 shape slice. Fix, MEASURED not guessed:
+keep `write_color`'s complete greedy-injective matching (full recolor recovery) but add a GLOBAL
+ACCEPTANCE GATE — accept the whole map only if its total fraction-mismatch `R_assign < 0.4·R_id`
+(the identity assignment's total). A forced injective permutation on a task with NO recolor has a
+HIGH residual (measured greedy R_assign/R_id **0.82–1.35** on uniform pure crop across 7 seeds —
+forcing a permutation *costs*); a genuine recolor's true permutation has a LOW one (**0.15**
+palette crop, **~0** exact-conservation upscale/tile). The 0.4 gate sits wide in that gap
+(insensitive across [0.3, 0.55]; real-ARC contrast pushes recolor toward 0). A GLOBAL ratio, not
+per-colour — noise averages out (a per-colour 0.5 gate failed: min-over-targets is systematically
+below identity on pure noise; and a MUTUAL-best assignment protected pure-shape but under-recovered
+recolor, 0.875 — the greedy complete matching is what recovers all colours). `test_shape_color`
+guards this: a pure UNIFORM crop1 must keep V=identity AND held-out ≥0.95.
+
+**Also measured:** subsample-recolor needs adequate output cells (a 2×2 subsampled output starves
+the low-frequency colours) — synth subsample dims lifted to {8,10,12}. Real-ARC subsample tasks
+aren't 4×4; the identifiability precondition, not a fudge.
+
+**Result — `test_shape_color` (full tier, cold, held-out at FRESH sizes):**
+`recolor_{crop1,subsample2,upscale2,tile2}` each **1.0**; colour-ablation (V=identity) **0.0** (the
+colour module is load-bearing); pure tile2 through the colour memory **1.0** and pure uniform crop1
+**1.0 with V=identity** (the strict superset); few-demo n=3 (corpus median) **0.998**; ceiling
+control (uniform crop, no contrast) 6/10 colours missed. arc_solve smoke {flip_h, crop1,
+recolor_crop1}: flip_h 1.0 (same-shape, byte-identical), crop1 1.0 (pure shape preserved),
+recolor_crop1 0.28 (synth uses uniform grids = the documented no-contrast ceiling). CI's full-tier
+arc_solve leg adds a `recolor_crop1` bundle so the `fit_shape_color` path runs end-to-end.
+
+The composition pattern lands a third time; the fraction-signature write + the measured contrast
+precondition + the global recolor gate are the new, reusable pieces. Corpus v4 re-measure
+(both splits, documented budget) is the separate overnight trigger, deferred by scope.

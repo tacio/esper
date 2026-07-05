@@ -21,6 +21,7 @@ from memory_composed import (
     GeomCountComposedMemory,
     ShapeGeomComposedMemory,
     ShapeGeomSettleMemory,
+    ShapeGeomColorComposedMemory,
     SHAPEGEOM_DIM,
     SHAPEGEOM_TREL_OFF,
 )
@@ -1072,3 +1073,69 @@ def fit_shape_geom(
     slow.free()
     cand.free()
     fit_out.free()
+
+
+# The per-task in-context fit for ShapeGeomColorComposedMemory (Rung C —
+# colour on top of shape), the shape-seam analogue of fit_geomcolor:
+#
+#   1. WRITE the shape rule + colour table V closed-form from the demos
+#      (ShapeGeomColorComposedMemory.write — shape via least-squares, V via the
+#      fraction-normalized count signatures; both geometry-invariant, one pass).
+#   2. PRE-MAP the demo inputs through V (colour-then-gather; V is cellwise and
+#      the gather positional, so they commute — this puts the geometry search on
+#      the exact same landscape fit_shape_geom already proves, with no colour
+#      cliff). Dims are unchanged by V, so the written shape rule is identical.
+#   3. GEOMETRY: the unchanged two-frame multi-start fit_shape_geom on the
+#      SHAPEGEOM prefix of `state` (the layout puts it first, so `state` IS the
+#      shape+geometry weight vector fit_shape_geom expects; V rides in the
+#      suffix, frozen). fit_shape_geom re-writes the shape rule on the mapped
+#      demos — idempotent (same dims → same rule).
+#
+# The pre-map list is built once per task (not per ES iteration), so the hot
+# loop stays allocation-free. A pure-shape task writes V = identity, making this
+# BYTE-IDENTICAL to fit_shape_geom (the strict-superset regression guard).
+def fit_shape_color(
+    state: UnsafePointer[Float32, MutAnyOrigin],
+    demos: List[ArcTaskPair],
+    grid_capacity: Int,
+    n_fit: Int,
+    alpha0: Float32,
+    alpha1: Float32,
+    sigma0: Float32,
+    sigma1: Float32,
+    iters: Int,
+    reg_lambda: Float32,
+) raises:
+    # 1. Shape rule + colour self-write (fills the shape slots + V table).
+    ShapeGeomColorComposedMemory.write(state, demos)
+
+    # 2. Pre-map demo inputs through the written V.
+    var mapped = List[ArcTaskPair]()
+    for d in range(len(demos)):
+        var min_g = ArcGrid(demos[d].input_grid.rows, demos[d].input_grid.cols)
+        for k in range(min_g.rows * min_g.cols):
+            min_g.data[k] = ShapeGeomColorComposedMemory._v_lookup(
+                state, demos[d].input_grid.data[k]
+            )
+        var mout = ArcGrid(demos[d].output_grid.rows, demos[d].output_grid.cols)
+        memcpy(
+            dest=mout.data,
+            src=demos[d].output_grid.data,
+            count=mout.rows * mout.cols,
+        )
+        mapped.append(ArcTaskPair(min_g^, mout^))
+
+    # 3. The proven two-frame shape geometry fit on the prefix (V frozen in the
+    # suffix). fit_shape_geom's constant-compute normalization applies as-is.
+    fit_shape_geom(
+        state,
+        mapped,
+        grid_capacity,
+        n_fit,
+        alpha0,
+        alpha1,
+        sigma0,
+        sigma1,
+        iters,
+        reg_lambda,
+    )

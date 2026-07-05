@@ -124,12 +124,37 @@ TRANSFORMS = {
 # Shape-changing families kept in a SEPARATE table: they need their own group
 # generator (input size must VARY across a task's demos so the shape rule is
 # identifiable, not memorized). `subsample2` requires even input dims.
+# COLOUR-ON-SHAPE families (Vision A / Next #1, Rung C): a shape change composed
+# with a cellwise recolor. Colour commutes with the copy gather, so applying
+# `_recolor` (the cyclic +1 palette shift) before the shape transform is the
+# same as after — the ground truth the ShapeGeomColorComposedMemory must
+# rediscover as (shape rule, written colour table V, geometry).
+def _recolor_crop1(grid):
+    return _crop1(_recolor(grid))
+
+
+def _recolor_subsample2(grid):
+    return _subsample2(_recolor(grid))
+
+
+def _recolor_upscale2(grid):
+    return _upscale2(_recolor(grid))
+
+
+def _recolor_tile2(grid):
+    return _tile2(_recolor(grid))
+
+
 SHAPE_TRANSFORMS = {
     "crop1": _crop1,
     "flip_h_crop1": _flip_h_crop1,
     "subsample2": _subsample2,
     "upscale2": _upscale2,
     "tile2": _tile2,
+    "recolor_crop1": _recolor_crop1,
+    "recolor_subsample2": _recolor_subsample2,
+    "recolor_upscale2": _recolor_upscale2,
+    "recolor_tile2": _recolor_tile2,
 }
 
 
@@ -233,7 +258,7 @@ def generate_shape_task_groups(transform, out_dir, num_tasks, n_train, seed):
         )
     os.makedirs(out_dir, exist_ok=True)
     fn = SHAPE_TRANSFORMS[transform]
-    even = transform == "subsample2"
+    even = transform in ("subsample2", "recolor_subsample2")
     rng = _random.Random(seed)
 
     paths = []
