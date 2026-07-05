@@ -57,12 +57,17 @@ mojo run -I src src/main.mojo
 echo "Running held-out generalization driver (src/arc_solve.mojo)..."
 GEN_DIR="$(mktemp -d)"
 trap 'rm -rf "$GEN_DIR"' EXIT
-python - "$GEN_DIR" <<'PY'
+# The full tier adds one SHAPE-CHANGING bundle so the driver's shape dispatch
+# (ShapeGeomComposedMemory + fit_shape_geom) runs end-to-end in CI; the fast
+# gate keeps the same-shape-only leg (~a minute cheaper).
+python - "$GEN_DIR" "$TIER" <<'PY'
 import sys
 sys.path.insert(0, "tools")
-from synth_tasks import generate_task_groups
+from synth_tasks import generate_task_groups, generate_shape_task_groups
 generate_task_groups("flip_h", sys.argv[1], num_tasks=2, n_train=6, rows=4, cols=4, seed=0)
 generate_task_groups("recolor", sys.argv[1], num_tasks=1, n_train=6, rows=4, cols=4, seed=1)
+if sys.argv[2] == "full":
+    generate_shape_task_groups("crop1", sys.argv[1], num_tasks=1, n_train=6, seed=2)
 print("Generated task bundles in", sys.argv[1])
 PY
 mojo run -I src src/arc_solve.mojo "$GEN_DIR"/*.task

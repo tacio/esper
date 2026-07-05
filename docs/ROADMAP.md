@@ -44,9 +44,9 @@ learns both *what* to think and, eventually, *how* to learn.
 
 - **Vision A — ARC-AGI 2 (current, active).** Raw held-out solve rate on the real ARC-AGI-2 corpus
   (`arc_solve --report`) via composable, emergent, self-modifying memories fit in-context by ES —
-  currently **10/1000 (train) / 0/120 (eval)** at the v2 emergent-composed-memory measure (the M8
-  operator ceiling was 5/1000). See "Next — the path to full ARC-AGI 2" below
-  for the measurable rungs. Still hands the engine *goals* (a task's demonstration pairs are
+  currently **22/1000 (train) / 0/120 (eval)** at the v3 measure (shape seam wired: 9 shape-changing
+  solves + few-demo hardening's +3; v2 was 10/1000, the M8 operator ceiling 5/1000). See "Next —
+  the path to full ARC-AGI 2" below for the measurable rungs. Still hands the engine *goals* (a task's demonstration pairs are
   compressed supervision) even though it never hands it a DSL.
 - **Vision B — open-ended mastery (WIP — not yet started, no design work done).** Inspired by
   Random Network Distillation, open-endedness, and unsupervised RL: an agent that masters its
@@ -274,6 +274,15 @@ Concise, milestone-level; each links to `docs/JOURNAL.md` for the full narrative
   winner by demo fitness: an honest multi-start, never task staging. Whole family cold, held-out at
   fresh sizes: crop1/flip_h_crop1/subsample2/tile2 **1.0**, upscale2 **0.98**; controls: plain
   (non-toroidal) gather fails tile2 (0.14), no-shape-write 0.0. (JOURNAL 2026-07-04 07:40.)
+- **Rung (b) — shape seam wired into `arc_solve`; real ARC-AGI-2 v3 measure.** Driver-level dispatch
+  on the demos (any train pair's dims differ → the shape memory; the alternative provably scores 0,
+  so it is not a memory-selector), shape-path scoring off the predicted dims, `mem:` markers for
+  free corpus breakdowns. **Train 22/1000 (v2: 10)** — 9 shape-changing solves (a slice that was 0
+  by construction) + the few-demo hardening's net +3 (its exhibit d511f180 solved at corpus budget,
+  as designed; 2 documented tie-convention losses). **Eval 0/120**, mean 0.404 (v2 0.388): the
+  39-task shape slice scores 0.054 — content-dependent output sizes and missing colour-on-shape
+  (rung c) are the named, quantified constraints there. Same-shape subset bit-consistent with v2
+  (the wiring is regression-free). (JOURNAL 2026-07-04 11:54.)
 
 ## Next — the path to full ARC-AGI 2 (Vision A)
 
@@ -291,14 +300,14 @@ in-context write rule must hold at 2–3 demonstrations.
 1. **Shape change.** Handle outputs whose dims ≠ inputs — a Domain / output-size generalization
    (the output shape itself must be *inferred in-context* from the demos, like any other rule
    parameter — never a hand-coded size heuristic). Unlocks the excluded 32% of both splits. **The
-   seam is built and both direction families are proven cold** (the `ShapeMemory` trait +
-   closed-form shape rule + toroidal output-shaped gather; crop/subsample AND upscale/tiling — see
-   Status above). **Remaining rungs on this same seam:** (b) **wire `arc_solve --report`** to score
-   shape-changing test pairs (stop auto-scoring them 0) and report the honest real ARC-AGI-2 number
-   on the 32% — re-measure BOTH splits at the documented budget; (c) **colour on top of shape** (a
+   seam is built, both direction families are proven cold, and (b) the seam is WIRED into
+   `arc_solve` and corpus-measured** (v3: 9 real shape-changing solves on train — the slice was 0
+   by construction before; eval's shape slice mean 0.054 names the gaps — see Status/JOURNAL
+   2026-07-04). **Remaining rungs on this same seam:** (c) **colour on top of shape** (a
    `write_color` pre-map — note the count-signature write assumes count conservation, which
-   crop/subsample break: a real research rung, not a free composition); (d) small expected-free
-   extensions: k=3 factors, mirror-tilings (near seed B).
+   crop/subsample break: a real research rung, not a free composition; the eval split's binding
+   constraint together with content-dependent output sizes); (d) small expected-free extensions:
+   k=3 factors, mirror-tilings (near seed B).
 2. **Multi-block CMS chain** (NL §7). Stack memories at multiple update frequencies for multi-step /
    object-level reasoning — the (now twice-proven) composition pattern chained in depth, not just in pairs.
 3. **Persistent slow weights + task-stream (continual meta-learning).** Stop re-seeding cold per

@@ -1128,3 +1128,49 @@ Synth: `upscale2`/`tile2` added to `SHAPE_TRANSFORMS`. The doubling families' te
 trel = (k−1)/2 is exact for every k, `1 ≡ 0 (mod 1)` for k=3); mirror-tilings (sign flips near seed
 B); wiring `arc_solve --report` (rung b — the user wants BOTH corpus splits re-measured when it
 lands); colour on top of shape (rung c).
+
+## 2026-07-04 11:54 — Rung (b): the shape seam wired into arc_solve; real ARC-AGI-2 v3 measure
+
+`arc_solve.mojo` now DISPATCHES per task on a closed-form observable of the demos: any train pair
+whose dims differ → `ShapeGeomComposedMemory` via `fit_shape_geom` (the rung-(a) two-frame
+multi-start); all-same-dims → the unchanged `GeomColorComposedMemory` path (byte-identical for the
+same-shape 68%). This is driver-level routing, not a runtime memory-selector — the same-shape
+memory PROVABLY scores 0 on the dispatched class, so nothing is being "chosen" that the data
+doesn't force. Shape-path scoring: the memory predicts its own output dims from the written rule;
+a predicted/true dims mismatch scores that pair 0 (never applied — no OOB). The old
+skip-if-every-test-shape-changes shortcut survives only for same-shape-dispatched tasks (where it
+remains exact). Each per-task line now carries a trailing `mem: same|shape` marker (appended after
+the existing fields — `eval_parallel.sh` reads held-out positionally), giving corpus breakdowns for
+free. CI: the full tier's arc_solve leg adds one crop1 shape bundle (fast gate unchanged, ~2 min).
+Smoke proof: mixed synth dir {flip_h, crop1, upscale2} → 3/3 solved, markers correct.
+
+**Eval split v3** (`eval_parallel.sh data_bin/arc2_eval scratch/arc2_eval_v3.txt 10 64 1500`,
+10 workers, 11197s): **0 / 120 solved, mean held-out 0.404** (v2: 0.388). Breakdown from the
+markers: 39/120 tasks dispatched shape (32.5% — matches corpus_stats exactly); their mean held-out
+is **0.054, 0 solved** — the honest first number on the previously-untouchable slice. The
+like-for-like control holds: the 81 same-shape tasks mean 0.572 vs v2's implied 0.575 (seeded-ES
+noise) — the wiring changed nothing on the same-shape path. Top shape near-misses: 136b0064 (0.66,
+gap 0.03) and eee78d87 (0.61) — right predicted dims, partial content. The verdict matches the
+rung's documented limits: real eval-split shape tasks overwhelmingly have CONTENT-dependent output
+sizes (outside the affine-in-dims rule) or need colour on top of shape (rung c) — the seam is
+measured, the expressiveness gaps are now named and quantified.
+
+**Train split v3** (same harness/budget, 10 workers, 38808s ≈ 10.8h): **22 / 1000 solved (2.2%),
+mean held-out 0.501** — more than DOUBLE v2's 10/1000. The marker breakdown decomposes the gain
+exactly:
+- **shape-dispatched: 320/1000 (32%), 9 solved, mean 0.239** — the first real-ARC shape-changing
+  solves ever (v2 scored this whole slice 0 by construction): 2dee498d, 60c09cac, 68b67ca3,
+  8597cfd7, 8d5021e8, 963e52fc, a416b8f3, be03b35f, c59eb873. Near-misses at 0.89 (53b68214,
+  2dc579da). Train's shape slice scores far above eval's (0.239 vs 0.054) — smaller grids, more
+  affine-in-dims size rules.
+- **same-shape: 680/1000, 13 solved, mean 0.625** — net +3 vs v2's 10. Not from this rung: the
+  same-shape path is byte-identical here; the delta is the **few-demo hardening** (0e138cf), which
+  landed AFTER the v2 measure and is corpus-measured for the first time now: +5 new solves
+  (3c9b0459, 5582e5ca, 74dd1130, 9dfd6313, and its designed exhibit **d511f180 — solved at corpus
+  budget, as the block predicted**), −2 lost (b1948b0a 0.94, ed36ccf7 0.78 — the identity-on-tie
+  convention's documented trade).
+
+Raw dumps: `scratch/arc2_eval_v3.txt` / `scratch/arc2_train_v3.txt` (gitignored; per-task
+reproducible via SOLVE_SEED). The v3 verdict for the roadmap: the shape seam is now measurable and
+productive on the real corpus (train), and the eval split's shape slice names rung (c) — colour on
+top of shape — plus content-dependent output sizes as the binding constraints there.
