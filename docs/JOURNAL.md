@@ -1399,3 +1399,100 @@ evidence-backed motivation for **Approach 2 (a meta-trained self-mod grid factor
 composition pattern's fourth application; the reusable new pieces are the local-signature write + the
 residual acceptance gate. Corpus v4 re-measure (both full splits) stays the deferred overnight
 trigger.
+
+## 2026-07-06 16:01 — Rung D measure-first: k=3 mostly free, subsample/3 deferred, mirror-tiling is the prize
+
+Started Rung D ("k=3 factors and mirror-tilings", the roadmap's small paid-for extensions) with a
+measure-first pass — probe the existing `fit_shape_geom` at k=3 BEFORE writing any machinery, and
+count the corpus prevalence of each candidate so effort tracks solves (the Rung S discipline).
+
+**k=3 probe (scratch, full FIT_* budget, held-out at fresh sizes):**
+- `tile3` **1.0**, `upscale3` **0.966** — the output-GROWING k=3 families ALREADY work with ZERO code
+  change. The shape rule is least-squares (writes kr=3), `seed_periodic` sets M=kI algebraically for
+  any k, and the toroidal read is `in[r mod R]` for any period — so k=3 grow is already dispatched
+  through fit_shape_geom in arc_solve TODAY and already counted in v3. Rung D's job here is a
+  REGRESSION TEST, not new solves.
+- `subsample3` **0.31** (0.28 even at realistic {6,9,12} sizes). Diagnosed: the fitted M collapses /
+  t misses (m00≈0.81, t_r≈-0.2 where the exact solution is M=I, t=-(K-1)/2=-1.0). ROOT CAUSE: the
+  query normalization divides by the shape slope kr — for GROW (kr=k>1) this SHRINKS the query range
+  and makes tolerances size-free (its design intent), but for SHRINK (kr=1/k, inv_kr=k>1) it
+  AMPLIFIES the query by k, so a δM error moves the source read by ~k·(extent/2)·δM — the
+  downscale-by-3 staircase step falls BELOW the settle sigma floor (0.15, the noise floor). subsample2
+  (inv=2, t=-0.5) survives; subsample3 (inv=3, t=-1.0) doesn't. Fixing it means reworking the core
+  normalization the proven GROW families depend on (regression risk) for only ~6 lower-value corpus
+  tasks → **documented NEGATIVE / deferred**, exactly the Rung S "don't build core-touching machinery
+  for a handful of tasks" call.
+
+**Corpus prevalence (tools scan over data_bin, train/eval):**
+- Consistent integer shape ratios (train): x2/x2 **22**, x3/x3 **15**, /3 **6**, /2 **3**, x4 **2**;
+  eval has **0** clean k=3 tasks. So k=3 grow is a train-only ~15-task band already covered.
+- **Tiling by EXACT pixel content (the gather's actual reach): plain (periodic) tiling 3 train tasks;
+  MIRROR (reflect-alternate-tiles) tiling 8 train tasks** (eval 0 of either). Mirror-tiling — the
+  kaleidoscope reflect where odd tiles are flipped, `out[R+i]=in[R-1-i]` — is MORE than double the
+  plain count and is provably OUTSIDE the current periodic (wrapping) torus. **This is the real Rung D
+  prize: up to +8 train solves, genuinely new capability.** The 8 ids are pure geometric mirror-tiles
+  (my detector required exact pixel equality incl. colour, so no recolor is entangled).
+
+**Rung D plan (revised by the evidence):** (1) build the mirror-tiling capability as a THIRD identity
+frame — a reflect/fold gather + a third cold start in fit_shape_geom (the established "honest
+multi-start, not a selector" pattern, alongside the rescaled and periodic frames); (2) lock tile3 /
+upscale3 with a regression test (already-working, guard against future breakage); (3) subsample/3 and
+k>=4 documented as deferred negatives. Scratch evidence in scratchpad/probe_k3.mojo.
+
+## 2026-07-06 16:42 — Rung D build: mirror-tiling as a THIRD identity frame (reflect gather)
+
+Built the Rung D capability the measure-first pass named as the real prize: MIRROR (kaleidoscope)
+tiling — the 8-train-task family (vs 3 plain) that the periodic torus provably cannot express.
+
+**Mechanism (values-clean, minimal-surface).** A k-fold size change has a THIRD canonical identity
+frame beyond the resized (M=I) and periodic (M=kI) planes: the MIRROR plane, where odd tiles are
+flipped (`out[R+i]=in[R-1-i]`). The key derivation: the mirror read is the SAME centered query the
+toroidal gather already computes, with the periodic WRAP (`d -= extent·round(d/extent)`, a sawtooth)
+replaced by a symmetric triangle FOLD about the grid edges (`_reflect_fold`, period 2·extent). Two
+consequences fall out for free: (1) the SAME `seed_periodic` (M=kI, trel=(k-1)/2) is the exact mirror
+solution — verified by hand: that seed makes q the centered source index of the output cell, which the
+fold then reflects into the base tile; (2) the triangle is CONTINUOUS (slope ±1, no jumps), so the ES
+gradient is actually CLEANER than the sawtooth's. So the whole capability is: `attn_gather_reflect`
+(the fold twin of `attn_gather_toroidal`, a plain bounded window over the base cells — no period
+doubling, same cost as apply_shaped) + a written `SHAPEGEOM_MODE_OFF` slot (0=torus, 1=reflect;
+frozen in fill_scale, a written observable like trel — NOT a runtime selector) that `apply`
+dispatches on + a THIRD cold start in `fit_shape_geom` that sets the mode slot and reuses the existing
+memory types (apply reads the slot, so no new struct). Winner by demo fitness — the established
+"honest multi-start, not a selector" pattern.
+
+**Constant-compute + strict superset preserved.** The reflect frame is a candidate ONLY when the
+written shape rule GROWS an axis (a shrink/same-size task can't be a reflection) — so non-growing
+tasks keep the byte-identical two-start regime, and the budget is split by the actual start count
+(2 or 3), keeping total demo-evaluations constant. Rung C (`ShapeGeomColorComposedMemory`) and
+`arc_solve` inherit mirror with ZERO change: Rung C's apply delegates the gather to
+`ShapeGeomComposedMemory.apply` (now dispatching), and its driver calls `fit_shape_geom` (now 3-start).
+
+**Proof (`test_mirror_tiling`, full tier, cold, held-out at a FRESH size):** mirror_tile2 **1.0**,
+mirror_tile3 **1.0**, each with the reflect frame winning (mode=1). k=3 grow regression: tile3 **1.0**,
+upscale3 **0.990** (mode=0, untouched). Controls: mode ablation — a mirror-fitted state read through
+the FORCED torus collapses to **0.44** (reflect is load-bearing); strict superset — a plain tile2
+still solves **1.0** AND lands mode=0 (the reflect start never hijacks a non-mirror task).
+Regression: `test_shape_change` unchanged (crop1/flip_h_crop1/subsample2 **1.0**, upscale2 **0.987**,
+tile2 **1.0** — the grow families now run 3 starts at iters/3 and still clear the bar). Also proved
+out-of-box: tile3 **1.0** / upscale3 **0.966** already worked at k=3 (measure-first) — locked as
+regression families. subsample/3 and k≥4-shrink are documented negatives (the downscale
+query-normalization amplifies the staircase past the sigma floor — 16:01 entry).
+
+**Files:** `attn_gather_reflect`/`_reflect_fold` (memory_es.mojo); `SHAPEGEOM_MODE_OFF` + apply
+dispatch (memory_composed.mojo); the 3rd start + grow-gate (esper_evolution.mojo `fit_shape_geom`);
+`tile3`/`upscale3`/`mirror_tile{2,3}` synth families (synth_tasks.py); `test_mirror_tiling.mojo`
+(the full-tier end-to-end proof; NO mirror bundle added to the CI arc_solve leg — a grow bundle at
+full budget × 3 starts is ~4 min, a poor CI cost/value trade since the dedicated test already
+exercises the fit + reflect apply; the Rung C-wrapper dispatch was smoke-checked manually instead).
+**Corpus value:** up to +8
+train solves (the pure mirror-tilings; eval has 0), to be booked in the deferred v4 re-measure — and
+by prior agreement the shape-slice-only before/after check isolates Rung D's contribution from Rung C.
+
+**Regression cross-check (honest, done not assumed).** End-to-end through the real corpus driver:
+arc_solve solves mirror_tile2 ×2 + tile3 **3/3 = 1.0** (mem: shape — the Rung C
+`ShapeGeomColorComposedMemory` wrapper inherits the reflect dispatch), and recolor_tile2 (grow +
+colour, the 3-start + colour-write path) **1.0**. `./esper fast` green. One shrink+colour probe
+(recolor_crop1) scored 0.1 — I `git stash`ed the change and re-ran it on MASTER: **identical 0.1 /
+train 0.194**, so it's a pre-existing hard case (crop border-loss corrupts the colour histogram
+signature at that seed), NOT a Rung D regression — the non-grow path is byte-identical by construction
+(mode slot frozen 0, two-start budget unchanged) and the matching numbers confirm it.

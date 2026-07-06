@@ -356,8 +356,22 @@ slice is dominated by that last class (19/39).
    improved-yet-unsolved need a richer/meta-trained local read → the evidence-backed scope for
    **Approach 2 (a meta-trained self-mod grid factor) folded into rung #6 (persistent slow weights)**,
    designed with the M9 wash-out mitigation rather than bolted on. (JOURNAL 2026-07-06 14:55.)
-4. **Rung D — small paid-for extensions** (pure implementation). k=3 factors and mirror-tilings
-   (near the periodic seed B on the two-frame seam); trivial finds from the audit.
+4. **Rung D — small paid-for extensions — DONE (2026-07-06).** Measure-first split the item: k=3
+   GROW families (tile3/upscale3) **already worked** through the toroidal gather (held-out 1.0 / 0.966
+   cold, already dispatched in arc_solve — locked as regression families); subsample/3 and k≥4-shrink
+   are **documented negatives** (the downscale query-normalization amplifies the staircase past the
+   settle sigma floor — a core-touching fix with regression risk for ~6 lower-value tasks). The real
+   prize was **mirror (kaleidoscope) tiling**: corpus scan found **8 train mirror-tilings vs 3 plain**
+   (eval 0), provably outside the periodic torus. Landed as a THIRD identity frame on the two-frame
+   seam — `attn_gather_reflect` (a symmetric triangle-FOLD twin of the toroidal WRAP; same centered
+   query, same `seed_periodic`, cost of apply_shaped, and a *smoother* ES landscape) selected by a
+   written `SHAPEGEOM_MODE_OFF` slot that `apply` dispatches on, discovered as a third cold start in
+   `fit_shape_geom` (grow-gated so non-growing tasks stay byte-identical two-start; constant compute).
+   Rung C + arc_solve inherit it with zero change. Proof (`test_mirror_tiling`, cold): mirror_tile{2,3}
+   **1.0** held-out with the reflect frame winning; controls — mode ablation collapses to 0.44 (reflect
+   is load-bearing), strict superset (plain tile2 stays 1.0 at mode 0). No `test_shape_change`
+   regression. **Corpus value up to +8 train solves, booked in the deferred v4 re-measure** (the
+   shape-slice before/after isolates Rung D from Rung C). (JOURNAL 2026-07-06 16:01 / 16:42.)
 5. **Rung CMS — multi-block chain** (NL §7; mostly research). The deep floor (146 train same-shape
    tasks at train-fit 0.34, most of eval): multi-step / object-level rules no single memory or pair
    expresses — the (twice-proven) composition pattern chained in DEPTH (3+ stages, grid-in/grid-out

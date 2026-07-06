@@ -25,6 +25,9 @@ from memory_composed import (
     ShapeGeomColorComposedMemory,
     SHAPEGEOM_DIM,
     SHAPEGEOM_TREL_OFF,
+    SHAPEGEOM_SHAPE_OFF,
+    SHAPEGEOM_MODE_OFF,
+    SHAPEGEOM_MODE_REFLECT,
 )
 from hope import ExamplePair, Task, ArcTaskPair, HopeNode, ArcGrid
 
@@ -1043,8 +1046,16 @@ def fit_shape_geom(
     var n_demos = len(demos)
     if n_demos < 1:
         n_demos = 1
-    # Same total budget as every composed driver; each start gets half.
-    var iters_scaled = iters * FIT_DEMO_REF // n_demos // 2
+    # Frame count is a WRITTEN property of the task. A mirror-tiling (Rung D) needs
+    # the output to GROW an axis (a shrink/same-size task can't be a reflection
+    # tiling), so the reflect frame is a candidate ONLY when the written shape rule
+    # grows — non-growing tasks keep the byte-identical two-start regime and budget.
+    var grows = state[SHAPEGEOM_SHAPE_OFF + 0] > Float32(1.5) or state[
+        SHAPEGEOM_SHAPE_OFF + 2
+    ] > Float32(1.5)
+    var n_starts = 3 if grows else 2
+    # Constant compute: the total budget is split evenly across the task's starts.
+    var iters_scaled = iters * FIT_DEMO_REF // n_demos // n_starts
     var settle_iters = iters_scaled // SHAPE_SETTLE_DIV
     var discover_iters = iters_scaled - settle_iters
 
@@ -1059,15 +1070,21 @@ def fit_shape_geom(
     var fit_out = alloc[Float32](grid_capacity)
     var best_fitness = Float32(-3.0e38)
 
-    for start in range(2):
-        # Both starts share the written shape rule; only the content frame
-        # differs.
+    for start in range(n_starts):
+        # All starts share the written shape rule; only the content frame differs.
+        # start 0: RESIZED plane (M=I, toroidal — crop/subsample/blocky upscale).
+        # start 1: PERIODIC plane (M=kI, trel=(k-1)/2, toroidal — plain tiling).
+        # start 2 (grow only): MIRROR plane — the same periodic seed read through
+        # the REFLECT gather (mode slot set), so odd tiles are flipped (Rung D).
         copy_weights(cand, state, SHAPEGEOM_DIM)
         AttnGatherMemory.seed(cand)  # M = I, t = 0, soft temperature
         cand[SHAPEGEOM_TREL_OFF + 0] = 0.0
         cand[SHAPEGEOM_TREL_OFF + 1] = 0.0
-        if start == 1:
+        cand[SHAPEGEOM_MODE_OFF] = 0.0  # toroidal unless the mirror start
+        if start >= 1:
             ShapeGeomComposedMemory.seed_periodic(cand)
+        if start == 2:
+            cand[SHAPEGEOM_MODE_OFF] = SHAPEGEOM_MODE_REFLECT
         copy_weights(slow, cand, SHAPEGEOM_DIM)
 
         # DISCOVER: wide annealed search on the soft landscape.

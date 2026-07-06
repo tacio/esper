@@ -112,6 +112,44 @@ def _tile2(grid):
     ]
 
 
+def _tile3(grid):
+    # Plain 3x3 tiling (Rung D k=3). Same modular sawtooth as _tile2 at k=3 —
+    # already expressed by the toroidal gather (measure-first: held-out 1.0
+    # cold), kept as a regression family.
+    r, c = len(grid), len(grid[0])
+    return [[grid[i % r][j % c] for j in range(3 * c)] for i in range(3 * r)]
+
+
+def _upscale3(grid):
+    # Blocky 3x replication (Rung D k=3): out[r][c] = in[r//3][c//3].
+    r, c = len(grid), len(grid[0])
+    return [[grid[i // 3][j // 3] for j in range(3 * c)] for i in range(3 * r)]
+
+
+def _mirror_tile2(grid):
+    return _mirror_tile(grid, 2)
+
+
+def _mirror_tile3(grid):
+    return _mirror_tile(grid, 3)
+
+
+def _mirror_tile(grid, k):
+    # Kaleidoscope MIRROR tiling k x k (Rung D): tile block (br, bc) is the base
+    # grid flipped vertically iff br is odd and horizontally iff bc is odd
+    # (out[R+i] = in[R-1-i]). Provably OUTSIDE the periodic torus — the reflect
+    # (triangle-fold) gather is what expresses it. The corpus's dominant tiling
+    # family (8 mirror vs 3 plain train tasks).
+    r, c = len(grid), len(grid[0])
+    out = [[0] * (k * c) for _ in range(k * r)]
+    for R in range(k * r):
+        for C in range(k * c):
+            ir = r - 1 - (R % r) if (R // r) % 2 else R % r
+            ic = c - 1 - (C % c) if (C // c) % 2 else C % c
+            out[R][C] = grid[ir][ic]
+    return out
+
+
 TRANSFORMS = {
     "identity": _identity,
     "flip_h": _flip_h,
@@ -151,6 +189,10 @@ SHAPE_TRANSFORMS = {
     "subsample2": _subsample2,
     "upscale2": _upscale2,
     "tile2": _tile2,
+    "tile3": _tile3,
+    "upscale3": _upscale3,
+    "mirror_tile2": _mirror_tile2,
+    "mirror_tile3": _mirror_tile3,
     "recolor_crop1": _recolor_crop1,
     "recolor_subsample2": _recolor_subsample2,
     "recolor_upscale2": _recolor_upscale2,

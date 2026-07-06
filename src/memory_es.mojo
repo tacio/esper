@@ -619,3 +619,129 @@ def attn_gather_toroidal(
                     z += w
                     s = fma(w, inp.data[rj * cols + cj], s)
             dst[r * out_cols + c] = s / z
+
+
+# Symmetric triangle fold of a CENTERED source coordinate `x` into the base
+# grid's centered range [-extent/2, extent/2], via reflection at the grid's two
+# EDGES (period 2*extent). This is the reflect analogue of the toroidal gather's
+# `x -= extent*round(x/extent)` wrap: where the torus repeats the grid
+# (sawtooth), reflection MIRRORS every other copy (triangle). Unlike the
+# sawtooth the triangle is CONTINUOUS (slope +-1, no jumps), so the ES sees a
+# clean gradient everywhere. Reads the kaleidoscope tiling `out[R+i]=in[R-1-i]`:
+# the alternate-flipped mirror tiling the plain torus provably cannot express.
+def _reflect_fold(x: Float32, extent: Float32) -> Float32:
+    var half = extent * Float32(0.5)
+    var period = extent + extent
+    var u = x + half
+    u -= period * floor(u / period)  # into [0, 2*extent)
+    if u >= extent:
+        u = period - u  # reflect the far half back
+    return u - half
+
+
+# REFLECT (mirror-tiling) output-shaped gather (Vision A / Next #1 Rung D). The
+# twin of `attn_gather_toroidal`: the SAME learned attention read and the SAME
+# centered query `q = M*v + t + trel*extent` (so M/t/trel/beta and the
+# resize-as-identity query normalization all carry over unchanged, and the same
+# `seed_periodic` seed — M=kI, trel=(k-1)/2 — is the pure mirror-tiling
+# solution, verified: for a k-tiling that seed makes q the centered source index
+# of the output cell, which `_reflect_fold` then folds into the base tile). The
+# ONE change from the torus: the source is read through the symmetric reflection
+# above instead of the periodic wrap, so odd tiles are mirrored. The window is a
+# plain bounded scan over the base cells around the FOLDED query (no period
+# doubling — the fold already brought q into the base range), same cost as
+# `apply_shaped`.
+def attn_gather_reflect(
+    weights: UnsafePointer[Float32, MutAnyOrigin],
+    trel_r: Float32,
+    trel_c: Float32,
+    kr: Float32,
+    kc: Float32,
+    inp: ArcGrid,
+    out_rows: Int,
+    out_cols: Int,
+    dst: UnsafePointer[Float32, MutAnyOrigin],
+):
+    var m00 = weights[ATTN_M_OFF + 0]
+    var m01 = weights[ATTN_M_OFF + 1]
+    var m10 = weights[ATTN_M_OFF + 2]
+    var m11 = weights[ATTN_M_OFF + 3]
+    var t_r = weights[ATTN_T_OFF + 0]
+    var t_c = weights[ATTN_T_OFF + 1]
+    var beta_raw = weights[ATTN_BETA_OFF]
+    var beta = beta_raw * beta_raw
+    var rows = inp.rows
+    var cols = inp.cols
+    var frows = Float32(rows)
+    var fcols = Float32(cols)
+    var cr = Float32(rows - 1) * Float32(0.5)
+    var cc = Float32(cols - 1) * Float32(0.5)
+    var cr_out = Float32(out_rows - 1) * Float32(0.5)
+    var cc_out = Float32(out_cols - 1) * Float32(0.5)
+
+    # Query normalization by the shape-rule slope (see attn_gather_toroidal).
+    var inv_kr = Float32(1.0)
+    if kr > Float32(1.0e-3):
+        inv_kr = 1.0 / kr
+    var inv_kc = Float32(1.0)
+    if kc > Float32(1.0e-3):
+        inv_kc = 1.0 / kc
+
+    for r in range(out_rows):
+        var vr = (Float32(r) - cr_out) * inv_kr
+        for c in range(out_cols):
+            var vc = (Float32(c) - cc_out) * inv_kc
+            # Same centered query as the torus, then fold (not wrap).
+            var qr = fma(m00, vr, fma(m01, vc, t_r)) + trel_r * frows
+            var qc = fma(m10, vr, fma(m11, vc, t_c)) + trel_c * fcols
+            var fr = _reflect_fold(qr, frows)
+            var fc = _reflect_fold(qc, fcols)
+
+            # Bounded window centered on the folded query's base cell.
+            var ctr_r = Int(round(fr + cr))
+            if ctr_r < 0:
+                ctr_r = 0
+            if ctr_r > rows - 1:
+                ctr_r = rows - 1
+            var ctr_c = Int(round(fc + cc))
+            if ctr_c < 0:
+                ctr_c = 0
+            if ctr_c > cols - 1:
+                ctr_c = cols - 1
+            var r_lo = ctr_r - ATTN_WINDOW
+            if r_lo < 0:
+                r_lo = 0
+            var r_hi = ctr_r + ATTN_WINDOW
+            if r_hi > rows - 1:
+                r_hi = rows - 1
+            var c_lo = ctr_c - ATTN_WINDOW
+            if c_lo < 0:
+                c_lo = 0
+            var c_hi = ctr_c + ATTN_WINDOW
+            if c_hi > cols - 1:
+                c_hi = cols - 1
+
+            # Pass 1: max score over the window (numerical stability).
+            var max_score = Float32(-1.0e30)
+            for rj in range(r_lo, r_hi + 1):
+                var dvr = fr - (Float32(rj) - cr)
+                var dvr2 = dvr * dvr
+                for cj in range(c_lo, c_hi + 1):
+                    var dvc = fc - (Float32(cj) - cc)
+                    var score = -beta * (dvr2 + dvc * dvc)
+                    if score > max_score:
+                        max_score = score
+
+            # Pass 2: softmax-weighted gather.
+            var z = Float32(0.0)
+            var s = Float32(0.0)
+            for rj in range(r_lo, r_hi + 1):
+                var dvr = fr - (Float32(rj) - cr)
+                var dvr2 = dvr * dvr
+                for cj in range(c_lo, c_hi + 1):
+                    var dvc = fc - (Float32(cj) - cc)
+                    var score = -beta * (dvr2 + dvc * dvc)
+                    var w = exp(score - max_score)
+                    z += w
+                    s = fma(w, inp.data[rj * cols + cj], s)
+            dst[r * out_cols + c] = s / z

@@ -10,6 +10,7 @@ from memory_es import (
     ATTN_M_OFF,
     ATTN_BETA_OFF,
     attn_gather_toroidal,
+    attn_gather_reflect,
 )
 
 # ==========================================
@@ -609,7 +610,14 @@ struct GeomCountComposedMemory(Memory):
 # the shape seam + geometry incl. the modular (upscale/tiling) families.
 comptime SHAPEGEOM_TREL_OFF = ATTN_DIM  # trel_r, trel_c
 comptime SHAPEGEOM_SHAPE_OFF = ATTN_DIM + 2  # kr, br, kc, bc
-comptime SHAPEGEOM_DIM = ATTN_DIM + 6
+# Gather-frame mode (Rung D): 0 = toroidal (periodic tiling / resize), 1 =
+# reflect (mirror tiling). WRITTEN by the fit driver's multi-start (never
+# searched — fill_scale freezes it), read by `apply` to pick the source
+# topology. A written observable of which frame won, exactly like trel — not a
+# runtime memory-selector.
+comptime SHAPEGEOM_MODE_OFF = ATTN_DIM + 6
+comptime SHAPEGEOM_MODE_REFLECT = Float32(1.0)
+comptime SHAPEGEOM_DIM = ATTN_DIM + 7
 # ES step scale for trel (see fill_scale: extent-multiplied, seeded at its
 # solution — refinement only).
 comptime SHAPEGEOM_TREL_SCALE = Float32(0.2)
@@ -657,6 +665,7 @@ struct ShapeGeomComposedMemory(ShapeMemory):
         state[SHAPEGEOM_SHAPE_OFF + 1] = 0.0  # br
         state[SHAPEGEOM_SHAPE_OFF + 2] = 1.0  # kc
         state[SHAPEGEOM_SHAPE_OFF + 3] = 0.0  # bc
+        state[SHAPEGEOM_MODE_OFF] = 0.0  # toroidal frame by default
 
     @staticmethod
     def fill_scale(scale: UnsafePointer[Float32, MutAnyOrigin], n: Int):
@@ -672,6 +681,7 @@ struct ShapeGeomComposedMemory(ShapeMemory):
         scale[SHAPEGEOM_TREL_OFF + 1] = SHAPEGEOM_TREL_SCALE
         for i in range(4):
             scale[SHAPEGEOM_SHAPE_OFF + i] = 0.0
+        scale[SHAPEGEOM_MODE_OFF] = 0.0  # frame is written, never searched
 
     # Seed B — the PERIODIC identity frame (see the struct comment): the
     # content map that reads the input as a corner-aligned torus, M = kI with
@@ -782,20 +792,35 @@ struct ShapeGeomComposedMemory(ShapeMemory):
     ):
         # The attention slots [0:7] are `state` itself; trel and the written
         # shape-rule slopes ride in explicitly (the slopes NORMALIZE the query:
-        # resize-as-identity — see attn_gather_toroidal). The source is
-        # toroidal, which is what makes the modular families (tiling)
-        # expressible.
-        attn_gather_toroidal(
-            state,
-            state[SHAPEGEOM_TREL_OFF + 0],
-            state[SHAPEGEOM_TREL_OFF + 1],
-            state[SHAPEGEOM_SHAPE_OFF + 0],
-            state[SHAPEGEOM_SHAPE_OFF + 2],
-            inp,
-            out_rows,
-            out_cols,
-            dst,
-        )
+        # resize-as-identity — see attn_gather_toroidal). The frame mode slot
+        # (written by the fit driver's multi-start) selects the source topology:
+        # toroidal (periodic tiling / resize / crop / flip) or reflect (mirror
+        # tiling — Rung D). Both share the identical query; only the read wraps
+        # vs folds.
+        if state[SHAPEGEOM_MODE_OFF] >= Float32(0.5):
+            attn_gather_reflect(
+                state,
+                state[SHAPEGEOM_TREL_OFF + 0],
+                state[SHAPEGEOM_TREL_OFF + 1],
+                state[SHAPEGEOM_SHAPE_OFF + 0],
+                state[SHAPEGEOM_SHAPE_OFF + 2],
+                inp,
+                out_rows,
+                out_cols,
+                dst,
+            )
+        else:
+            attn_gather_toroidal(
+                state,
+                state[SHAPEGEOM_TREL_OFF + 0],
+                state[SHAPEGEOM_TREL_OFF + 1],
+                state[SHAPEGEOM_SHAPE_OFF + 0],
+                state[SHAPEGEOM_SHAPE_OFF + 2],
+                inp,
+                out_rows,
+                out_cols,
+                dst,
+            )
 
 
 # The SETTLE-phase variant of ShapeGeomComposedMemory (same layout, same
