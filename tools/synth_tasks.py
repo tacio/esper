@@ -279,6 +279,110 @@ def generate_shape_task_groups(transform, out_dir, num_tasks, n_train, seed):
     return paths
 
 
+# ---------------------------------------------------------------------------
+# LOCAL-CONTENT transforms (Rung A build, Approach 1b). Same-shape per-cell rules
+# keyed on a bounded local SIGNATURE (centre colour, #Moore-8 neighbours DIFFERING
+# from centre) — the class the copy-gather+colour memory under-applies (the Rung A
+# near-miss audit). The ground truth LocalWriteComposedMemory must rediscover as a
+# written signature table composed on the gather. They need STRUCTURED (blocky)
+# grids — a background with solid regions — so the local signatures are
+# identifiable (uniform-random grids make every cell a border).
+# ---------------------------------------------------------------------------
+def _blocky_grid(rows, cols, rng):
+    g = [[0] * cols for _ in range(rows)]
+    for _ in range(rng.randint(2, 4)):
+        col = rng.randint(1, 2)
+        h = rng.randint(2, max(2, rows - 2))
+        w = rng.randint(2, max(2, cols - 2))
+        r0 = rng.randrange(0, rows - h + 1)
+        c0 = rng.randrange(0, cols - w + 1)
+        for r in range(r0, r0 + h):
+            for c in range(c0, c0 + w):
+                g[r][c] = col
+    for _ in range(rng.randint(1, 3)):
+        r = rng.randrange(1, rows - 1)
+        c = rng.randrange(1, cols - 1)
+        if all(
+            g[r + dr][c + dc] != 0 for dr in (-1, 0, 1) for dc in (-1, 0, 1)
+        ):
+            g[r][c] = 0  # a punched enclosed-background hole
+    return g
+
+
+def _diff_count(grid, r, c):
+    rows, cols = len(grid), len(grid[0])
+    ctr = grid[r][c]
+    return sum(
+        1
+        for dr in (-1, 0, 1)
+        for dc in (-1, 0, 1)
+        if not (dr == 0 and dc == 0)
+        and grid[(r + dr) % rows][(c + dc) % cols] != ctr
+    )
+
+
+def _outline(grid):
+    # Any cell bordering a different colour -> 9 (edge / object-colour class).
+    rows, cols = len(grid), len(grid[0])
+    return [
+        [9 if _diff_count(grid, r, c) >= 1 else grid[r][c] for c in range(cols)]
+        for r in range(rows)
+    ]
+
+
+def _fill_enclosed(grid):
+    # A fully-enclosed background cell (all 8 neighbours non-background) -> 8
+    # (the background-fill class; a single well-covered signature, (0, 8)).
+    rows, cols = len(grid), len(grid[0])
+    return [
+        [
+            8 if grid[r][c] == 0 and _diff_count(grid, r, c) == 8 else grid[r][c]
+            for c in range(cols)
+        ]
+        for r in range(rows)
+    ]
+
+
+LOCAL_TRANSFORMS = {
+    "outline": _outline,
+    "fill_enclosed": _fill_enclosed,
+}
+
+
+def generate_local_task_groups(
+    transform, out_dir, num_tasks, n_train, rows, cols, seed
+):
+    """Emit `num_tasks` LOCAL-CONTENT task bundles on STRUCTURED blocky grids.
+
+    Same-shape (so they route through the same-shape solver path), but the rule
+    is a local-neighbourhood signature the copy-gather cannot express — the Rung A
+    build's ground truth. Held-out test grid is a fresh blocky layout.
+    """
+    if transform not in LOCAL_TRANSFORMS:
+        raise ValueError(
+            "Unknown local transform %r; choose from %s"
+            % (transform, ", ".join(sorted(LOCAL_TRANSFORMS)))
+        )
+    os.makedirs(out_dir, exist_ok=True)
+    fn = LOCAL_TRANSFORMS[transform]
+    rng = _random.Random(seed)
+
+    paths = []
+    for t in range(num_tasks):
+        train = []
+        for _ in range(n_train):
+            grid_in = _blocky_grid(rows, cols, rng)
+            train.append((grid_in, fn(grid_in)))
+        test_in = _blocky_grid(rows, cols, rng)
+        test = [(test_in, fn(test_in))]
+
+        path = os.path.join(out_dir, "%s_%d.task" % (transform, t))
+        _save_task(train, test, path)
+        paths.append(path)
+
+    return paths
+
+
 def _parse_args():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument(

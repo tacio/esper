@@ -323,21 +323,39 @@ slice is dominated by that last class (19/39).
    re-measure** (both splits, documented budget — the separate overnight trigger) to book the shape-
    slice gain on the ~107 convertible train tasks + eval analogues; and the crop-border-loss
    correspondence-write fallback stays documented (not needed — fractions + contrast sufficed).
-2. **Rung S — shape-from-content** (~40% research / 60% implementation). The 63 train + 19 eval
-   tasks where NO affine-in-dims rule fits any demo: generalize the shape WRITE (not the gather) to
-   an affine rule over a small basis of per-demo content statistics — input dims,
-   non-background bounding-box dims (bbox-crop is a major ARC class), distinct-colour count — basis
-   selected by least-squares residual across demos (precedent: GeomCount's P-by-residual, block 4's
-   scoring salience; statistics are representational substrate, not task primitives). Research
-   part: the emergence-bar argument for the basis, identifiability at 2–3 demos (documented
-   underdetermination ceiling), background-colour inference. Audit the 63 task ids before coding.
-3. **Rung A — the same-shape near-miss audit** (measure-first). The 88 tasks at held-out 0.90–0.99
-   fail on a FEW cells: build a tools/ diagnostic that dumps predicted-vs-truth cell diffs for
-   those ids, clustered by pattern (global colour error vs localized region vs border), and let the
-   audit name the mechanism — leading candidate: a self-written content MASK/GATE (rule where mask,
-   identity elsewhere), also the first step toward content-gated composition. Do not design before
-   the audit; the long-tail hazard (fragmentation into many small classes) is what the audit
-   decides.
+2. **Rung S — shape-from-content — AUDIT RETURNED STOP (documented negative, 2026-07-05).** The
+   measure-first gate (`tools/shape_from_content.py`, over the exact 63 train / 19 eval dims-never-fit
+   ids) found NO dominant content-statistic basis: exact bbox-crop fits **2/63 train, 0/19 eval**;
+   the free-affine "coverage" is spurious overfitting at the 2–3-demo floor. **86% train / 95% eval
+   are output-shrinking reductions/extractions** (which-colour-dominates, largest-object, region
+   select) whose CONTENT is not a positional copy of the input — so no shape+gather memory expresses
+   them however the output size is written (even the 9 constant-output tasks already get their size
+   predicted yet score 0). The class is **content-model-bound, not shape-write-bound**: it belongs to
+   the object-level / content-extraction family (Rung CMS territory), not a closed-form shape write.
+   The long-tail hazard fired exactly as flagged; the gate saved a rung's machinery on ~2 tasks.
+   (JOURNAL 2026-07-05 21:20.)
+3. **Rung A — the same-shape near-miss audit — DONE; mechanism named (2026-07-06).** Added
+   `arc_solve --diff` and clustered all 100 near-miss ids (`tools/near_miss_audit.py`) at the v3
+   budget. **Dominant, coherent cluster: 59/100 are UNDER-APPLICATION** — the memory outputs identity
+   where the true rule makes a local change (it nails the global transform, hence 0.90–0.99, but
+   misses a content-selected subset). Sharpened: only 11 are one spatial blob, 48 are distributed;
+   the missed cells are content-keyed — **29 miss BACKGROUND cells (the rule writes NEW content into
+   empty space: fill/draw/extend — a copy-gather can never generate it), 15 miss a specific object
+   colour.** Root cause: the copy-gather + global colour map cannot express a **local, content-
+   conditioned write**. The gate passed (not the long-tail hazard). (JOURNAL 2026-07-06 11:49.)
+   → **Rung A-build (Approach 1b) — DONE (2026-07-06).** `LocalWriteComposedMemory`: the composition
+   pattern's FOURTH closed-form factor — a per-cell local content override WRITTEN from the demos
+   (table keyed on (centre colour, #Moore-8 neighbours differing from centre)), composed on the
+   GeomColor gather via `fit_local` (fit the gather, then write on the RESIDUAL), gated so a pure
+   geometry/colour task writes NO table and stays byte-identical (strict superset). Proof
+   (`test_local_write`, cold): outline + fill_enclosed **1.0** held-out, few-demo n=3 0.975, ablation
+   0.62 (load-bearing), pure recolor keeps an empty table at 1.0. Corpus near-miss re-measure
+   (100 ids, budget 64/1500, vs v3): **+2 solves** (incl. b1948b0a recovering a v3 tie-loss to 1.0),
+   **54/100 improved, 0 regressed**; `./esper fast` green. **Honest verdict:** a real but BOUNDED gain
+   — the n-gram signature captures the clean local classes and broadly helps, but 52 near-misses
+   improved-yet-unsolved need a richer/meta-trained local read → the evidence-backed scope for
+   **Approach 2 (a meta-trained self-mod grid factor) folded into rung #6 (persistent slow weights)**,
+   designed with the M9 wash-out mitigation rather than bolted on. (JOURNAL 2026-07-06 14:55.)
 4. **Rung D — small paid-for extensions** (pure implementation). k=3 factors and mirror-tilings
    (near the periodic seed B on the two-frame seam); trivial finds from the audit.
 5. **Rung CMS — multi-block chain** (NL §7; mostly research). The deep floor (146 train same-shape

@@ -19,6 +19,7 @@ from memory_es import (
 from memory_composed import (
     GeomColorComposedMemory,
     GeomCountComposedMemory,
+    LocalWriteComposedMemory,
     ShapeGeomComposedMemory,
     ShapeGeomSettleMemory,
     ShapeGeomColorComposedMemory,
@@ -707,6 +708,46 @@ def fit_geomcolor(
         reg_lambda,
     )
     slow.free()
+
+
+# ==========================================
+# Composed geometry × colour × local-content fit (Rung A build, Approach 1b)
+# ==========================================
+# The per-task in-context fit for LocalWriteComposedMemory: the fitted GeomColor
+# gather, then the closed-form local-content self-write on the residual. Two
+# closed-form/ES factors composed forward — the gather owns the global transform,
+# the local table owns the per-cell content override the copy-gather can't reach
+# (the Rung A near-miss class). The write is a single pass over the demos AFTER
+# the gather is fit, gated on the residual (strict superset — see write_local).
+def fit_local(
+    state: UnsafePointer[Float32, MutAnyOrigin],
+    demos: List[ArcTaskPair],
+    grid_capacity: Int,
+    n_fit: Int,
+    alpha0: Float32,
+    alpha1: Float32,
+    sigma0: Float32,
+    sigma1: Float32,
+    iters: Int,
+    reg_lambda: Float32,
+) raises:
+    # 1. Fit the GeomColor prefix (gather + written V) exactly as today — the
+    #    LocalWrite layout carries the GeomColor state as its [0:GEOMCOLOR_DIM]
+    #    prefix, so this fits it in place and never touches the local table.
+    fit_geomcolor(
+        state,
+        demos,
+        grid_capacity,
+        n_fit,
+        alpha0,
+        alpha1,
+        sigma0,
+        sigma1,
+        iters,
+        reg_lambda,
+    )
+    # 2. Write the local-content table on the gather's residual (one pass, gated).
+    LocalWriteComposedMemory.write_local(state, demos, grid_capacity)
 
 
 # ==========================================

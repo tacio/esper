@@ -1276,3 +1276,126 @@ arc_solve leg adds a `recolor_crop1` bundle so the `fit_shape_color` path runs e
 The composition pattern lands a third time; the fraction-signature write + the measured contrast
 precondition + the global recolor gate are the new, reusable pieces. Corpus v4 re-measure
 (both splits, documented budget) is the separate overnight trigger, deferred by scope.
+
+## 2026-07-05 21:20 — Rung S audit: the shape-write gate returns STOP (measure-first)
+
+Rung S (shape-from-content) is a measure-first rung — the ROADMAP mandate was "audit the 63 ids
+before coding," with an explicit GATE to stop if the class fragments with no dominant basis. Built
+`tools/shape_from_content.py` (reads the dims-never-fit ids straight from the v3 dumps — `mem: shape`
++ train-fit == 0.0, exactly the 63 train / 19 eval the breakdown named — and reads their grids from
+the raw ARC JSON via the `arg-agi-2-data` symlink). For each task it tests whether the output dims
+follow a small basis of INPUT content statistics (non-bg bbox dims via border-majority background,
+distinct-colour count, input dims) under both an EXACT rule (out == feature, k=1 b=0 — the
+non-overfit signal) and a free affine `round(k*f+b)`.
+
+**The verdict — no dominant basis; the class is content-model-bound, not shape-write-bound:**
+- **Exact bbox-crop (the headline hypothesis) fits 2/63 train, 0/19 eval.** The strong, unambiguous
+  signal is ~3% of the class. My plan's headline sub-class does not exist at scale here.
+- Free-affine "coverage" (nonbg_bbox ~24%, distinct_colours ~27%) is **spurious**: a 2-param affine
+  through the corpus-median 3 demos fits by chance, and `distinct_colours → output_size` is not a
+  real rule. It is not a basis, it is overfitting the identifiability floor.
+- **54/63 train (86%) and 18/19 eval (95%) are output < input** — reductions / selections /
+  extractions (e.g. 27a28665 3×3→1×1 = which-colour-dominates; 1b2d62fb 5×7→5×3; 1a6449f1 shrinks as
+  its object count grows). 9/63 are CONSTANT output size — which the *existing* affine already
+  predicts (k=0) — yet they scored train-fit 0.0 anyway, because the CONTENT rule (a reduction) is
+  outside the AttnGather copy-gather family. So even a correct output-size write yields no solve.
+
+**Gate decision: STOP — do not build the content-statistic shape write.** Rung S as scoped (a shape
+WRITE over content statistics + the unchanged gather) would convert ~2 tasks; it is a documented
+NEGATIVE / measurement result, not a milestone. The measure-first discipline paid off exactly as the
+ROADMAP's long-tail hazard predicted — a rung's worth of machinery (state-layout ripple, synth
+family, proof) was about to be spent on 2 tasks. The real binding constraint for the dims-never-fit
+class is a CONTENT model that can EXTRACT / REDUCE / SELECT (object-level: largest object, dominant
+colour, a coloured region, symmetry completion) — the output is not a positional copy of the input,
+so no shape+gather memory expresses it regardless of how the output size is written. That is Rung CMS
+/ object-level territory (multi-stage, content-generating), reachable only by the depth-chained
+composition pattern, not a closed-form shape write. `tools/shape_from_content.py` is kept as the
+reusable evidence (reproducible: `python tools/shape_from_content.py`). Next direction is the user's
+call — the evidence re-points "the path after Rung C" from the shape write toward the content family.
+
+## 2026-07-06 11:49 — Rung A audit: the near-miss failures are UNDER-APPLICATION (content-conditioned local writes the copy-gather can't express)
+
+Rung A (the same-shape near-miss audit) is measure-first: characterize WHERE the 88 train + 12 eval
+same-shape tasks at held-out 0.90-0.99 go wrong before designing anything. Added a `--diff` mode to
+`arc_solve` (guarded, report-implied, emits EXTRA `DIFF in/pred/true` lines only for the same-shape
+path — the positional per-task contract eval_parallel.sh reads is untouched) that dumps the fitted
+`GeomColorComposedMemory`'s test prediction vs the truth. Ran all 100 near-miss ids at the v3 corpus
+budget (64/1500, 8 shards) so the diffs are the REAL few-wrong-cells regime, then clustered them with
+`tools/near_miss_audit.py` (per-task fingerprint: border fraction, colour-swap kinds, under/over-
+application vs the INPUT, contiguity of the wrong-mask).
+
+**The verdict — one dominant, coherent cluster (the gate PASSES, not fragmentation):**
+- **under-applied 55 + border 4 = 59/100.** At the wrong cells `pred == INPUT` but `true != input`:
+  the memory OUTPUT IDENTITY where the true rule makes a local change. It nails the global transform
+  (hence held-out 0.90-0.99) and misses a localized/content-selected subset. This is exactly the
+  ROADMAP's leading candidate (a self-written content MASK/GATE), now MEASURED not guessed.
+- scattered 30 (mixed under/over, many colours — the genuine long tail), over-applied 6, colour-swap
+  4 (colour table a hair off — few-demo tie territory), region 1.
+
+**Sharpening the mechanism (what KIND of under-application):** of the 59, only **11 are one
+contiguous spatial blob** (a spatial mask); **48 are DISTRIBUTED**. By colour of the missed cells:
+**44/59 share a single input colour** — but honestly split, **29 miss BACKGROUND cells** (the rule
+WRITES NEW CONTENT into empty space — fill / draw / extend / complete — which a copy-gather can never
+generate, since every output cell is a recoloured copy of some EXISTING input cell) and **15 miss a
+specific NON-background object colour** (a local transform of one coloured object the global map
+can't isolate). So the gate is content-keyed and often generative, not a clean spatial mask.
+
+**Root cause named (the mechanism the audit licenses):** the composed memory is a COPY-gather + a
+global colour map; it cannot express a LOCAL, CONTENT-CONDITIONED WRITE — whether filling background,
+transforming one object, or a small region. The natural in-family lead: this is precisely what the
+existing self-mod GRID memories already do (`memory_selfmod_grid.mojo`: GridContext / GridNbhd /
+GridCountMap write per-cell outputs conditioned on the cell's colour + Moore-8 neighbourhood), but
+they were only ever proven on synth in ISOLATION — `arc_solve` never dispatches them; the same-shape
+path is copy-gather-only. The Rung A mechanism is therefore composing a content-conditioned local
+write (the self-mod grid family, or a new gate keyed on colour/neighbourhood) WITH / on top of the
+gather — the first real content-gated composition on the corpus, exactly the roadmap's "first step
+toward content-gated composition." Whether that lands as a driver-level dispatch, an additive energy,
+or a genuine composed memory is the DESIGN question for the next rung (not decided here — measure-
+first stops at naming the mechanism). Evidence kept: `tools/near_miss_audit.py`, `scratch/rungA/`
+(reproducible: `--diff --fit 64 1500` over the near-miss ids).
+
+## 2026-07-06 14:55 — Rung A build (Approach 1b): a local content-conditioned write, composed on the gather
+
+The Rung A audit (11:49 entry) named the mechanism: 59/100 same-shape near-misses are
+UNDER-APPLICATION (the copy-gather+colour memory outputs identity where the true rule makes a LOCAL
+change), and 80/100 are (near-)identity geometry + a local rule. Approach 1b (the plan's cold,
+values-clean choice) adds the composition pattern's FOURTH closed-form factor: a per-cell local
+content override WRITTEN from the demos, composed on top of the proven GeomColor gather.
+
+**Mechanism.** `LocalWriteComposedMemory` (memory_composed.mojo): layout [0:GEOMCOLOR_DIM] the
+gather+V state | [+90] a written table keyed on a bounded, position-free local SIGNATURE — (centre
+colour, #Moore-8 neighbours DIFFERING from centre), 10x9. `write_local` majority-votes each
+signature's output over the demo cells (support + dominance thresholds; sentinel -1 = "keep the
+gather output" for unseen signatures — an n-gram prior). `apply` = GeomColor.apply then override by
+signature. `fit_local` (esper_evolution.mojo) = the unchanged fit_geomcolor, then write_local on the
+gather's RESIDUAL. A GLOBAL ACCEPTANCE GATE keeps the table only on a strict demo-residual
+improvement over a non-exact gather — so a pure geometry/colour task writes NO table and the memory
+is BYTE-IDENTICAL to GeomColor (strict superset; the override is input-position-keyed, correct only
+when the gather is ~identity, so a real-geometry task fails the gate — the 20% geometry-and-miss
+slice honestly deferred). arc_solve's same-shape branch routes through it.
+
+**Proof (test_local_write, full tier, cold, held-out at a FRESH blocky grid):** `outline` (edge /
+object-colour class) **1.0**, `fill_enclosed` (background-fill class) **1.0**, few-demo n=3 **0.975**;
+ablation (GeomColor only) **0.62** (the local write is load-bearing); strict superset (a pure recolor
+writes an EMPTY table AND stays **1.0**). The synth families need STRUCTURED (blocky) grids — a
+background with solid regions — so the local signature is identifiable (uniform-random grids make
+every cell a border); a 2-colour palette + the fully-enclosed (diff-count==8) fill signature keep the
+n-gram key well-covered (the honest identifiability precondition, like the shape tasks' varying
+sizes).
+
+**Corpus re-measure (the 100 near-miss ids through the new fit_local path, budget 64/1500, vs v3):**
+**+2 new solves** (97c75046, b1948b0a — the latter RECOVERS a documented v3 identity-on-tie loss to
+1.0), **54/100 improved, 0 REGRESSED** (mean held-out 0.9403 -> 0.9516). The strict superset held
+exactly: zero regressions. `./esper fast` stays green (the fast tier's memories are unchanged; the
+arc_solve same-shape leg now runs fit_local and still solves flip_h/recolor).
+
+**The honest verdict + Approach 2 scope.** 1b is a real but BOUNDED gain, exactly as the plan
+predicted: the (centre, differing-count) n-gram key + corpus budget capture the clean local-signature
+classes (outline/fill cold-proven) and broadly help (54 improved) but only push 2 near-misses over the
+solve bar — the remaining 52 improved-but-unsolved need a richer / meta-trained local read (the
+disjunctive/count classes GridNbhd/GridCountMap express). That 52-task slice is now the
+evidence-backed motivation for **Approach 2 (a meta-trained self-mod grid factor) folded into roadmap
+#6 (persistent slow weights)** — designed with the M9 wash-out mitigation, not bolted on. The
+composition pattern's fourth application; the reusable new pieces are the local-signature write + the
+residual acceptance gate. Corpus v4 re-measure (both full splits) stays the deferred overnight
+trigger.

@@ -191,6 +191,189 @@ struct GeomColorComposedMemory(Memory):
 
 
 # ==========================================
+# Composed geometry × colour × LOCAL-CONTENT memory (Rung A build, Approach 1b)
+# ==========================================
+# The Rung A audit (JOURNAL 2026-07-06) found the same-shape near-misses are
+# dominated by UNDER-APPLICATION: the copy-gather+colour memory outputs identity
+# where the true rule makes a LOCAL content change (fill background, recolor an
+# edge/isolated cell), and 80% of them are (near-)identity geometry + a local
+# rule. This memory adds the composition pattern's FOURTH closed-form factor: a
+# per-cell local-content override WRITTEN from the demos, composed on top of the
+# proven GeomColor gather.
+#
+# - LOCAL rule — a closed-form self-WRITE keyed on a bounded, position-free local
+#   SIGNATURE: (centre colour, #Moore-8 neighbours DIFFERING from centre) — a
+#   10x9 table. Background-free (no bg inference), toroidal (same lattice as
+#   GeomCount), and directly expresses the fill/dilation/edge/isolated-cell
+#   classes the gather can't. `write_local` majority-votes each signature's
+#   output over the demo cells; unseen/low-support signatures default to the
+#   SENTINEL (-1 = "keep the gather output") — an n-gram-style prior that
+#   generalizes exactly when a test cell's local signature appeared in the demos.
+# - COMPOSITION — forward and gated. `apply` runs GeomColor.apply, then overrides
+#   each cell whose input signature is written. A GLOBAL ACCEPTANCE GATE keeps the
+#   whole table only if it STRICTLY reduces the demo residual vs the gather (and
+#   the gather wasn't already exact) — so a pure geometry/colour task writes NO
+#   table and the memory is BYTE-IDENTICAL to GeomColor (strict superset; the
+#   existing same-shape solves are protected by construction). The override is
+#   keyed on the INPUT position, so it is only correct when the gather is
+#   ~identity (input/output aligned); a real-geometry task fails the gate and
+#   discards it (the 20% geometry-and-miss slice is honestly deferred).
+#
+# Layout: [0:GEOMCOLOR_DIM] the gather+V state | [+LOCALWRITE_TABLE] the written
+# local table. fill_scale zeros the table (WRITTEN, never ES-searched).
+comptime LOCALWRITE_K = 9  # differing-neighbour count 0..8
+comptime LOCALWRITE_TABLE = COLOR_DIM * LOCALWRITE_K  # 90
+comptime LOCALWRITE_OFF = GEOMCOLOR_DIM
+comptime LOCALWRITE_DIM = GEOMCOLOR_DIM + LOCALWRITE_TABLE
+# Per-signature write acceptance (tuned on synth): enough demo support and a
+# dominant majority so a noisy signature is not written.
+comptime LOCALWRITE_MIN_SUPPORT = 2
+comptime LOCALWRITE_MAJ_THRESH = Float32(0.8)
+
+
+struct LocalWriteComposedMemory(Memory):
+    comptime Dom = GridDomain
+
+    @staticmethod
+    def param_dim() -> Int:
+        return LOCALWRITE_DIM
+
+    @staticmethod
+    def seed(weights: UnsafePointer[Float32, MutAnyOrigin]):
+        # Identity gather + identity V + EMPTY local table (all sentinel): the
+        # unfit/unwritten memory is byte-identical to GeomColor's seed.
+        GeomColorComposedMemory.seed(weights)
+        for s in range(LOCALWRITE_TABLE):
+            weights[LOCALWRITE_OFF + s] = Float32(-1.0)
+
+    @staticmethod
+    def fill_scale(scale: UnsafePointer[Float32, MutAnyOrigin], n: Int):
+        # Gather group keeps GeomColor's preconditioner (which itself freezes V);
+        # the local table is WRITTEN, so scale 0 freezes it on any ES path.
+        GeomColorComposedMemory.fill_scale(scale, GEOMCOLOR_DIM)
+        for s in range(LOCALWRITE_TABLE):
+            scale[LOCALWRITE_OFF + s] = 0.0
+
+    # Position-free local signature at (r,c) on the TOROIDAL grid: centre colour
+    # times the count of Moore-8 neighbours whose colour DIFFERS from the centre.
+    # Identical in write and apply (the n-gram key).
+    @staticmethod
+    def _local_sig(g: ArcGrid, r: Int, c: Int) -> Int:
+        var rows = g.rows
+        var cols = g.cols
+        var ctr = Int(round(g.data[r * cols + c]))
+        var k = 0
+        for dr in range(-1, 2):
+            for dc in range(-1, 2):
+                if dr == 0 and dc == 0:
+                    continue
+                var rr = (r + dr + rows) % rows
+                var cc = (c + dc + cols) % cols
+                if Int(round(g.data[rr * cols + cc])) != ctr:
+                    k += 1
+        if ctr < 0:
+            ctr = 0
+        if ctr > COLOR_DIM - 1:
+            ctr = COLOR_DIM - 1
+        return ctr * LOCALWRITE_K + k
+
+    @staticmethod
+    def apply(
+        weights: UnsafePointer[Float32, MutAnyOrigin],
+        inp: ArcGrid,
+        dst: UnsafePointer[Float32, MutAnyOrigin],
+    ):
+        # Gather + colour, then override each cell whose input signature carries a
+        # written local rule (sentinel < 0 ⇒ keep the gather output).
+        GeomColorComposedMemory.apply(weights, inp, dst)
+        for r in range(inp.rows):
+            for c in range(inp.cols):
+                var sig = Self._local_sig(inp, r, c)
+                var tv = weights[LOCALWRITE_OFF + sig]
+                if tv >= Float32(0.0):
+                    dst[r * inp.cols + c] = round(tv)
+
+    @staticmethod
+    def write_local(
+        weights: UnsafePointer[Float32, MutAnyOrigin],
+        demos: List[ArcTaskPair],
+        capacity: Int,
+    ):
+        """Write the local-content table from the demos, gated on the residual.
+
+        Assumes the gather+V slots are ALREADY fit (call after fit_geomcolor).
+        Majority-votes each signature's output colour over the demo cells; keeps
+        a signature only with enough support and a dominant majority. Accepts the
+        whole table only if it strictly reduces the demo residual vs the fitted
+        gather (and the gather wasn't exact) — the strict-superset gate.
+        """
+        var nd = len(demos)
+        for s in range(LOCALWRITE_TABLE):
+            weights[LOCALWRITE_OFF + s] = Float32(-1.0)
+        if nd == 0:
+            return
+        var votes = alloc[Float32](LOCALWRITE_TABLE * COLOR_DIM)
+        var total = alloc[Float32](LOCALWRITE_TABLE)
+        for i in range(LOCALWRITE_TABLE * COLOR_DIM):
+            votes[i] = 0.0
+        for i in range(LOCALWRITE_TABLE):
+            total[i] = 0.0
+        var gbuf = alloc[Float32](capacity)
+        # Residual of the fitted gather over the demos (integer cell mismatches).
+        var err_gather = 0
+        for d in range(nd):
+            ref g = demos[d].input_grid
+            var n = g.rows * g.cols
+            GeomColorComposedMemory.apply(weights, g, gbuf)
+            for r in range(g.rows):
+                for c in range(g.cols):
+                    var k = r * g.cols + c
+                    var out = Int(round(demos[d].output_grid.data[k]))
+                    var sig = Self._local_sig(g, r, c)
+                    if out >= 0 and out < COLOR_DIM:
+                        votes[sig * COLOR_DIM + out] += 1.0
+                        total[sig] += 1.0
+                    if Int(round(gbuf[k])) != out:
+                        err_gather += 1
+        # Per-signature majority write (support + dominance thresholds).
+        for sig in range(LOCALWRITE_TABLE):
+            if total[sig] < Float32(LOCALWRITE_MIN_SUPPORT):
+                continue
+            var best = Float32(-1.0)
+            var best_c = -1
+            for c in range(COLOR_DIM):
+                if votes[sig * COLOR_DIM + c] > best:
+                    best = votes[sig * COLOR_DIM + c]
+                    best_c = c
+            if best >= LOCALWRITE_MAJ_THRESH * total[sig]:
+                weights[LOCALWRITE_OFF + sig] = Float32(best_c)
+        # Residual WITH the written table (the override), same integer metric.
+        var err_local = 0
+        for d in range(nd):
+            ref g = demos[d].input_grid
+            GeomColorComposedMemory.apply(weights, g, gbuf)
+            for r in range(g.rows):
+                for c in range(g.cols):
+                    var k = r * g.cols + c
+                    var sig = Self._local_sig(g, r, c)
+                    var tv = weights[LOCALWRITE_OFF + sig]
+                    var pv = Int(round(gbuf[k]))
+                    if tv >= Float32(0.0):
+                        pv = Int(round(tv))
+                    if pv != Int(round(demos[d].output_grid.data[k])):
+                        err_local += 1
+        # GLOBAL GATE: keep the table only on a strict residual improvement over a
+        # non-exact gather; otherwise clear it (strict superset — byte-identical
+        # to GeomColor on pure geometry/colour tasks).
+        if not (err_gather > 0 and err_local < err_gather):
+            for s in range(LOCALWRITE_TABLE):
+                weights[LOCALWRITE_OFF + s] = Float32(-1.0)
+        votes.free()
+        total.free()
+        gbuf.free()
+
+
+# ==========================================
 # Composed geometry × count-rule memory (the content×geometry block)
 # ==========================================
 # The block-5 recipe lifted one level: from cellwise colour maps to

@@ -1,15 +1,16 @@
 from std.sys import argv
 from std.memory import alloc, UnsafePointer
 from std.random import seed
+from std.math import round
 
 from memory_composed import (
-    GeomColorComposedMemory,
-    GEOMCOLOR_DIM,
+    LocalWriteComposedMemory,
+    LOCALWRITE_DIM,
     ShapeGeomColorComposedMemory,
     SHAPEGEOMCOLOR_DIM,
 )
 from esper_evolution import (
-    fit_geomcolor,
+    fit_local,
     fit_shape_color,
     FIT_N,
     FIT_ALPHA0,
@@ -75,7 +76,23 @@ comptime SOLVE_SEED = 0
 # Fit one task on its train pairs and return its held-out exact-match (the
 # minimum over all test pairs — solved iff every test pair matches). Prints the
 # per-task held-out, the train fit, and their gap.
-def solve_task(task_path: String, n_fit: Int, iters: Int) raises -> Float32:
+# Rung A near-miss audit (measure-first): print a same-shape test pair's input,
+# the fitted memory's PREDICTION, and the truth as flat integer grids, so the
+# offline clustering tool (tools/near_miss_audit.py) can characterize WHERE the
+# few wrong cells fall (border / localized region / colour swap / scattered).
+# Only emitted in `--diff` mode and only for the same-shape path (Rung A scope);
+# adds EXTRA lines, never touching the positional per-task line eval_parallel.sh
+# reads.
+def _dump_grid(label: String, p: UnsafePointer[Float32, MutAnyOrigin], n: Int):
+    var s = String("  DIFF ") + label + String(":")
+    for k in range(n):
+        s += String(" ") + String(Int(round(p[k])))
+    print(s)
+
+
+def solve_task(
+    task_path: String, n_fit: Int, iters: Int, dump_diff: Bool = False
+) raises -> Float32:
     var task = load_arc_task(task_path)
 
     # Deterministic per-task RNG (order/shard invariant) — see SOLVE_SEED.
@@ -125,7 +142,7 @@ def solve_task(task_path: String, n_fit: Int, iters: Int) raises -> Float32:
             capacity = task.test[i].output_grid.size()
 
     # Cold per-task fit of the dispatched composed memory.
-    var state_dim = GEOMCOLOR_DIM
+    var state_dim = LOCALWRITE_DIM
     if shape_task:
         state_dim = SHAPEGEOMCOLOR_DIM
     var state = alloc[Float32](state_dim)
@@ -147,10 +164,12 @@ def solve_task(task_path: String, n_fit: Int, iters: Int) raises -> Float32:
             FIT_REG,
         )
     else:
-        # Colour table written from the demos, then the annealed geometry ES
-        # on the V-pre-mapped demos.
-        GeomColorComposedMemory.seed(state)
-        fit_geomcolor(
+        # Colour table written from the demos, the annealed geometry ES on the
+        # V-pre-mapped demos, then the closed-form local-content write on the
+        # residual (Rung A). Byte-identical to the old GeomColor path when the
+        # local table stays empty (the strict-superset gate).
+        LocalWriteComposedMemory.seed(state)
+        fit_local(
             state,
             task.train,
             capacity,
@@ -194,12 +213,21 @@ def solve_task(task_path: String, n_fit: Int, iters: Int) raises -> Float32:
             var rows = task.test[i].input_grid.rows
             var cols = task.test[i].input_grid.cols
             if task.test[i].output_grid.size() == rows * cols:
-                GeomColorComposedMemory.apply(
+                LocalWriteComposedMemory.apply(
                     state, task.test[i].input_grid, pred
                 )
                 m = exact_match(
                     pred, task.test[i].output_grid.data, rows * cols
                 )
+                if dump_diff and i == 0:
+                    print(
+                        "  DIFF task:", task_path, "rows:", rows, "cols:", cols
+                    )
+                    _dump_grid("in", task.test[i].input_grid.data, rows * cols)
+                    _dump_grid("pred", pred, rows * cols)
+                    _dump_grid(
+                        "true", task.test[i].output_grid.data, rows * cols
+                    )
         if m < held_out:
             held_out = m
 
@@ -230,7 +258,9 @@ def solve_task(task_path: String, n_fit: Int, iters: Int) raises -> Float32:
             var cols = task.train[i].input_grid.cols
             if task.train[i].output_grid.size() != rows * cols:
                 continue
-            GeomColorComposedMemory.apply(state, task.train[i].input_grid, pred)
+            LocalWriteComposedMemory.apply(
+                state, task.train[i].input_grid, pred
+            )
             train_sum += exact_match(
                 pred, task.train[i].output_grid.data, rows * cols
             )
@@ -264,11 +294,18 @@ def main() raises:
 
     # Flag parsing: flags must precede the `.task` paths (see the header).
     var report_only = False
+    var dump_diff = False
     var n_fit = FIT_N
     var iters = FIT_ITERS
     var first = 1
     while first < len(args):
         if String(args[first]) == "--report":
+            report_only = True
+            first += 1
+        elif String(args[first]) == "--diff":
+            # Near-miss audit: emit input/pred/truth grids (report-implied, so a
+            # 0-solved diagnostic run never raises).
+            dump_diff = True
             report_only = True
             first += 1
         elif String(args[first]) == "--fit" and first + 2 < len(args):
@@ -295,7 +332,7 @@ def main() raises:
 
     print("Esper held-out generalization over", total, "task(s)")
     for idx in range(first, len(args)):
-        var held_out = solve_task(String(args[idx]), n_fit, iters)
+        var held_out = solve_task(String(args[idx]), n_fit, iters, dump_diff)
         held_sum += held_out
         if held_out >= SOLVE_THRESHOLD:
             solved += 1

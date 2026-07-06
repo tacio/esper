@@ -64,12 +64,18 @@ trap 'rm -rf "$GEN_DIR"' EXIT
 python - "$GEN_DIR" "$TIER" <<'PY'
 import sys
 sys.path.insert(0, "tools")
-from synth_tasks import generate_task_groups, generate_shape_task_groups
+from synth_tasks import (
+    generate_task_groups,
+    generate_shape_task_groups,
+    generate_local_task_groups,
+)
 generate_task_groups("flip_h", sys.argv[1], num_tasks=2, n_train=6, rows=4, cols=4, seed=0)
 generate_task_groups("recolor", sys.argv[1], num_tasks=1, n_train=6, rows=4, cols=4, seed=1)
 if sys.argv[2] == "full":
     generate_shape_task_groups("crop1", sys.argv[1], num_tasks=1, n_train=6, seed=2)
     generate_shape_task_groups("recolor_crop1", sys.argv[1], num_tasks=1, n_train=6, seed=3)
+    # Rung A: a LOCAL-content bundle so the fit_local write path runs end-to-end.
+    generate_local_task_groups("outline", sys.argv[1], num_tasks=1, n_train=6, rows=10, cols=10, seed=4)
 print("Generated task bundles in", sys.argv[1])
 PY
 mojo run -I src src/arc_solve.mojo "$GEN_DIR"/*.task
