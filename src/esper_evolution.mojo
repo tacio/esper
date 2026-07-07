@@ -1,5 +1,5 @@
 from std.memory import alloc, memset_zero, memcpy, UnsafePointer
-from std.sys import simd_width_of, size_of
+from std.sys import simd_width_of, size_of, has_accelerator
 from std.math import fma, exp, log
 from std.random import randn_float64
 from std.collections import List
@@ -30,6 +30,12 @@ from memory_composed import (
     SHAPEGEOM_MODE_REFLECT,
 )
 from hope import ExamplePair, Task, ArcTaskPair, HopeNode, ArcGrid
+
+# The GPU-batched fitness sibling (rung G1). On hosts with an accelerator the
+# composed fit drivers route their AttnGather ES through it (opt out via
+# use_gpu=False for A/B); CPU-only hosts compile no device code — the
+# comptime gate below removes the call entirely.
+from gpu_es import fit_operator_gpu
 
 # Default in-context fit schedule, shared by forward_with_learning and the solve
 # driver. Tuned so the annealed ES reliably fits the expressible transforms.
@@ -667,6 +673,7 @@ def fit_geomcolor(
     sigma1: Float32,
     iters: Int,
     reg_lambda: Float32,
+    use_gpu: Bool = True,
 ) raises:
     # 1. Colour self-write (fills state[GEOMCOLOR_V_OFF:]).
     GeomColorComposedMemory.write_color(state, demos)
@@ -696,20 +703,41 @@ def fit_geomcolor(
     var iters_scaled = iters * FIT_DEMO_REF // n_demos
     var slow = alloc[Float32](ATTN_DIM)
     AttnGatherMemory.seed(slow)
-    var ws = ESWorkspace[AttnGatherMemory](grid_capacity, n_fit)
-    fit_operator[AttnGatherMemory](
-        state,
-        ws,
-        slow,
-        mapped,
-        n_fit,
-        alpha0,
-        alpha1,
-        sigma0,
-        sigma1,
-        iters_scaled,
-        reg_lambda,
-    )
+    # GPU seam (rung G1): on an accelerator host the batched device fitness
+    # runs the same annealed schedule; use_gpu=False keeps the CPU reference
+    # path for A/B. CPU-only hosts compile no device code.
+    var on_gpu = False
+    comptime if has_accelerator():
+        if use_gpu:
+            on_gpu = True
+            fit_operator_gpu(
+                state,
+                slow,
+                mapped,
+                grid_capacity,
+                n_fit,
+                alpha0,
+                alpha1,
+                sigma0,
+                sigma1,
+                iters_scaled,
+                reg_lambda,
+            )
+    if not on_gpu:
+        var ws = ESWorkspace[AttnGatherMemory](grid_capacity, n_fit)
+        fit_operator[AttnGatherMemory](
+            state,
+            ws,
+            slow,
+            mapped,
+            n_fit,
+            alpha0,
+            alpha1,
+            sigma0,
+            sigma1,
+            iters_scaled,
+            reg_lambda,
+        )
     slow.free()
 
 
@@ -733,6 +761,7 @@ def fit_local(
     sigma1: Float32,
     iters: Int,
     reg_lambda: Float32,
+    use_gpu: Bool = True,
 ) raises:
     # 1. Fit the GeomColor prefix (gather + written V) exactly as today — the
     #    LocalWrite layout carries the GeomColor state as its [0:GEOMCOLOR_DIM]
@@ -748,6 +777,7 @@ def fit_local(
         sigma1,
         iters,
         reg_lambda,
+        use_gpu,
     )
     # 2. Write the local-content table on the gather's residual (one pass, gated).
     LocalWriteComposedMemory.write_local(state, demos, grid_capacity)
@@ -781,6 +811,7 @@ def fit_geomcount(
     sigma1: Float32,
     iters: Int,
     reg_lambda: Float32,
+    use_gpu: Bool = True,
 ) raises:
     # 1. Content self-write (fills the P-selection + V slots).
     GeomCountComposedMemory.write_content(state, demos)
@@ -814,20 +845,39 @@ def fit_geomcount(
     var iters_scaled = iters * FIT_DEMO_REF // n_demos
     var slow = alloc[Float32](ATTN_DIM)
     AttnGatherMemory.seed(slow)
-    var ws = ESWorkspace[AttnGatherMemory](grid_capacity, n_fit)
-    fit_operator[AttnGatherMemory](
-        state,
-        ws,
-        slow,
-        mapped,
-        n_fit,
-        alpha0,
-        alpha1,
-        sigma0,
-        sigma1,
-        iters_scaled,
-        reg_lambda,
-    )
+    # GPU seam (rung G1) — same routing as fit_geomcolor's step 3.
+    var on_gpu = False
+    comptime if has_accelerator():
+        if use_gpu:
+            on_gpu = True
+            fit_operator_gpu(
+                state,
+                slow,
+                mapped,
+                grid_capacity,
+                n_fit,
+                alpha0,
+                alpha1,
+                sigma0,
+                sigma1,
+                iters_scaled,
+                reg_lambda,
+            )
+    if not on_gpu:
+        var ws = ESWorkspace[AttnGatherMemory](grid_capacity, n_fit)
+        fit_operator[AttnGatherMemory](
+            state,
+            ws,
+            slow,
+            mapped,
+            n_fit,
+            alpha0,
+            alpha1,
+            sigma0,
+            sigma1,
+            iters_scaled,
+            reg_lambda,
+        )
     slow.free()
 
 
