@@ -11,9 +11,17 @@
 from std.sys import has_accelerator
 from std.memory import UnsafePointer, alloc
 from hope import ArcGrid, ArcTaskPair
-from esper_evolution import fitness
+from esper_evolution import fitness, fitness_shape
 from memory_es import AttnGatherMemory, ATTN_DIM, ATTN_BETA_SEED
-from gpu_es import gpu_fitness_plain
+from memory_composed import (
+    ShapeGeomComposedMemory,
+    SHAPEGEOM_DIM,
+    SHAPEGEOM_TREL_OFF,
+    SHAPEGEOM_SHAPE_OFF,
+    SHAPEGEOM_MODE_OFF,
+    SHAPEGEOM_MODE_REFLECT,
+)
+from gpu_es import gpu_fitness_plain, gpu_fitness_shape
 
 comptime REG = Float32(0.0001)
 
@@ -53,6 +61,84 @@ def check_pair(
     print("  ", name, " cpu:", f_cpu, " gpu:", f_gpu, " |diff|:", diff)
     if diff > Float32(1.0e-4) * mag:
         raise Error("GPU/CPU fitness mismatch for " + name)
+
+
+def tile2_of(g: ArcGrid) -> ArcGrid:
+    var o = ArcGrid(2 * g.rows, 2 * g.cols)
+    for r in range(o.rows):
+        for c in range(o.cols):
+            o.data[r * o.cols + c] = g.data[
+                (r % g.rows) * g.cols + (c % g.cols)
+            ]
+    return o^
+
+
+def check_shape(
+    name: String,
+    state: UnsafePointer[Float32, MutAnyOrigin],
+    slow: UnsafePointer[Float32, MutAnyOrigin],
+    demos: List[ArcTaskPair],
+    cap: Int,
+) raises:
+    var op_out = alloc[Float32](cap)
+    var f_cpu = fitness_shape[ShapeGeomComposedMemory](
+        state, slow, demos, op_out, REG
+    )
+    op_out.free()
+    var f_gpu = gpu_fitness_shape(state, slow, demos, cap, REG)
+    var diff = f_cpu - f_gpu
+    if diff < 0:
+        diff = -diff
+    var mag = f_cpu if f_cpu > 0 else -f_cpu
+    if mag < 1.0:
+        mag = 1.0
+    print("  ", name, " cpu:", f_cpu, " gpu:", f_gpu, " |diff|:", diff)
+    if diff > Float32(1.0e-4) * mag:
+        raise Error("GPU/CPU shape fitness mismatch for " + name)
+
+
+def run_shape() raises:
+    # Grow tasks: output = tile2(input); 15x15 -> 30x30 hits real-ARC scale
+    # (the toroidal span cap + window truncation both active).
+    var demos = List[ArcTaskPair]()
+    var cap = 30 * 30
+    var sizes: List[Int] = [5, 7, 15]
+    for d in range(len(sizes)):
+        var g_in = make_grid(sizes[d], sizes[d] + (d % 2), d + 20)
+        var g_out = tile2_of(g_in)
+        demos.append(ArcTaskPair(g_in^, g_out^))
+
+    var state = alloc[Float32](SHAPEGEOM_DIM)
+    var slow = alloc[Float32](SHAPEGEOM_DIM)
+    ShapeGeomComposedMemory.seed(state)
+    ShapeGeomComposedMemory.write(state, demos)  # kr = kc = 2 (tile2)
+
+    # 1. Toroidal frame, periodic seed (the tiling solution's frame).
+    ShapeGeomComposedMemory.seed_periodic(state)
+    for j in range(SHAPEGEOM_DIM):
+        slow[j] = state[j]
+    slow[SHAPEGEOM_TREL_OFF + 0] = 0.0  # non-zero anchor on trel
+    check_shape("toroidal-periodic", state, slow, demos, cap)
+
+    # 2. Same state read through the REFLECT frame (mirror fold active).
+    state[SHAPEGEOM_MODE_OFF] = SHAPEGEOM_MODE_REFLECT
+    check_shape("reflect-periodic", state, slow, demos, cap)
+
+    # 3. Soft off-integer geometry on the reflect frame.
+    state[0] = 1.7
+    state[1] = -0.3
+    state[4] = 2.4
+    state[6] = 0.6
+    state[SHAPEGEOM_TREL_OFF + 0] = 0.31
+    check_shape("reflect-soft", state, slow, demos, cap)
+
+    # 4. Shape-rule mismatch: predicted dims != true output dims -> the
+    # heavy penalty path (kernel no-ops on zeroed pred dims, no OOB).
+    state[SHAPEGEOM_SHAPE_OFF + 0] = 3.0  # predicts 3x growth on rows
+    check_shape("shape-mismatch-penalty", state, slow, demos, cap)
+
+    state.free()
+    slow.free()
 
 
 def run() raises:
@@ -108,7 +194,6 @@ def run() raises:
 
     slow.free()
     w.free()
-    print("GPU parity test passed: device fitness == CPU reference.")
 
 
 def main() raises:
@@ -117,3 +202,5 @@ def main() raises:
         return
     else:
         run()
+        run_shape()
+        print("GPU parity test passed: device fitness == CPU reference.")

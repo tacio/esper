@@ -32,7 +32,21 @@ from std.memory import UnsafePointer, alloc, memset_zero, stack_allocation
 from std.math import fma, exp, log
 from std.random import randn_float64
 from hope import ArcTaskPair
-from memory_es import attn_pixel_plain, ATTN_DIM, AttnGatherMemory
+from memory_es import (
+    attn_pixel_plain,
+    attn_pixel_toroidal,
+    attn_pixel_reflect,
+    ATTN_DIM,
+    AttnGatherMemory,
+)
+from memory_composed import (
+    ShapeGeomComposedMemory,
+    ShapeGeomSettleMemory,
+    SHAPEGEOM_DIM,
+    SHAPEGEOM_TREL_OFF,
+    SHAPEGEOM_SHAPE_OFF,
+    SHAPEGEOM_MODE_OFF,
+)
 
 # Threads per block. Each block owns one (candidate, demo) pair and stripes
 # its threads over the demo's output pixels; 256 covers a 16x16 grid in one
@@ -355,6 +369,319 @@ def gpu_fitness_plain(
         n_demos,
         reg_lambda,
         f,
+    )
+    var result = f[0]
+    h_in.free()
+    h_out.free()
+    h_dims.free()
+    mismatch.free()
+    n_px.free()
+    partial.free()
+    f.free()
+    return result
+
+
+# ==========================================
+# Rung G2: the shape path (toroidal / reflect gathers)
+# ==========================================
+# The shape kernel's block layout mirrors _fitness_kernel_plain; the two
+# differences come straight from fitness_shape's semantics: the query grid is
+# the PREDICTED output extent (pred_rows × pred_cols — constant during a fit
+# because the written shape-rule slots are frozen by fill_scale, so the host
+# computes them once per demo), and the per-pixel read is mode-dispatched to
+# the toroidal or reflect gather exactly like ShapeGeomComposedMemory.apply
+# (the mode slot is frozen too, but reading it per candidate keeps the kernel
+# a pure function of the state vector — single source of truth). A demo whose
+# predicted area mismatches its true output area gets pred dims ZEROED by the
+# host (the kernel then does no work, no OOB reads) and the heavy penalty is
+# applied in _assemble_fitness, same as the CPU path.
+def _fitness_kernel_shape(
+    pert: UnsafePointer[Float32, MutAnyOrigin],  # n_cand × SHAPEGEOM_DIM
+    demo_in: UnsafePointer[Float32, MutAnyOrigin],  # n_demos × cap
+    demo_out: UnsafePointer[Float32, MutAnyOrigin],  # n_demos × cap
+    dims: UnsafePointer[Int32, MutAnyOrigin],  # n_demos × 4 (in r,c; pred r,c)
+    partial: UnsafePointer[Float32, MutAnyOrigin],  # n_cand × n_demos
+    n_demos: Int,
+    cap: Int,
+):
+    var shared = stack_allocation[
+        GPU_BLOCK, Float32, address_space=AddressSpace.SHARED
+    ]()
+    var b = Int(block_idx.x)
+    var tid = Int(thread_idx.x)
+    var cand = b // n_demos
+    var demo = b % n_demos
+    var in_rows = Int(dims[demo * 4 + 0])
+    var in_cols = Int(dims[demo * 4 + 1])
+    var pr = Int(dims[demo * 4 + 2])
+    var pc = Int(dims[demo * 4 + 3])
+    var n = pr * pc
+    var w = pert + cand * SHAPEGEOM_DIM
+    var src = demo_in + demo * cap
+    var tgt = demo_out + demo * cap
+    var trel_r = w[SHAPEGEOM_TREL_OFF + 0]
+    var trel_c = w[SHAPEGEOM_TREL_OFF + 1]
+    var kr = w[SHAPEGEOM_SHAPE_OFF + 0]
+    var kc = w[SHAPEGEOM_SHAPE_OFF + 2]
+    var reflect = w[SHAPEGEOM_MODE_OFF] >= Float32(0.5)
+
+    var acc = Float32(0.0)
+    var i = tid
+    while i < n:
+        var r = i // pc
+        var c = i % pc
+        var got = Float32(0.0)
+        if reflect:
+            got = attn_pixel_reflect(
+                w, trel_r, trel_c, kr, kc, src, in_rows, in_cols, pr, pc, r, c
+            )
+        else:
+            got = attn_pixel_toroidal(
+                w, trel_r, trel_c, kr, kc, src, in_rows, in_cols, pr, pc, r, c
+            )
+        var diff = got - tgt[i]
+        acc = fma(diff, diff, acc)
+        i += GPU_BLOCK
+
+    shared[tid] = acc
+    barrier()
+    var step = GPU_BLOCK // 2
+    while step > 0:
+        if tid < step:
+            shared[tid] += shared[tid + step]
+        barrier()
+        step //= 2
+    if tid == 0:
+        partial[b] = shared[0]
+
+
+# Host staging for the shape kernel, shared by the fit loop and the parity
+# entry point: flatten the demos, predict each demo's output dims from the
+# (frozen) written shape rule, and set the mismatch flag / zeroed pred dims
+# for inexpressible demos. Returns nothing; fills the caller's buffers.
+def _stage_shape_demos(
+    state: UnsafePointer[Float32, MutAnyOrigin],
+    demos: List[ArcTaskPair],
+    grid_capacity: Int,
+    h_in: UnsafePointer[Float32, MutAnyOrigin],
+    h_out: UnsafePointer[Float32, MutAnyOrigin],
+    h_dims: UnsafePointer[Int32, MutAnyOrigin],
+    mismatch: UnsafePointer[Int32, MutAnyOrigin],
+    n_px: UnsafePointer[Int32, MutAnyOrigin],
+):
+    for d in range(len(demos)):
+        var in_n = demos[d].input_grid.rows * demos[d].input_grid.cols
+        var out_n = demos[d].output_grid.rows * demos[d].output_grid.cols
+        var pr = ShapeGeomComposedMemory.out_rows(state, demos[d].input_grid)
+        var pc = ShapeGeomComposedMemory.out_cols(state, demos[d].input_grid)
+        var bad = pr * pc != out_n
+        mismatch[d] = 1 if bad else 0
+        n_px[d] = Int32(out_n)
+        h_dims[d * 4 + 0] = Int32(demos[d].input_grid.rows)
+        h_dims[d * 4 + 1] = Int32(demos[d].input_grid.cols)
+        # Zeroed pred dims make the kernel a no-op for this demo (no OOB).
+        h_dims[d * 4 + 2] = 0 if bad else Int32(pr)
+        h_dims[d * 4 + 3] = 0 if bad else Int32(pc)
+        for k in range(in_n):
+            h_in[d * grid_capacity + k] = demos[d].input_grid.data[k]
+        for k in range(out_n):
+            h_out[d * grid_capacity + k] = demos[d].output_grid.data[k]
+
+
+# The GPU sibling of `fit_shape[M]` (esper_evolution.mojo): same annealed
+# antithetic ES, same serial RNG stream, same reduction/update arithmetic;
+# the 2N×n_demos fitness_shape forwards are batched into one launch per
+# iteration. Non-generic: the kernel assumes the SHAPEGEOM state layout,
+# shared by the ShapeGeomComposed/Settle pair, whose ONLY difference is the
+# fill_scale (the settle type freezes the temperature slot) — carried here
+# by the `settle` flag. This is deliberately the shape-seam specialization,
+# not a generic ShapeMemory backend. Predicted demo dims are computed ONCE
+# (the shape slots are frozen), matching fitness_shape's per-call values.
+def fit_shape_gpu(
+    state: UnsafePointer[Float32, MutAnyOrigin],
+    slow: UnsafePointer[Float32, MutAnyOrigin],
+    demos: List[ArcTaskPair],
+    grid_capacity: Int,
+    N: Int,
+    alpha0: Float32,
+    alpha1: Float32,
+    sigma0: Float32,
+    sigma1: Float32,
+    iters: Int,
+    reg_lambda: Float32,
+    settle: Bool,
+) raises:
+    if iters <= 0 or N <= 0:
+        return
+    var n_demos = len(demos)
+    if n_demos == 0:
+        return
+    var pdim = ShapeGeomComposedMemory.param_dim()
+    var n_cand = 2 * N
+
+    var ctx = DeviceContext()
+
+    var d_pert = ctx.enqueue_create_buffer[DType.float32](n_cand * pdim)
+    var d_in = ctx.enqueue_create_buffer[DType.float32](n_demos * grid_capacity)
+    var d_out = ctx.enqueue_create_buffer[DType.float32](
+        n_demos * grid_capacity
+    )
+    var d_dims = ctx.enqueue_create_buffer[DType.int32](n_demos * 4)
+    var d_partial = ctx.enqueue_create_buffer[DType.float32](n_cand * n_demos)
+
+    var h_in = alloc[Float32](n_demos * grid_capacity)
+    var h_out = alloc[Float32](n_demos * grid_capacity)
+    var h_dims = alloc[Int32](n_demos * 4)
+    var mismatch = alloc[Int32](n_demos)
+    var n_px = alloc[Int32](n_demos)
+    _stage_shape_demos(
+        state, demos, grid_capacity, h_in, h_out, h_dims, mismatch, n_px
+    )
+    ctx.enqueue_copy(dst_buf=d_in, src_ptr=h_in)
+    ctx.enqueue_copy(dst_buf=d_out, src_ptr=h_out)
+    ctx.enqueue_copy(dst_buf=d_dims, src_ptr=h_dims)
+
+    var eps_all = alloc[Float32](N * pdim)
+    var pert_all = alloc[Float32](n_cand * pdim)
+    var f_all = alloc[Float32](n_cand)
+    var partial = alloc[Float32](n_cand * n_demos)
+    var coeff = alloc[Float32](N)
+    var grad = alloc[Float32](pdim)
+    var scale = alloc[Float32](pdim)
+    # The DISCOVER/SETTLE phase difference is exactly the fill_scale (the
+    # settle type freezes the temperature slot) — a flag here, a type on CPU.
+    if settle:
+        ShapeGeomSettleMemory.fill_scale(scale, pdim)
+    else:
+        ShapeGeomComposedMemory.fill_scale(scale, pdim)
+
+    var alpha_rate = log(alpha1 / alpha0) / Float32(iters)
+    var sigma_rate = log(sigma1 / sigma0) / Float32(iters)
+
+    for t in range(iters):
+        var alpha = alpha0 * exp(alpha_rate * Float32(t))
+        var sigma = sigma0 * exp(sigma_rate * Float32(t))
+
+        for s in range(N):
+            var eps_s = eps_all + s * pdim
+            for j in range(pdim):
+                eps_s[j] = Float32(randn_float64(0.0, 1.0))
+
+        for s in range(N):
+            var eps_s = eps_all + s * pdim
+            var pos = pert_all + s * pdim
+            var neg = pert_all + (N + s) * pdim
+            for j in range(pdim):
+                var seps = eps_s[j] * scale[j]
+                pos[j] = fma(seps, sigma, state[j])
+                neg[j] = fma(seps, -sigma, state[j])
+
+        ctx.enqueue_copy(dst_buf=d_pert, src_ptr=pert_all)
+        ctx.enqueue_function[_fitness_kernel_shape](
+            d_pert,
+            d_in,
+            d_out,
+            d_dims,
+            d_partial,
+            n_demos,
+            grid_capacity,
+            grid_dim=n_cand * n_demos,
+            block_dim=GPU_BLOCK,
+        )
+        ctx.enqueue_copy(dst_ptr=partial, src_buf=d_partial)
+        ctx.synchronize()
+
+        _assemble_fitness(
+            partial,
+            mismatch,
+            n_px,
+            pert_all,
+            slow,
+            pdim,
+            n_cand,
+            n_demos,
+            reg_lambda,
+            f_all,
+        )
+        for s in range(N):
+            coeff[s] = f_all[s] - f_all[N + s]
+
+        memset_zero(grad, pdim)
+        for s in range(N):
+            var eps_s = eps_all + s * pdim
+            for j in range(pdim):
+                grad[j] = fma(eps_s[j], coeff[s], grad[j])
+        var update_factor = alpha / (2.0 * Float32(N) * sigma)
+        for j in range(pdim):
+            state[j] = fma(grad[j] * scale[j], update_factor, state[j])
+
+    h_in.free()
+    h_out.free()
+    h_dims.free()
+    mismatch.free()
+    n_px.free()
+    eps_all.free()
+    pert_all.free()
+    f_all.free()
+    partial.free()
+    coeff.free()
+    grad.free()
+    scale.free()
+
+
+# Single-candidate GPU shape fitness — the parity-test entry point for the
+# shape kernel (mirrors one fitness_shape[M] call; see gpu_fitness_plain).
+def gpu_fitness_shape(
+    state: UnsafePointer[Float32, MutAnyOrigin],
+    slow: UnsafePointer[Float32, MutAnyOrigin],
+    demos: List[ArcTaskPair],
+    grid_capacity: Int,
+    reg_lambda: Float32,
+) raises -> Float32:
+    var n_demos = len(demos)
+    if n_demos == 0:
+        return 0.0
+    var pdim = ShapeGeomComposedMemory.param_dim()
+
+    var ctx = DeviceContext()
+    var d_pert = ctx.enqueue_create_buffer[DType.float32](pdim)
+    var d_in = ctx.enqueue_create_buffer[DType.float32](n_demos * grid_capacity)
+    var d_out = ctx.enqueue_create_buffer[DType.float32](
+        n_demos * grid_capacity
+    )
+    var d_dims = ctx.enqueue_create_buffer[DType.int32](n_demos * 4)
+    var d_partial = ctx.enqueue_create_buffer[DType.float32](n_demos)
+
+    var h_in = alloc[Float32](n_demos * grid_capacity)
+    var h_out = alloc[Float32](n_demos * grid_capacity)
+    var h_dims = alloc[Int32](n_demos * 4)
+    var mismatch = alloc[Int32](n_demos)
+    var n_px = alloc[Int32](n_demos)
+    _stage_shape_demos(
+        state, demos, grid_capacity, h_in, h_out, h_dims, mismatch, n_px
+    )
+    ctx.enqueue_copy(dst_buf=d_in, src_ptr=h_in)
+    ctx.enqueue_copy(dst_buf=d_out, src_ptr=h_out)
+    ctx.enqueue_copy(dst_buf=d_dims, src_ptr=h_dims)
+    ctx.enqueue_copy(dst_buf=d_pert, src_ptr=state)
+
+    var partial = alloc[Float32](n_demos)
+    var f = alloc[Float32](1)
+    ctx.enqueue_function[_fitness_kernel_shape](
+        d_pert,
+        d_in,
+        d_out,
+        d_dims,
+        d_partial,
+        n_demos,
+        grid_capacity,
+        grid_dim=n_demos,
+        block_dim=GPU_BLOCK,
+    )
+    ctx.enqueue_copy(dst_ptr=partial, src_buf=d_partial)
+    ctx.synchronize()
+    _assemble_fitness(
+        partial, mismatch, n_px, state, slow, pdim, 1, n_demos, reg_lambda, f
     )
     var result = f[0]
     h_in.free()

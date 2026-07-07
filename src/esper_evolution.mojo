@@ -35,7 +35,7 @@ from hope import ExamplePair, Task, ArcTaskPair, HopeNode, ArcGrid
 # composed fit drivers route their AttnGather ES through it (opt out via
 # use_gpu=False for A/B); CPU-only hosts compile no device code — the
 # comptime gate below removes the call entirely.
-from gpu_es import fit_operator_gpu
+from gpu_es import fit_operator_gpu, fit_shape_gpu
 
 # Default in-context fit schedule, shared by forward_with_learning and the solve
 # driver. Tuned so the annealed ES reliably fits the expressible transforms.
@@ -1090,6 +1090,7 @@ def fit_shape_geom(
     sigma1: Float32,
     iters: Int,
     reg_lambda: Float32,
+    use_gpu: Bool = True,
 ) raises:
     ShapeGeomComposedMemory.write(state, demos)
 
@@ -1138,36 +1139,75 @@ def fit_shape_geom(
         copy_weights(slow, cand, SHAPEGEOM_DIM)
 
         # DISCOVER: wide annealed search on the soft landscape.
-        fit_shape[ShapeGeomComposedMemory](
-            cand,
-            slow,
-            demos,
-            grid_capacity,
-            n_fit,
-            alpha0,
-            alpha1,
-            sigma0,
-            sigma_floor,
-            discover_iters,
-            reg_lambda,
-        )
+        # GPU seam (rung G2): both phases batch their fitness_shape forwards
+        # through the shape kernel on accelerator hosts (same routing pattern
+        # as fit_geomcolor's step 3; use_gpu=False keeps the CPU reference).
+        var on_gpu = False
+        comptime if has_accelerator():
+            if use_gpu:
+                on_gpu = True
+                fit_shape_gpu(
+                    cand,
+                    slow,
+                    demos,
+                    grid_capacity,
+                    n_fit,
+                    alpha0,
+                    alpha1,
+                    sigma0,
+                    sigma_floor,
+                    discover_iters,
+                    reg_lambda,
+                    settle=False,
+                )
+        if not on_gpu:
+            fit_shape[ShapeGeomComposedMemory](
+                cand,
+                slow,
+                demos,
+                grid_capacity,
+                n_fit,
+                alpha0,
+                alpha1,
+                sigma0,
+                sigma_floor,
+                discover_iters,
+                reg_lambda,
+            )
 
         # SETTLE: hard frozen read, sigma held at the step scale, alpha
         # decayed — parks the state inside the exact-solution plateau.
         cand[ATTN_BETA_OFF] = SHAPE_BETA_READ
-        fit_shape[ShapeGeomSettleMemory](
-            cand,
-            slow,
-            demos,
-            grid_capacity,
-            n_fit,
-            SHAPE_SETTLE_ALPHA0,
-            SHAPE_SETTLE_ALPHA1,
-            sigma_floor,
-            sigma_floor,
-            settle_iters,
-            reg_lambda,
-        )
+        comptime if has_accelerator():
+            if use_gpu:
+                fit_shape_gpu(
+                    cand,
+                    slow,
+                    demos,
+                    grid_capacity,
+                    n_fit,
+                    SHAPE_SETTLE_ALPHA0,
+                    SHAPE_SETTLE_ALPHA1,
+                    sigma_floor,
+                    sigma_floor,
+                    settle_iters,
+                    reg_lambda,
+                    settle=True,
+                )
+        if not on_gpu:
+            fit_shape[ShapeGeomSettleMemory](
+                cand,
+                slow,
+                demos,
+                grid_capacity,
+                n_fit,
+                SHAPE_SETTLE_ALPHA0,
+                SHAPE_SETTLE_ALPHA1,
+                sigma_floor,
+                sigma_floor,
+                settle_iters,
+                reg_lambda,
+            )
 
         # Keep the better start by demo fitness at the hard read (anchor-free:
         # slow = cand zeroes the L2 term — pure data signal).
@@ -1213,6 +1253,7 @@ def fit_shape_color(
     sigma1: Float32,
     iters: Int,
     reg_lambda: Float32,
+    use_gpu: Bool = True,
 ) raises:
     # 1. Shape rule + colour self-write (fills the shape slots + V table).
     ShapeGeomColorComposedMemory.write(state, demos)
@@ -1246,4 +1287,5 @@ def fit_shape_color(
         sigma1,
         iters,
         reg_lambda,
+        use_gpu,
     )
