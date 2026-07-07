@@ -88,6 +88,7 @@ The engine is a small set of flat `-I src` Mojo modules. **The detailed per-modu
 
 - `src/hope.mojo` — core POD data structures (`ArcGrid`, `HopeArena`, the POD `HopeNode`) + the structured operator's *execution*; the generic `ExamplePair`/`Task` demo containers.
 - `src/esper_evolution.mojo` — **all learning**, generic over `[M: Memory]`: the derivative-free ES core (`fitness` / `evolve_fast_weights` / `fit_operator`), the two-timescale Reptile meta-loop, and the per-task composed / shape fit drivers.
+- `src/gpu_es.mojo` — the **GPU-batched fitness backend** (default on accelerator hosts; `arc_solve --cpu` forces the CPU reference): one kernel launch per ES iteration scores all (candidate × demo) pairs via the same `attn_pixel_*` per-pixel functions the CPU path uses; everything else (RNG, gradient, update) stays CPU. CPU-only hosts compile zero device code (`comptime if has_accelerator()`).
 - `src/arc_io.mojo` — the on-disk `.bin` / `.task` readers + the `Domain` trait / `GridDomain` (the metric seam the ES reaches metrics through — never ARC directly).
 - `src/memory.mojo` — **the memory-trait seams**: `Memory`, `SelfModMemory`, `ShapeMemory`. No runtime selector — each memory is a compile-time choice, measured on the subset it expresses.
 - `src/memory_es.mojo` — the **ES-fit forward family** (the dormant structured operator, MLP, the sequence-domain pair, the `AttnGather` geometry gather + the toroidal / reflect shape gathers).
