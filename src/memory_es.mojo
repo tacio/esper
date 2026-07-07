@@ -339,6 +339,107 @@ comptime ATTN_BETA_SCALE = Float32(1.0)
 comptime ATTN_WINDOW = 6
 
 
+# --- Shared per-pixel gather bodies (single source of truth, CPU + GPU) ---
+#
+# Each gather's window-scan body lives in one @always_inline free function over
+# raw pointers/scalars, called per OUTPUT pixel. The host loops below and the
+# GPU fitness kernels (gpu_es.mojo) both call these, so the math cannot
+# diverge between the reference CPU path and the batched device path. They
+# take the raw source pointer + dims instead of ArcGrid (ArcGrid is a host
+# owning struct; device kernels see only flat buffers). Weight unpacking and
+# centre computation happen per pixel — a handful of FLOPs against the
+# (2W+1)^2 two-pass window scan, and value-identical to the old hoisted form.
+
+
+@always_inline
+def attn_pixel_plain(
+    weights: UnsafePointer[Float32, MutAnyOrigin],
+    src: UnsafePointer[Float32, MutAnyOrigin],
+    rows: Int,
+    cols: Int,
+    out_rows: Int,
+    out_cols: Int,
+    r: Int,
+    c: Int,
+) -> Float32:
+    var m00 = weights[ATTN_M_OFF + 0]
+    var m01 = weights[ATTN_M_OFF + 1]
+    var m10 = weights[ATTN_M_OFF + 2]
+    var m11 = weights[ATTN_M_OFF + 3]
+    var t_r = weights[ATTN_T_OFF + 0]
+    var t_c = weights[ATTN_T_OFF + 1]
+    var beta_raw = weights[ATTN_BETA_OFF]
+    var beta = beta_raw * beta_raw  # >= 0, no exp overflow risk
+    # Source (gather) grid: the input's extent and centre.
+    var cr = Float32(rows - 1) * Float32(0.5)
+    var cc = Float32(cols - 1) * Float32(0.5)
+    # Query grid: the OUTPUT extent and centre (== input's when out == in).
+    var cr_out = Float32(out_rows - 1) * Float32(0.5)
+    var cc_out = Float32(out_cols - 1) * Float32(0.5)
+
+    var vr = Float32(r) - cr_out
+    var vc = Float32(c) - cc_out
+    # Read target q = M*v + t (where in coord space to gather from).
+    var qr = fma(m00, vr, fma(m01, vc, t_r))
+    var qc = fma(m10, vr, fma(m11, vc, t_c))
+
+    # WINDOWED softmax (the at-scale enabler): restrict both passes to a
+    # (2W+1)^2 window centred on q. The peak is always inside (the window
+    # follows q, so projection/translation are unaffected); only the far
+    # tail is truncated. For grids <= ATTN_WINDOW+1 wide the window spans
+    # the whole grid for ANY centre, so every synth-scale result is
+    # BIT-IDENTICAL to the full scan. The centre is clamped into bounds
+    # FIRST, so the window always overlaps the grid (z can never be 0).
+    var ctr_r = Int(round(qr + cr))
+    var ctr_c = Int(round(qc + cc))
+    if ctr_r < 0:
+        ctr_r = 0
+    if ctr_r > rows - 1:
+        ctr_r = rows - 1
+    if ctr_c < 0:
+        ctr_c = 0
+    if ctr_c > cols - 1:
+        ctr_c = cols - 1
+    var r_lo = ctr_r - ATTN_WINDOW
+    if r_lo < 0:
+        r_lo = 0
+    var r_hi = ctr_r + ATTN_WINDOW
+    if r_hi > rows - 1:
+        r_hi = rows - 1
+    var c_lo = ctr_c - ATTN_WINDOW
+    if c_lo < 0:
+        c_lo = 0
+    var c_hi = ctr_c + ATTN_WINDOW
+    if c_hi > cols - 1:
+        c_hi = cols - 1
+
+    # Pass 1: max score over the window (numerical stability — the
+    # subtracted max makes the largest exponent 0, so exp never overflows).
+    var max_score = Float32(-1.0e30)
+    for rj in range(r_lo, r_hi + 1):
+        var dvr = qr - (Float32(rj) - cr)
+        var dvr2 = dvr * dvr
+        for cj in range(c_lo, c_hi + 1):
+            var dvc = qc - (Float32(cj) - cc)
+            var score = -beta * (dvr2 + dvc * dvc)
+            if score > max_score:
+                max_score = score
+
+    # Pass 2: softmax-weighted gather (streaming, no per-cell buffer).
+    var z = Float32(0.0)
+    var s = Float32(0.0)
+    for rj in range(r_lo, r_hi + 1):
+        var dvr = qr - (Float32(rj) - cr)
+        var dvr2 = dvr * dvr
+        for cj in range(c_lo, c_hi + 1):
+            var dvc = qc - (Float32(cj) - cc)
+            var score = -beta * (dvr2 + dvc * dvc)
+            var w = exp(score - max_score)
+            z += w
+            s = fma(w, src[rj * cols + cj], s)
+    return s / z
+
+
 struct AttnGatherMemory(Memory):
     comptime Dom = GridDomain
 
@@ -394,91 +495,21 @@ struct AttnGatherMemory(Memory):
         out_cols: Int,
         dst: UnsafePointer[Float32, MutAnyOrigin],
     ):
-        var m00 = weights[ATTN_M_OFF + 0]
-        var m01 = weights[ATTN_M_OFF + 1]
-        var m10 = weights[ATTN_M_OFF + 2]
-        var m11 = weights[ATTN_M_OFF + 3]
-        var t_r = weights[ATTN_T_OFF + 0]
-        var t_c = weights[ATTN_T_OFF + 1]
-        var beta_raw = weights[ATTN_BETA_OFF]
-        var beta = beta_raw * beta_raw  # >= 0, no exp overflow risk
-        # Source (gather) grid: the input's extent and centre.
-        var rows = inp.rows
-        var cols = inp.cols
-        var cr = Float32(rows - 1) * Float32(0.5)
-        var cc = Float32(cols - 1) * Float32(0.5)
-        # Query grid: the OUTPUT extent and centre (== input's when out == in).
-        var cr_out = Float32(out_rows - 1) * Float32(0.5)
-        var cc_out = Float32(out_cols - 1) * Float32(0.5)
-
+        # Whole per-pixel body lives in `attn_pixel_plain` (shared with the
+        # GPU fitness kernel — see the shared-body block above ATTN_WINDOW's
+        # comment for the windowed-softmax rationale).
         for r in range(out_rows):
-            var vr = Float32(r) - cr_out
             for c in range(out_cols):
-                var vc = Float32(c) - cc_out
-                # Read target q = M*v + t (where in coord space to gather from).
-                var qr = fma(m00, vr, fma(m01, vc, t_r))
-                var qc = fma(m10, vr, fma(m11, vc, t_c))
-
-                # WINDOWED softmax (the at-scale enabler): restrict both passes
-                # to a (2W+1)^2 window centred on q. The peak is always inside
-                # (the window follows q, so projection/translation are
-                # unaffected); only the far tail is truncated, and even at the
-                # softest beta the wide-sigma ES visits (raw ~0.4 => beta~0.16)
-                # a distance-7 cell weighs e^(-0.16*49) ~ 4e-4 — negligible.
-                # For grids <= ATTN_WINDOW+1 wide the window spans the whole
-                # grid for ANY centre, so every synth-scale result is
-                # BIT-IDENTICAL to the full scan; on real ARC grids (up to
-                # 30x30) this cuts the O(cells^2) apply by ~3-5x. The centre is
-                # clamped into bounds FIRST, so the window always overlaps the
-                # grid (z can never be 0).
-                var ctr_r = Int(round(qr + cr))
-                var ctr_c = Int(round(qc + cc))
-                if ctr_r < 0:
-                    ctr_r = 0
-                if ctr_r > rows - 1:
-                    ctr_r = rows - 1
-                if ctr_c < 0:
-                    ctr_c = 0
-                if ctr_c > cols - 1:
-                    ctr_c = cols - 1
-                var r_lo = ctr_r - ATTN_WINDOW
-                if r_lo < 0:
-                    r_lo = 0
-                var r_hi = ctr_r + ATTN_WINDOW
-                if r_hi > rows - 1:
-                    r_hi = rows - 1
-                var c_lo = ctr_c - ATTN_WINDOW
-                if c_lo < 0:
-                    c_lo = 0
-                var c_hi = ctr_c + ATTN_WINDOW
-                if c_hi > cols - 1:
-                    c_hi = cols - 1
-
-                # Pass 1: max score over the window (numerical stability — the
-                # subtracted max makes the largest exponent 0, so exp never overflows).
-                var max_score = Float32(-1.0e30)
-                for rj in range(r_lo, r_hi + 1):
-                    var dvr = qr - (Float32(rj) - cr)
-                    var dvr2 = dvr * dvr
-                    for cj in range(c_lo, c_hi + 1):
-                        var dvc = qc - (Float32(cj) - cc)
-                        var score = -beta * (dvr2 + dvc * dvc)
-                        if score > max_score:
-                            max_score = score
-
-                # Pass 2: softmax-weighted gather (streaming, no per-cell buffer).
-                var z = Float32(0.0)
-                var s = Float32(0.0)
-                for rj in range(r_lo, r_hi + 1):
-                    var dvr = qr - (Float32(rj) - cr)
-                    var dvr2 = dvr * dvr
-                    for cj in range(c_lo, c_hi + 1):
-                        var dvc = qc - (Float32(cj) - cc)
-                        var score = -beta * (dvr2 + dvc * dvc)
-                        var w = exp(score - max_score)
-                        z += w
-                        s = fma(w, inp.data[rj * cols + cj], s)
-                dst[r * out_cols + c] = s / z
+                dst[r * out_cols + c] = attn_pixel_plain(
+                    weights,
+                    inp.data,
+                    inp.rows,
+                    inp.cols,
+                    out_rows,
+                    out_cols,
+                    r,
+                    c,
+                )
 
 
 # TOROIDAL output-shaped gather (the upscale/tiling family, Vision A / Next #1
@@ -517,6 +548,110 @@ struct AttnGatherMemory(Memory):
 # through its periodic images), the centre is wrapped into bounds, and indices
 # wrap modularly. For extents <= 2*ATTN_WINDOW+1 every source cell is scanned,
 # so synth-scale results have no window truncation at all.
+@always_inline
+def attn_pixel_toroidal(
+    weights: UnsafePointer[Float32, MutAnyOrigin],
+    trel_r: Float32,
+    trel_c: Float32,
+    kr: Float32,
+    kc: Float32,
+    src: UnsafePointer[Float32, MutAnyOrigin],
+    rows: Int,
+    cols: Int,
+    out_rows: Int,
+    out_cols: Int,
+    r: Int,
+    c: Int,
+) -> Float32:
+    var m00 = weights[ATTN_M_OFF + 0]
+    var m01 = weights[ATTN_M_OFF + 1]
+    var m10 = weights[ATTN_M_OFF + 2]
+    var m11 = weights[ATTN_M_OFF + 3]
+    var t_r = weights[ATTN_T_OFF + 0]
+    var t_c = weights[ATTN_T_OFF + 1]
+    var beta_raw = weights[ATTN_BETA_OFF]
+    var beta = beta_raw * beta_raw
+    var frows = Float32(rows)
+    var fcols = Float32(cols)
+    var cr = Float32(rows - 1) * Float32(0.5)
+    var cc = Float32(cols - 1) * Float32(0.5)
+    var cr_out = Float32(out_rows - 1) * Float32(0.5)
+    var cc_out = Float32(out_cols - 1) * Float32(0.5)
+
+    # Query normalization by the shape-rule slope (see the gather header).
+    var inv_kr = Float32(1.0)
+    if kr > Float32(1.0e-3):
+        inv_kr = 1.0 / kr
+    var inv_kc = Float32(1.0)
+    if kc > Float32(1.0e-3):
+        inv_kc = 1.0 / kc
+
+    # Window span, capped at the torus period per axis (see the gather header).
+    var span_r = 2 * ATTN_WINDOW + 1
+    if span_r > rows:
+        span_r = rows
+    var span_c = 2 * ATTN_WINDOW + 1
+    if span_c > cols:
+        span_c = cols
+
+    var vr = (Float32(r) - cr_out) * inv_kr
+    var vc = (Float32(c) - cc_out) * inv_kc
+    # q = M*v + t + trel*extent, in the input's centred frame.
+    var qr = fma(m00, vr, fma(m01, vc, t_r)) + trel_r * frows
+    var qc = fma(m10, vr, fma(m11, vc, t_c)) + trel_c * fcols
+
+    # Window start: centre the span on q's wrapped source index.
+    var ctr_r = Int(round(qr + cr)) % rows
+    if ctr_r < 0:
+        ctr_r += rows
+    var ctr_c = Int(round(qc + cc)) % cols
+    if ctr_c < 0:
+        ctr_c += cols
+    var r0 = ctr_r - ATTN_WINDOW
+    var c0 = ctr_c - ATTN_WINDOW
+
+    # Pass 1: max score over the wrapped window (numerical stability).
+    var max_score = Float32(-1.0e30)
+    for wr in range(span_r):
+        var rj = (r0 + wr) % rows
+        if rj < 0:
+            rj += rows
+        var dvr = qr - (Float32(rj) - cr)
+        dvr -= frows * round(dvr / frows)
+        var dvr2 = dvr * dvr
+        for wc in range(span_c):
+            var cj = (c0 + wc) % cols
+            if cj < 0:
+                cj += cols
+            var dvc = qc - (Float32(cj) - cc)
+            dvc -= fcols * round(dvc / fcols)
+            var score = -beta * (dvr2 + dvc * dvc)
+            if score > max_score:
+                max_score = score
+
+    # Pass 2: softmax-weighted gather (streaming, no per-cell buffer).
+    var z = Float32(0.0)
+    var s = Float32(0.0)
+    for wr in range(span_r):
+        var rj = (r0 + wr) % rows
+        if rj < 0:
+            rj += rows
+        var dvr = qr - (Float32(rj) - cr)
+        dvr -= frows * round(dvr / frows)
+        var dvr2 = dvr * dvr
+        for wc in range(span_c):
+            var cj = (c0 + wc) % cols
+            if cj < 0:
+                cj += cols
+            var dvc = qc - (Float32(cj) - cc)
+            dvc -= fcols * round(dvc / fcols)
+            var score = -beta * (dvr2 + dvc * dvc)
+            var w = exp(score - max_score)
+            z += w
+            s = fma(w, src[rj * cols + cj], s)
+    return s / z
+
+
 def attn_gather_toroidal(
     weights: UnsafePointer[Float32, MutAnyOrigin],
     trel_r: Float32,
@@ -528,97 +663,23 @@ def attn_gather_toroidal(
     out_cols: Int,
     dst: UnsafePointer[Float32, MutAnyOrigin],
 ):
-    var m00 = weights[ATTN_M_OFF + 0]
-    var m01 = weights[ATTN_M_OFF + 1]
-    var m10 = weights[ATTN_M_OFF + 2]
-    var m11 = weights[ATTN_M_OFF + 3]
-    var t_r = weights[ATTN_T_OFF + 0]
-    var t_c = weights[ATTN_T_OFF + 1]
-    var beta_raw = weights[ATTN_BETA_OFF]
-    var beta = beta_raw * beta_raw
-    var rows = inp.rows
-    var cols = inp.cols
-    var frows = Float32(rows)
-    var fcols = Float32(cols)
-    var cr = Float32(rows - 1) * Float32(0.5)
-    var cc = Float32(cols - 1) * Float32(0.5)
-    var cr_out = Float32(out_rows - 1) * Float32(0.5)
-    var cc_out = Float32(out_cols - 1) * Float32(0.5)
-
-    # Query normalization by the shape-rule slope (see the header).
-    var inv_kr = Float32(1.0)
-    if kr > Float32(1.0e-3):
-        inv_kr = 1.0 / kr
-    var inv_kc = Float32(1.0)
-    if kc > Float32(1.0e-3):
-        inv_kc = 1.0 / kc
-
-    # Window span, capped at the torus period per axis (see the header).
-    var span_r = 2 * ATTN_WINDOW + 1
-    if span_r > rows:
-        span_r = rows
-    var span_c = 2 * ATTN_WINDOW + 1
-    if span_c > cols:
-        span_c = cols
-
+    # Per-pixel body shared with the GPU fitness kernel (attn_pixel_toroidal).
     for r in range(out_rows):
-        var vr = (Float32(r) - cr_out) * inv_kr
         for c in range(out_cols):
-            var vc = (Float32(c) - cc_out) * inv_kc
-            # q = M*v + t + trel*extent, in the input's centred frame.
-            var qr = fma(m00, vr, fma(m01, vc, t_r)) + trel_r * frows
-            var qc = fma(m10, vr, fma(m11, vc, t_c)) + trel_c * fcols
-
-            # Window start: centre the span on q's wrapped source index.
-            var ctr_r = Int(round(qr + cr)) % rows
-            if ctr_r < 0:
-                ctr_r += rows
-            var ctr_c = Int(round(qc + cc)) % cols
-            if ctr_c < 0:
-                ctr_c += cols
-            var r0 = ctr_r - ATTN_WINDOW
-            var c0 = ctr_c - ATTN_WINDOW
-
-            # Pass 1: max score over the wrapped window (numerical stability).
-            var max_score = Float32(-1.0e30)
-            for kr in range(span_r):
-                var rj = (r0 + kr) % rows
-                if rj < 0:
-                    rj += rows
-                var dvr = qr - (Float32(rj) - cr)
-                dvr -= frows * round(dvr / frows)
-                var dvr2 = dvr * dvr
-                for kc in range(span_c):
-                    var cj = (c0 + kc) % cols
-                    if cj < 0:
-                        cj += cols
-                    var dvc = qc - (Float32(cj) - cc)
-                    dvc -= fcols * round(dvc / fcols)
-                    var score = -beta * (dvr2 + dvc * dvc)
-                    if score > max_score:
-                        max_score = score
-
-            # Pass 2: softmax-weighted gather (streaming, no per-cell buffer).
-            var z = Float32(0.0)
-            var s = Float32(0.0)
-            for kr in range(span_r):
-                var rj = (r0 + kr) % rows
-                if rj < 0:
-                    rj += rows
-                var dvr = qr - (Float32(rj) - cr)
-                dvr -= frows * round(dvr / frows)
-                var dvr2 = dvr * dvr
-                for kc in range(span_c):
-                    var cj = (c0 + kc) % cols
-                    if cj < 0:
-                        cj += cols
-                    var dvc = qc - (Float32(cj) - cc)
-                    dvc -= fcols * round(dvc / fcols)
-                    var score = -beta * (dvr2 + dvc * dvc)
-                    var w = exp(score - max_score)
-                    z += w
-                    s = fma(w, inp.data[rj * cols + cj], s)
-            dst[r * out_cols + c] = s / z
+            dst[r * out_cols + c] = attn_pixel_toroidal(
+                weights,
+                trel_r,
+                trel_c,
+                kr,
+                kc,
+                inp.data,
+                inp.rows,
+                inp.cols,
+                out_rows,
+                out_cols,
+                r,
+                c,
+            )
 
 
 # Symmetric triangle fold of a CENTERED source coordinate `x` into the base
@@ -651,17 +712,21 @@ def _reflect_fold(x: Float32, extent: Float32) -> Float32:
 # plain bounded scan over the base cells around the FOLDED query (no period
 # doubling — the fold already brought q into the base range), same cost as
 # `apply_shaped`.
-def attn_gather_reflect(
+@always_inline
+def attn_pixel_reflect(
     weights: UnsafePointer[Float32, MutAnyOrigin],
     trel_r: Float32,
     trel_c: Float32,
     kr: Float32,
     kc: Float32,
-    inp: ArcGrid,
+    src: UnsafePointer[Float32, MutAnyOrigin],
+    rows: Int,
+    cols: Int,
     out_rows: Int,
     out_cols: Int,
-    dst: UnsafePointer[Float32, MutAnyOrigin],
-):
+    r: Int,
+    c: Int,
+) -> Float32:
     var m00 = weights[ATTN_M_OFF + 0]
     var m01 = weights[ATTN_M_OFF + 1]
     var m10 = weights[ATTN_M_OFF + 2]
@@ -670,8 +735,6 @@ def attn_gather_reflect(
     var t_c = weights[ATTN_T_OFF + 1]
     var beta_raw = weights[ATTN_BETA_OFF]
     var beta = beta_raw * beta_raw
-    var rows = inp.rows
-    var cols = inp.cols
     var frows = Float32(rows)
     var fcols = Float32(cols)
     var cr = Float32(rows - 1) * Float32(0.5)
@@ -687,61 +750,89 @@ def attn_gather_reflect(
     if kc > Float32(1.0e-3):
         inv_kc = 1.0 / kc
 
+    var vr = (Float32(r) - cr_out) * inv_kr
+    var vc = (Float32(c) - cc_out) * inv_kc
+    # Same centered query as the torus, then fold (not wrap).
+    var qr = fma(m00, vr, fma(m01, vc, t_r)) + trel_r * frows
+    var qc = fma(m10, vr, fma(m11, vc, t_c)) + trel_c * fcols
+    var fr = _reflect_fold(qr, frows)
+    var fc = _reflect_fold(qc, fcols)
+
+    # Bounded window centered on the folded query's base cell.
+    var ctr_r = Int(round(fr + cr))
+    if ctr_r < 0:
+        ctr_r = 0
+    if ctr_r > rows - 1:
+        ctr_r = rows - 1
+    var ctr_c = Int(round(fc + cc))
+    if ctr_c < 0:
+        ctr_c = 0
+    if ctr_c > cols - 1:
+        ctr_c = cols - 1
+    var r_lo = ctr_r - ATTN_WINDOW
+    if r_lo < 0:
+        r_lo = 0
+    var r_hi = ctr_r + ATTN_WINDOW
+    if r_hi > rows - 1:
+        r_hi = rows - 1
+    var c_lo = ctr_c - ATTN_WINDOW
+    if c_lo < 0:
+        c_lo = 0
+    var c_hi = ctr_c + ATTN_WINDOW
+    if c_hi > cols - 1:
+        c_hi = cols - 1
+
+    # Pass 1: max score over the window (numerical stability).
+    var max_score = Float32(-1.0e30)
+    for rj in range(r_lo, r_hi + 1):
+        var dvr = fr - (Float32(rj) - cr)
+        var dvr2 = dvr * dvr
+        for cj in range(c_lo, c_hi + 1):
+            var dvc = fc - (Float32(cj) - cc)
+            var score = -beta * (dvr2 + dvc * dvc)
+            if score > max_score:
+                max_score = score
+
+    # Pass 2: softmax-weighted gather.
+    var z = Float32(0.0)
+    var s = Float32(0.0)
+    for rj in range(r_lo, r_hi + 1):
+        var dvr = fr - (Float32(rj) - cr)
+        var dvr2 = dvr * dvr
+        for cj in range(c_lo, c_hi + 1):
+            var dvc = fc - (Float32(cj) - cc)
+            var score = -beta * (dvr2 + dvc * dvc)
+            var w = exp(score - max_score)
+            z += w
+            s = fma(w, src[rj * cols + cj], s)
+    return s / z
+
+
+def attn_gather_reflect(
+    weights: UnsafePointer[Float32, MutAnyOrigin],
+    trel_r: Float32,
+    trel_c: Float32,
+    kr: Float32,
+    kc: Float32,
+    inp: ArcGrid,
+    out_rows: Int,
+    out_cols: Int,
+    dst: UnsafePointer[Float32, MutAnyOrigin],
+):
+    # Per-pixel body shared with the GPU fitness kernel (attn_pixel_reflect).
     for r in range(out_rows):
-        var vr = (Float32(r) - cr_out) * inv_kr
         for c in range(out_cols):
-            var vc = (Float32(c) - cc_out) * inv_kc
-            # Same centered query as the torus, then fold (not wrap).
-            var qr = fma(m00, vr, fma(m01, vc, t_r)) + trel_r * frows
-            var qc = fma(m10, vr, fma(m11, vc, t_c)) + trel_c * fcols
-            var fr = _reflect_fold(qr, frows)
-            var fc = _reflect_fold(qc, fcols)
-
-            # Bounded window centered on the folded query's base cell.
-            var ctr_r = Int(round(fr + cr))
-            if ctr_r < 0:
-                ctr_r = 0
-            if ctr_r > rows - 1:
-                ctr_r = rows - 1
-            var ctr_c = Int(round(fc + cc))
-            if ctr_c < 0:
-                ctr_c = 0
-            if ctr_c > cols - 1:
-                ctr_c = cols - 1
-            var r_lo = ctr_r - ATTN_WINDOW
-            if r_lo < 0:
-                r_lo = 0
-            var r_hi = ctr_r + ATTN_WINDOW
-            if r_hi > rows - 1:
-                r_hi = rows - 1
-            var c_lo = ctr_c - ATTN_WINDOW
-            if c_lo < 0:
-                c_lo = 0
-            var c_hi = ctr_c + ATTN_WINDOW
-            if c_hi > cols - 1:
-                c_hi = cols - 1
-
-            # Pass 1: max score over the window (numerical stability).
-            var max_score = Float32(-1.0e30)
-            for rj in range(r_lo, r_hi + 1):
-                var dvr = fr - (Float32(rj) - cr)
-                var dvr2 = dvr * dvr
-                for cj in range(c_lo, c_hi + 1):
-                    var dvc = fc - (Float32(cj) - cc)
-                    var score = -beta * (dvr2 + dvc * dvc)
-                    if score > max_score:
-                        max_score = score
-
-            # Pass 2: softmax-weighted gather.
-            var z = Float32(0.0)
-            var s = Float32(0.0)
-            for rj in range(r_lo, r_hi + 1):
-                var dvr = fr - (Float32(rj) - cr)
-                var dvr2 = dvr * dvr
-                for cj in range(c_lo, c_hi + 1):
-                    var dvc = fc - (Float32(cj) - cc)
-                    var score = -beta * (dvr2 + dvc * dvc)
-                    var w = exp(score - max_score)
-                    z += w
-                    s = fma(w, inp.data[rj * cols + cj], s)
-            dst[r * out_cols + c] = s / z
+            dst[r * out_cols + c] = attn_pixel_reflect(
+                weights,
+                trel_r,
+                trel_c,
+                kr,
+                kc,
+                inp.data,
+                inp.rows,
+                inp.cols,
+                out_rows,
+                out_cols,
+                r,
+                c,
+            )
