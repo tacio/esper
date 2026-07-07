@@ -1496,3 +1496,32 @@ colour, the 3-start + colour-write path) **1.0**. `./esper fast` green. One shri
 train 0.194**, so it's a pre-existing hard case (crop border-loss corrupts the colour histogram
 signature at that seed), NOT a Rung D regression — the non-grow path is byte-identical by construction
 (mode slot frozen 0, two-start budget unchanged) and the matching numbers confirm it.
+
+---
+
+## 2026-07-07 — GPU environment: already there (pixi evaluated and rejected)
+
+**09:40–10:05.** Goal: prepare the environment for GPU processing, starting from Modular's
+GPU-puzzles howto (puzzles.modular.com/howto.html), which recommends pixi. Measured first instead
+of installing: probed the existing uv venv's Mojo 1.0.0b2 directly.
+
+**Finding: no environment work was needed.** The PyPI `mojo` wheel already carries full GPU
+support — `has_accelerator()` → True, `DeviceContext()` enumerates the RTX 2060, and a real
+`vec_add` kernel (`enqueue_create_buffer` → `enqueue_function` → `synchronize` → `map_to_host`)
+compiled, launched, and read back correct results end-to-end on the first working attempt. The
+driver (580.159.03) exactly meets Modular's ≥580 requirement (below that you'd need
+`MODULAR_NVPTX_COMPILER_PATH` → system `ptxas`); Turing is Modular's "known compatible for
+development" tier — fine for our purposes, just not production-serving validated.
+
+**Why pixi was rejected**, not just skipped: the puzzles repo's pixi env pins `mojo <1.0.0`
+(pre-1.0 nightlies — `fn`, `alias`, unqualified stdlib imports). Adopting it would have *broken*
+our hard 1.0.0b2 pin and its idioms. Pixi's actual value there is conda-side CUDA
+profilers/sanitizers, which we don't need yet; if we ever do, it can be added alongside uv without
+touching the Mojo toolchain.
+
+**Landed** (branch `gpu-env`): `tests/test_gpu_env.mojo` — the smoke test proving the environment
+claim (device name + 1024-element vec_add, per-element check, `raise Error` on mismatch). Gated
+with `comptime if not has_accelerator()` so device code isn't even compiled on GPU-less hosts —
+CI passes as an explicit SKIP. Untagged → runs in the fast tier (sub-second on GPU). One 1.0
+gotcha for future kernels: `@parameter if` is deprecated in b2 — use `comptime if`; kernel pointer
+params need the usual explicit `MutAnyOrigin`. Idioms recorded in CLAUDE.md (Toolchain section).
