@@ -391,6 +391,15 @@ slice is dominated by that last class (19/39).
    first corpus exhibit list. The audit tool stays as the reusable gate: any proposed new factor
    family drops into its key set and re-measures against the same 146 ids in ~20 s. Depth-chaining
    itself is deferred until a factor audit shows a chain-shaped population. (JOURNAL 2026-07-08.)
+   → **Factor-coverage scan (same day) sharpened the negative:** candidate object-level per-cell
+   reads (component size/rank/dims, bbox position, mirror context, frequency rank,
+   distance-to-object; `tools/factor_scan.py`, false-positive-controlled) cover a union of
+   **4/146** — the floor lies outside the WHOLE class of per-cell functions over position-aligned
+   context. Its dominant property is CONTENT-ADDRESSED construction (move/copy/draw/extend: output
+   written at positions other than where the input evidence sits). Next: a literature pass aimed
+   exactly there — content-attention (AttnGather generalized from position-queries to learned
+   content-keys), object-slot representations feeding the self-mod write (rung #6), constructive
+   TTT approaches — with the scan harness as the pre-build gate for whatever it proposes.
    **GPU gate — DONE EARLY (2026-07-07, rungs G0–G3 on branch `gpu-env`).** The blocker premise
    was FALSE: the pinned `mojo==1.0.0b2` PyPI wheel carries full GPU support (driver ≥ 580; the
    dev box's RTX 2060 is Modular's dev-tier), so no MAX-platform migration and no pin change were

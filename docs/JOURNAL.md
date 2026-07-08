@@ -1670,3 +1670,42 @@ its first corpus exhibit list. The three chain-shaped ids (543a7ed5, cc9053aa, e
 real but too few to justify a rung. Audit + calibration protocol journaled here; the tool stays
 (`tools/deep_floor_audit.py`) as the reusable gate for any future factor proposal — a new factor
 family can be dropped into its key set and re-measured against the same 146 ids in ~20 s.
+
+---
+
+## 2026-07-08 — Factor-coverage scan: the deep floor is not PER-CELL expressible at all
+
+**13:49 — The follow-up the CMS-0 STOP demanded.** The audit said the missing capability is the
+FACTORS, not composition depth — so before any literature pass, measure WHICH factor would cover
+the floor. `tools/factor_scan.py` drops candidate object-level per-cell key families into the same
+calibrated harness (LOO paired residual-fix, gated-override fallback, same bars as the audit's
+chain label): component size / size-rank(largest,smallest) / bbox dims, position-in-bbox class,
+mirror context (h/v/180), colour-frequency rank, distance-to-the-other-set (BFS, capped). The
+substrates (connected components, mirrors, histograms) are representations a learned read could
+operate over — the scan asks what a factor must EXPRESS, not how it is learned. False-positive
+control: on 20 pure depth-2 synth tasks every family shows net_fix +0.00 and zero false covers,
+except sym-h "covering" flip tasks at π=identity — the mirror key legitimately CONTAINS the flip
+read, which cannot confound the floor (a flip-expressible task would have been labeled
+depth2-fit-failure by the audit; only 1/146 was).
+
+**Result: union of ALL new families = 4/146** (comp-rank 1, comp-size 1, sym-h 1, sym-180 1,
+dist 1, comp-dims 1 — overlapping; proven baselines 3), plus 18 near-misses at net_fix 0.25–0.5
+(sym-* and dist dominate that band). Even "recolor the largest object"-class reads — the exact
+family the object-level cluster's size deltas suggested — cover ONE task.
+
+**The finding, sharper than CMS-0's:** the deep floor lies outside the entire class of per-cell
+functions over position-aligned context — however rich the key. What these tasks share (and the
+45-task object-level cluster's ±3…±48 object deltas corroborate) is that output content is
+constructed at positions OTHER than where the input evidence sits: move/copy/draw/extend rules
+are CONTENT-ADDRESSED — the writer must select input structure by content and place it by rule,
+which no keyed table over the aligned cell can express by definition. (The 17+18 partial-fix ids
+are the boundary band: part per-cell, part constructive.) This is Rung S's "content is not a
+positional copy" finding, now measured as the dominant property of the whole floor.
+
+**Where this aims the literature pass** (next step): not richer per-cell keys but mechanisms of
+content-addressed retrieval/construction compatible with the spine — content-attention (the
+AttnGather generalized from position-queries to learned content-keys, i.e. proper kv-attention
+over the input grid), object-slot / grouped representations feeding the self-mod write rule
+(rung #6), and constructive/generative test-time-training approaches from the ARC Prize crop.
+The scan harness stays the gate: any proposed mechanism's expressible class can be dropped in as
+a key/predictor and re-measured against the same 146 ids before it is built.
