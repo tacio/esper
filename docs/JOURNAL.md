@@ -1608,3 +1608,16 @@ produced bit-identical numbers — omitting `fit_N fit_iters` selects arc_solve'
 128/4000), not the corpus budget, so it was an exact repeat; a clean live demonstration of the
 per-task-seed reproducibility contract. (2) Both runs land within ~5% wall time of each other —
 the harness is GPU-bound and stable at 2 workers.
+
+---
+
+## 2026-07-08 — In-process INFO progress for the corpus eval
+
+Monitoring an eval no longer needs an outside `watch` on temp files: `arc_solve` now prints
+`INFO [+<elapsed>s] task k/n start|done (<s>/task, avg, eta)` around every task (perf_counter_ns;
+the eta is per-process = per-shard under the harness), and `eval_parallel.sh` streams each
+worker's output live to the terminal with a `[wN]` prefix via `stdbuf -oL … | tee | sed`. The
+`tee` keeps the per-worker capture files prefix-FREE — the `^  task:` positional aggregation is
+untouched (verified: 6/6 result lines on a 2-worker mini run; footer format identical). Verified
+liveness through a pipe (INFO lines visible mid-run, not at exit). INFO is additive monitoring
+output only; consumers keep reading the unchanged `  task:` lines. `./esper fast` green.

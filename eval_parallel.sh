@@ -15,6 +15,11 @@
 # ESPER_CPU=1 to force the CPU reference path (`--cpu` per worker, nproc
 # workers) for A/B runs.
 #
+# Progress streams inline: each worker's per-task result + `INFO ... eta`
+# lines are echoed live with a [wN] prefix (no more silent-until-done runs;
+# monitor the run from its own terminal). A worker's eta is per-SHARD. The
+# per-worker capture files stay prefix-free — aggregation is unchanged.
+#
 # Usage:
 #   ./eval_parallel.sh <task_dir> [out_file] [n_workers] [fit_N fit_iters]
 # e.g.
@@ -68,10 +73,14 @@ done
 pids=()
 for ((w = 0; w < N; w++)); do
     # xargs feeds the shard's task paths as argv to one mojo invocation.
+    # tee: the FILE stays pristine (the '^  task:' aggregation greps it);
+    # the CONSOLE copy gets a [wN] prefix, streaming per-task result + INFO
+    # progress/eta lines live (stdbuf keeps every pipe stage line-buffered).
     (xargs -a "$WORK/shard_$w.args" -d '\n' \
-        mojo run -I src src/arc_solve.mojo --report "${CPU_ARGS[@]}" \
-        "${FIT_ARGS[@]}" \
-        >"$WORK/out_$w.txt" 2>&1) &
+        stdbuf -oL mojo run -I src src/arc_solve.mojo --report \
+        "${CPU_ARGS[@]}" "${FIT_ARGS[@]}" 2>&1 |
+        tee "$WORK/out_$w.txt" |
+        stdbuf -oL sed "s/^/[w$w] /") &
     pids+=($!)
 done
 
