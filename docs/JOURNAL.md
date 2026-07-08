@@ -1738,3 +1738,38 @@ for parameters, which favors a derivative-free ES.
    for generalization) to decide where to write; ES meta-learns only the small rule.
 3. *MDL acceptance* — description-length-vs-residual as the uniform capacity guardrail on written
    stages (CompressARC's objective, decoupled from its backprop).
+
+## 2026-07-08 — Content-addressed read scan: GATE RETURNED GO (22/146)
+
+**15:16** — Extended `tools/factor_scan.py` with the content-addressed read families the
+literature pass proposed, and the pre-registered gate (content-family union >= 20/146, user
+decision this morning) returned **GO: 22/146** — the first positive gate since the deep-floor
+work began. Full output preserved at `scratch/content_scan_v1.txt`.
+
+**The design discovery (calibration-driven, before touching the corpus):** the first cut — per-cell
+keys that *include* fetched values (`fetch-ray4`, `fetch-registers`, ...) — mostly failed its own
+positive controls (0–6/20 per class). Diagnosis: a keyed TABLE can only emit colours it has seen
+for a key, so copy-through rules (out = the fetched cell's value, colours varying across demos)
+are invisible to it — but copy-through is exactly what a sharp content-keyed gather does. The fix
+is the `copy-*` family group: colour-ABSTRACT relational keys (centre==bg, fetched==centre, ...)
+whose LOO tables vote abstract ACTIONS — KEEP (out = centre) / COPY (out = fetched) / constant —
+implemented in `loo_paired_fetch` (same pairing, gating, and fallback as the audit's `loo_paired`).
+After one key refinement (anchor needed fetched==centre in the key to separate KEEP cells from
+COPY cells), all five classes calibrate 20/20 at n_train=3, with zero false covers on 20 pure
+depth-2 control tasks, and the committed families' corpus numbers stay bit-identical. Two lessons
+land at once: (1) the mechanism's essential power IS copy-through, not richer keys — the Mojo
+gather must emit the attended cell's VALUE; (2) abstract relational keys are what generalize
+across demos with varying colours — the Slot-Abstractors relational-bottleneck lesson, reproduced
+independently by our own calibration.
+
+**Corpus result:** copy-registers 12, copy-nearest 10, copy-ray 9, copy-objlocal 8, copy-anchor 7,
+fetch-ray4 6 (keyed variants otherwise ~0); content union **22/146** vs the per-cell union's 4.
+Greedy cover: copy-registers + fetch-ray4 + copy-nearest = 20. Equally important: the near-miss
+band (partial fix 0.25–0.5, or strong fix at loo just under the bar) grew from 18 to **~72 ids**
+— the content class doesn't just cover 22, it GRAZES half the floor; a soft ES-fit gather with
+content terms plus the usual residual factor writes plausibly converts a slice of that band.
+
+**Next (the gated build):** the content-keyed gather rung — `AttnGatherMemory`'s score generalized
+from affine-position queries to position + content-match terms, output = the attended cell's
+value; one ES search, `fill_scale` freeze, pre-map recipe and GPU kernel shape carried over. The
+22 covered ids are the corpus target list; the scan stays the acceptance harness.

@@ -406,6 +406,15 @@ slice is dominated by that last class (19/39).
    pre-gated by content-addressed read families in `factor_scan`; (b) rung #6 = a **constructive
    self-mod editor** (iterated small edits over a materialized answer grid, reading object-slot
    relations); (c) MDL description-length-vs-residual as the uniform capacity guardrail.
+   → **Content-read scan GATE RETURNED GO (same day): 22/146** ≥ the pre-registered 20
+   (`scratch/content_scan_v1.txt`; JOURNAL 15:16). The load-bearing finding: coverage comes
+   from **copy-through semantics** (table votes KEEP/COPY over colour-abstract relational keys —
+   `loo_paired_fetch`), not richer keys; the keyed-table variants stay near 0. Calibrated 5/5
+   classes at 20/20, zero false covers, committed baseline bit-identical. Near-miss band grew
+   18 → ~72 ids — the class grazes half the floor. **Next rung (gated build): the content-keyed
+   gather** — `AttnGatherMemory` score = affine-position + content-match terms, output = the
+   attended cell's VALUE; one ES search, fill_scale freeze, pre-map + GPU shape carried over;
+   the 22 covered ids are the target list and the scan is the acceptance harness.
    **GPU gate — DONE EARLY (2026-07-07, rungs G0–G3 on branch `gpu-env`).** The blocker premise
    was FALSE: the pinned `mojo==1.0.0b2` PyPI wheel carries full GPU support (driver ≥ 580; the
    dev box's RTX 2060 is Modular's dev-tier), so no MAX-platform migration and no pin change were

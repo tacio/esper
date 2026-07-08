@@ -18,10 +18,21 @@ components / mirrors / histograms here are SUBSTRATE (representations a
 learned read could operate over), not hand-coded transforms — the scan asks
 what a factor must EXPRESS, not how it is learned.
 
+Extension (post-literature-pass, RESEARCH-NOTES 2026-07-08): the object-level
+per-cell families covered 4/146 — the floor lies outside per-cell functions
+over POSITION-ALIGNED context. The CONTENT_FAMILIES below test the next
+class: per-cell keys whose fetch position is selected by CONTENT (rays,
+nearest-object, global registers, content-defined anchors, object-local
+frames) — the class a content-keyed AttnGather (position-query -> position +
+content-match terms) would express. Pre-registered gate (user decision
+2026-07-08): content-family union >= 20/146 => GO to building the Mojo
+mechanism; below => documented STOP, floor re-scopes to the constructive
+self-mod editor (rung #6).
+
     python tools/factor_scan.py [train_dump]
 
-Reports per-family coverage, the union, a greedy set cover (which 2-3
-families buy the floor), and per-task detail. ~1-3 min for the 146 ids.
+Reports per-family coverage, group unions (object-level vs content), a
+greedy set cover, and per-task detail. ~5-10 min for the 146 ids.
 """
 
 import sys
@@ -120,10 +131,84 @@ def precompute(q):
                     dist[rr][cc] = dist[r][c] + 1
                     dq.append((rr, cc))
 
+    # ---- content-addressed substrate (fetch position selected by content) --
+
+    # nearest-nonbg colour + distance per cell (multi-source BFS, 8-connected)
+    near_col = [[None] * C for _ in range(R)]
+    near_d = [[DIST_CAP] * C for _ in range(R)]
+    dq = deque()
+    for r in range(R):
+        for c in range(C):
+            if q[r][c] != bg:
+                near_col[r][c] = q[r][c]
+                near_d[r][c] = 0
+                dq.append((r, c))
+    while dq:
+        r, c = dq.popleft()
+        if near_d[r][c] >= DIST_CAP:
+            continue
+        for dr in (-1, 0, 1):
+            for dc in (-1, 0, 1):
+                rr, cc = r + dr, c + dc
+                if (0 <= rr < R and 0 <= cc < C
+                        and near_d[rr][cc] > near_d[r][c] + 1):
+                    near_d[rr][cc] = near_d[r][c] + 1
+                    near_col[rr][cc] = near_col[r][c]
+                    dq.append((rr, cc))
+
+    # first nonbg colour strictly along each ray (up/down/left/right)
+    ray_u = [[None] * C for _ in range(R)]
+    ray_d = [[None] * C for _ in range(R)]
+    ray_l = [[None] * C for _ in range(R)]
+    ray_r = [[None] * C for _ in range(R)]
+    for c in range(C):
+        last = None
+        for r in range(R):
+            ray_u[r][c] = last
+            if q[r][c] != bg:
+                last = q[r][c]
+        last = None
+        for r in range(R - 1, -1, -1):
+            ray_d[r][c] = last
+            if q[r][c] != bg:
+                last = q[r][c]
+    for r in range(R):
+        last = None
+        for c in range(C):
+            ray_l[r][c] = last
+            if q[r][c] != bg:
+                last = q[r][c]
+        last = None
+        for c in range(C - 1, -1, -1):
+            ray_r[r][c] = last
+            if q[r][c] != bg:
+                last = q[r][c]
+
+    # global content registers + anchors (bbox top-left of the register comp)
+    nonbg_ids = [i for i in range(cid) if colours[i] != bg]
+    large_i = max(nonbg_ids, key=lambda i: sizes[i], default=None)
+    small_i = min(nonbg_ids, key=lambda i: sizes[i], default=None)
+    col_comp_n = Counter(colours[i] for i in nonbg_ids)
+    uniq_cols = [col for col, n in col_comp_n.items() if n == 1]
+    uniq_col = uniq_cols[0] if len(uniq_cols) == 1 else None
+    uniq_i = next((i for i in nonbg_ids if colours[i] == uniq_col),
+                  None) if uniq_col is not None else None
+    large_col = colours[large_i] if large_i is not None else None
+    small_col = colours[small_i] if small_i is not None else None
+    nonbg_hist = Counter(x for x in flat if x != bg)
+    major_col = nonbg_hist.most_common(1)[0][0] if nonbg_hist else None
+    anchors = {}
+    for name, i in (("large", large_i), ("uniq", uniq_i)):
+        anchors[name] = (bboxes[i][0], bboxes[i][2]) if i is not None else None
+
     return {
         "q": q, "R": R, "C": C, "bg": bg, "rank": rank,
         "comp": comp, "sizes": sizes, "bboxes": bboxes, "colours": colours,
         "big": big, "small": small, "size_rank": size_rank, "dist": dist,
+        "near_col": near_col, "near_d": near_d,
+        "ray": {"u": ray_u, "d": ray_d, "l": ray_l, "r": ray_r},
+        "large_col": large_col, "small_col": small_col, "uniq_col": uniq_col,
+        "major_col": major_col, "anchors": anchors,
     }
 
 
@@ -201,6 +286,148 @@ FAMILIES = {
     "freq-rank": k_freq_rank,
     "dist": k_dist,
 }
+
+
+# ---- content-addressed families: the fetch position is selected by CONTENT
+# (the class a content-keyed AttnGather would express: "read from the cell
+# nearest/relative to a content-defined anchor having property P") ----
+
+
+def k_ray4(P, r, c):
+    ray = P["ray"]
+    return (P["q"][r][c], ray["u"][r][c], ray["d"][r][c],
+            ray["l"][r][c], ray["r"][r][c])
+
+
+def k_nearest(P, r, c):
+    return (P["q"][r][c], P["q"][r][c] == P["bg"],
+            P["near_col"][r][c], P["near_d"][r][c])
+
+
+def k_registers(P, r, c):
+    return (P["q"][r][c], P["large_col"], P["small_col"], P["uniq_col"])
+
+
+def k_objlocal(P, r, c):
+    i = P["comp"][r][c]
+    r0, r1, c0, c1 = P["bboxes"][i]
+    return (P["q"][r][c], P["q"][r][c0 + c1 - c], P["q"][r0 + r1 - r][c])
+
+
+CONTENT_FAMILIES = {
+    "fetch-ray4": k_ray4,
+    "fetch-nearest": k_nearest,
+    "fetch-registers": k_registers,
+    "fetch-objlocal": k_objlocal,
+}
+# fetch-anchor: colour at the position displaced by a content-defined anchor
+# (largest / unique-colour component bbox corner), both signs — variants kept
+# best-of under one name, like count-P.
+ANCHOR_VARIANTS = tuple((a, s) for a in ("large", "uniq") for s in (1, -1))
+
+
+# ---- copy-capable families (the sharp content-keyed-gather semantics) ----
+#
+# A keyed TABLE can only emit colours it has seen for a key, so copy-through
+# rules (out = the fetched cell's value, colours varying across demos) are
+# invisible to it. A sharp content-keyed gather emits the ATTENDED CELL'S
+# VALUE. These families pair a colour-ABSTRACT relational key with a fetched
+# value; the table's votes are the abstract actions KEEP (out == centre) /
+# COPY (out == fetched) plus constant colours (loo_paired_fetch below).
+# Each returns (key, fetched); variants are separate runs, best-of per name.
+
+
+def fetch_ray(P, r, c, d):
+    f = P["ray"][d][r][c]
+    return ((P["q"][r][c] == P["bg"], f is not None), f)
+
+
+def fetch_nearest(P, r, c):
+    return ((P["q"][r][c] == P["bg"], P["near_d"][r][c]),
+            P["near_col"][r][c])
+
+
+def fetch_register(P, r, c, reg):
+    f = P[reg]
+    return ((P["q"][r][c] == P["bg"], P["q"][r][c] == f), f)
+
+
+def fetch_anchor(P, r, c, a, s):
+    anc = P["anchors"][a]
+    if anc is None:
+        return ((P["q"][r][c] == P["bg"], None), None)
+    f = P["q"][(r + s * anc[0]) % P["R"]][(c + s * anc[1]) % P["C"]]
+    return ((P["q"][r][c] == P["bg"], f == P["q"][r][c]), f)
+
+
+def fetch_objlocal(P, r, c, axis):
+    r0, r1, c0, c1 = P["bboxes"][P["comp"][r][c]]
+    f = P["q"][r][c0 + c1 - c] if axis == "h" else P["q"][r0 + r1 - r][c]
+    return ((P["q"][r][c] == P["bg"], f == P["q"][r][c]), f)
+
+
+COPY_FAMILIES = {
+    "copy-ray": [lambda P, r, c, d=d: fetch_ray(P, r, c, d)
+                 for d in ("u", "d", "l", "r")],
+    "copy-nearest": [fetch_nearest],
+    "copy-registers": [
+        lambda P, r, c, g=g: fetch_register(P, r, c, g)
+        for g in ("large_col", "small_col", "uniq_col", "major_col")],
+    "copy-anchor": [lambda P, r, c, a=a, s=s: fetch_anchor(P, r, c, a, s)
+                    for a, s in ANCHOR_VARIANTS],
+    "copy-objlocal": [lambda P, r, c, x=x: fetch_objlocal(P, r, c, x)
+                      for x in ("h", "v")],
+}
+
+KEEP = "KEEP"
+COPY = "COPY"
+
+
+def loo_paired_fetch(per_demo):
+    """LOO paired exactly like deep_floor_audit.loo_paired (same gated
+    override + d2 fallback, same return tuple), but cells are
+    ((d2_key, chain_key, fetched), out) and the chain table votes over
+    abstract actions: KEEP -> centre (= the d2 key), COPY -> fetched value,
+    else a constant colour."""
+    n = len(per_demo)
+    if n < 2:
+        return 0.0, 0.0, 0.0, 1.0
+    total = d2_hit = ch_hit = fixed = broken = 0
+    for held in range(n):
+        t2 = {}
+        tc = {}
+        for d in range(n):
+            if d == held:
+                continue
+            for (k2, kc, f), out in per_demo[d]:
+                t2.setdefault(k2, Counter())[out] += 1
+                if out == k2:
+                    v = KEEP
+                elif f is not None and out == f:
+                    v = COPY
+                else:
+                    v = out
+                tc.setdefault(kc, Counter())[v] += 1
+        for (k2, kc, f), out in per_demo[held]:
+            total += 1
+            h2 = k2 in t2 and t2[k2].most_common(1)[0][0] == out
+            if kc in tc:
+                v = tc[kc].most_common(1)[0][0]
+                pred = k2 if v == KEEP else f if v == COPY else v
+                hc = h2 if pred is None else pred == out
+            else:
+                hc = h2  # gated override absent -> base prediction
+            d2_hit += h2
+            ch_hit += hc
+            if hc and not h2:
+                fixed += 1
+            elif h2 and not hc:
+                broken += 1
+    miss2 = total - d2_hit
+    net_fix = (fixed - broken) / miss2 if miss2 else 0.0
+    return (d2_hit / total, ch_hit / total, net_fix, miss2 / total)
+
+
 # the audit's proven-factor keys, re-scored here for a comparable baseline row
 BASELINES = ("ndiff8", "count-P")
 
@@ -224,7 +451,7 @@ def scan_task(demos):
             continue
         pres = [precompute(q) for q in qs]
         # families with precomputed substrate
-        for fam, keyfn in FAMILIES.items():
+        for fam, keyfn in {**FAMILIES, **CONTENT_FAMILIES}.items():
             per_demo = []
             for P, (_, og) in zip(pres, demos):
                 cells = []
@@ -234,6 +461,36 @@ def scan_task(demos):
                             ((P["q"][r][c], keyfn(P, r, c)), og[r][c]))
                 per_demo.append(cells)
             consider(fam, loo_paired(per_demo), pi)
+        # fetch-anchor variants (anchor x sign), best-of under one name
+        for a, s in ANCHOR_VARIANTS:
+            per_demo = []
+            for P, (_, og) in zip(pres, demos):
+                anc = P["anchors"][a]
+                q, R, C = P["q"], P["R"], P["C"]
+                cells = []
+                for r in range(R):
+                    for c in range(C):
+                        if anc is None:
+                            f = None
+                        else:
+                            f = q[(r + s * anc[0]) % R][(c + s * anc[1]) % C]
+                        cells.append(((q[r][c], (q[r][c], a, s, f)),
+                                      og[r][c]))
+                per_demo.append(cells)
+            consider("fetch-anchor", loo_paired(per_demo), pi)
+        # copy-capable families (KEEP/COPY votes), variants best-of per name
+        for fam, variants in COPY_FAMILIES.items():
+            for fn in variants:
+                per_demo = []
+                for P, (_, og) in zip(pres, demos):
+                    cells = []
+                    for r in range(P["R"]):
+                        for c in range(P["C"]):
+                            key, f = fn(P, r, c)
+                            cells.append(
+                                ((P["q"][r][c], key, f), og[r][c]))
+                    per_demo.append(cells)
+                consider(fam, loo_paired_fetch(per_demo), pi)
         # proven-factor baselines (same numbers as the audit)
         per_demo = []
         for q, (_, og) in zip(qs, demos):
@@ -264,7 +521,10 @@ def main(train_dump):
     ids = deep_floor_ids(train_dump)
     print(f"factor scan over {len(ids)} deep-floor ids; "
           f"cover = net_fix >= {NET_FIX_BAR} & loo >= {CHAIN_LOO_BAR}")
-    cover_sets = {f: set() for f in list(FAMILIES) + list(BASELINES)}
+    content_names = (list(CONTENT_FAMILIES) + ["fetch-anchor"]
+                     + list(COPY_FAMILIES))
+    all_new = list(FAMILIES) + content_names
+    cover_sets = {f: set() for f in all_new + list(BASELINES)}
     per_task = {}
     for n, tid in enumerate(ids):
         best = scan_task(load_demos(tid))
@@ -284,9 +544,14 @@ def main(train_dump):
     new_sets = {f: s for f, s in cover_sets.items() if f not in BASELINES}
     union = set().union(*new_sets.values())
     base_union = set().union(*(cover_sets[f] for f in BASELINES))
+    obj_union = set().union(*(cover_sets[f] for f in FAMILIES))
+    content_union = set().union(*(cover_sets[f] for f in content_names))
     print(f"\nunion of NEW families: {len(union)}/{len(ids)}"
           f"   (proven baselines: {len(base_union)};"
           f" new-only: {len(union - base_union)})")
+    print(f"  object-level per-cell group: {len(obj_union)}"
+          f"   CONTENT-ADDRESSED group: {len(content_union)}"
+          f"   (gate: content union >= 20)")
 
     print("\ngreedy set cover (new families):")
     remaining = set(union)
