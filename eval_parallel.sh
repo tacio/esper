@@ -8,11 +8,24 @@
 # global RNG are not thread-safe). This is purely a faster harness around the
 # same `--report` driver `run_tests.sh` / the docs use; the numbers are identical.
 #
+# GPU (rungs G1-G3): on an accelerator host arc_solve's ES fitness is
+# GPU-batched by default, and one process nearly saturates the device — so the
+# worker default drops to 2 (overlapping one worker's host-side staging with
+# the other's kernels; more workers just contend for the same GPU). Set
+# ESPER_CPU=1 to force the CPU reference path (`--cpu` per worker, nproc
+# workers) for A/B runs.
+#
+# Progress streams inline: each worker's per-task result + `INFO ... eta`
+# lines are echoed live with a [wN] prefix (no more silent-until-done runs;
+# monitor the run from its own terminal). A worker's eta is per-SHARD. The
+# per-worker capture files stay prefix-free — aggregation is unchanged.
+#
 # Usage:
 #   ./eval_parallel.sh <task_dir> [out_file] [n_workers] [fit_N fit_iters]
 # e.g.
 #   ./eval_parallel.sh data_bin/arc2_train scratch/arc2_train_results.txt
 #   ./eval_parallel.sh data_bin/arc2_train scratch/arc2_train_v2.txt 16 64 1500
+#   ESPER_CPU=1 ./eval_parallel.sh data_bin/arc2_eval scratch/cpu_ab.txt
 # The optional trailing pair is forwarded as `--fit N ITERS` (the documented
 # corpus budget); omitted = the full FIT_N/FIT_ITERS proof budget.
 set -euo pipefail
@@ -22,7 +35,17 @@ cd "$ROOT"
 
 TASK_DIR="${1:?usage: ./eval_parallel.sh <task_dir> [out_file] [n_workers] [fit_N fit_iters]}"
 OUT_FILE="${2:-scratch/eval_results.txt}"
-N="${3:-$(nproc)}"
+
+# Backend + worker defaults (see the GPU note above). The explicit n_workers
+# argument always wins.
+CPU_ARGS=()
+DEFAULT_N="$(nproc)"
+if [[ "${ESPER_CPU:-0}" == "1" ]]; then
+    CPU_ARGS=(--cpu)
+elif command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi >/dev/null 2>&1; then
+    DEFAULT_N=2
+fi
+N="${3:-$DEFAULT_N}"
 FIT_ARGS=()
 if [[ $# -ge 5 ]]; then FIT_ARGS=(--fit "$4" "$5"); fi
 
@@ -50,9 +73,14 @@ done
 pids=()
 for ((w = 0; w < N; w++)); do
     # xargs feeds the shard's task paths as argv to one mojo invocation.
+    # tee: the FILE stays pristine (the '^  task:' aggregation greps it);
+    # the CONSOLE copy gets a [wN] prefix, streaming per-task result + INFO
+    # progress/eta lines live (stdbuf keeps every pipe stage line-buffered).
     (xargs -a "$WORK/shard_$w.args" -d '\n' \
-        mojo run -I src src/arc_solve.mojo --report "${FIT_ARGS[@]}" \
-        >"$WORK/out_$w.txt" 2>&1) &
+        stdbuf -oL mojo run -I src src/arc_solve.mojo --report \
+        "${CPU_ARGS[@]}" "${FIT_ARGS[@]}" 2>&1 |
+        tee "$WORK/out_$w.txt" |
+        stdbuf -oL sed "s/^/[w$w] /") &
     pids+=($!)
 done
 

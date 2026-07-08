@@ -1,7 +1,9 @@
-from std.sys import argv
+from std.sys import argv, has_accelerator
+from std.gpu.host import DeviceContext
 from std.memory import alloc, UnsafePointer
 from std.random import seed
 from std.math import round
+from std.time import perf_counter_ns
 
 from memory_composed import (
     LocalWriteComposedMemory,
@@ -55,8 +57,18 @@ from arc_io import load_arc_task, exact_match
 #                   the synth proofs use). The real-corpus runs use a smaller,
 #                   DOCUMENTED budget — uniform across tasks, reported with the
 #                   number — because full-budget fits at 30x30 ARC scale are
-#                   compute-prohibitive. CI's synth path passes no flag and
-#                   keeps the full proven budget.
+#                   compute-prohibitive on CPU. CI's synth path passes no flag
+#                   and keeps the full proven budget.
+#   --cpu           force the CPU reference ES path on an accelerator host
+#                   (A/B benchmarking; the default on such hosts is the GPU-
+#                   batched fitness, rungs G1-G2). No-op on CPU-only hosts.
+#                   The report header prints which path ran (self-documenting).
+#
+# Progress: every task emits `INFO [+<elapsed>s] task k/n start|done ...`
+# lines (the done line carries per-task seconds, the running average and a
+# per-PROCESS eta — per-shard under eval_parallel.sh). INFO lines are additive
+# monitoring output: the positional `  task:` result lines are unchanged and
+# remain the only lines consumers (eval_parallel's grep) read.
 #
 # Run from the project root, e.g.:
 #   mojo run -I src src/arc_solve.mojo data_bin/flip_h_*.task
@@ -91,7 +103,11 @@ def _dump_grid(label: String, p: UnsafePointer[Float32, MutAnyOrigin], n: Int):
 
 
 def solve_task(
-    task_path: String, n_fit: Int, iters: Int, dump_diff: Bool = False
+    task_path: String,
+    n_fit: Int,
+    iters: Int,
+    dump_diff: Bool = False,
+    use_gpu: Bool = True,
 ) raises -> Float32:
     var task = load_arc_task(task_path)
 
@@ -162,6 +178,7 @@ def solve_task(
             FIT_SIGMA1,
             iters,
             FIT_REG,
+            use_gpu,
         )
     else:
         # Colour table written from the demos, the annealed geometry ES on the
@@ -180,6 +197,7 @@ def solve_task(
             FIT_SIGMA1,
             iters,
             FIT_REG,
+            use_gpu,
         )
 
     var pred = alloc[Float32](capacity)
@@ -295,12 +313,16 @@ def main() raises:
     # Flag parsing: flags must precede the `.task` paths (see the header).
     var report_only = False
     var dump_diff = False
+    var use_gpu = True
     var n_fit = FIT_N
     var iters = FIT_ITERS
     var first = 1
     while first < len(args):
         if String(args[first]) == "--report":
             report_only = True
+            first += 1
+        elif String(args[first]) == "--cpu":
+            use_gpu = False
             first += 1
         elif String(args[first]) == "--diff":
             # Near-miss audit: emit input/pred/truth grids (report-implied, so a
@@ -330,9 +352,50 @@ def main() raises:
     var solved = 0
     var held_sum = Float32(0.0)
 
+    # Self-documenting compute path: which fitness backend this run used.
+    var backend = String("cpu")
+    comptime if has_accelerator():
+        if use_gpu:
+            var ctx = DeviceContext()
+            backend = String("gpu (") + ctx.name() + String(")")
     print("Esper held-out generalization over", total, "task(s)")
+    print("  fitness backend:", backend)
+    var t_start = perf_counter_ns()
     for idx in range(first, len(args)):
-        var held_out = solve_task(String(args[idx]), n_fit, iters, dump_diff)
+        var k = idx - first + 1
+        var t_task = perf_counter_ns()
+        print(
+            "INFO [+"
+            + String(Int((t_task - t_start) // 1_000_000_000))
+            + "s] task "
+            + String(k)
+            + "/"
+            + String(total)
+            + " start: "
+            + String(args[idx])
+        )
+        var held_out = solve_task(
+            String(args[idx]), n_fit, iters, dump_diff, use_gpu
+        )
+        var t_now = perf_counter_ns()
+        var task_s = Float64(t_now - t_task) / 1.0e9
+        var avg_s = Float64(t_now - t_start) / 1.0e9 / Float64(k)
+        var eta_s = avg_s * Float64(total - k)
+        print(
+            "INFO [+"
+            + String(Int((t_now - t_start) // 1_000_000_000))
+            + "s] task "
+            + String(k)
+            + "/"
+            + String(total)
+            + " done ("
+            + String(Int(round(task_s)))
+            + "s, avg "
+            + String(Int(round(avg_s)))
+            + "s/task, eta ~"
+            + String(Int(round(eta_s)))
+            + "s)"
+        )
         held_sum += held_out
         if held_out >= SOLVE_THRESHOLD:
             solved += 1

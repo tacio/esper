@@ -139,9 +139,13 @@ Concise, milestone-level; each links to `docs/JOURNAL.md` for the full narrative
   tuning. (JOURNAL 2026-06-30 19:10.)
 - **Compute — CPU-parallelized ES.** The 2·N antithetic fitness evals per iteration are parallelized
   across cores, **bit-identical** to the sequential loop (same numbers, ~3.5× on the heavy attention
-  fit). GPU is **deferred**: the pinned slim `mojo` wheel has no `gpu` package — it needs a
-  MAX-platform migration off the hard version pin, worthwhile only when the workload outgrows the
-  CPU cores. (JOURNAL 2026-06-30 23:03.)
+  fit). (JOURNAL 2026-06-30 23:03.) **Superseded by the GPU backend** (rungs G0–G3, JOURNAL
+  2026-07-07): the "slim wheel has no gpu package" premise turned out FALSE for `mojo==1.0.0b2` —
+  the PyPI wheel carries full GPU support, no toolchain migration needed. The ES fitness is now
+  GPU-batched by default on accelerator hosts (`src/gpu_es.mojo`; ~17× per same-shape fit, 3-task
+  real-ARC probe 5m12s → 17 s at the corpus budget), CPU remains the reference path (`--cpu`), and
+  all proofs were re-verified at their held-out bars (trajectory bit-identity to CPU intentionally
+  not preserved; fitness-level parity pinned by `test_gpu_parity`).
 - **B4 — self-modifying memory.** *Step 1:* `RecolorSelfModMemory` writes its own colour map from the
   demos in one forward pass with a meta-learned read; a fresh recolor permutation adapts in a **single
   pass** (held-out 1.0) vs the ES-fit MLP's ~4000-iter per-task fit. *Fuller block:*
@@ -378,16 +382,17 @@ slice is dominated by that last class (19/39).
    intermediates keep the Domain seam). Open questions: per-stage invariant-signal fitting past
    depth 2 (no commuting factorization exists for arbitrary triples — expect a block-5-style wall
    and plan the literature pass at it), and capacity control (the Schug guardrail).
-   **GPU gate (infrastructure block, scheduled immediately BEFORE this rung):** CPU is sufficient
-   through rungs C/S/A/D (synth proofs in minutes; corpus runs overnight at documented budgets) —
-   the CMS chain and the task-stream (#6) are the 10–100× compute jump. The ES inner loop is
-   embarrassingly parallel (2N samples × demos × cells × window per iteration; iterations
-   sequential, so per-launch latency is the kernel-design risk; realistic 10–30× per fit plus
-   task-level sharding). The REAL blocker is the toolchain: the pinned `mojo==1.0.0b2` slim wheel
-   has no `gpu` package — GPU means the MAX-platform migration off the hard pin, mechanical but
-   risky (API churn everywhere; proof numbers must be RE-PROVEN — bit-identity will not survive).
-   Do it as its own zero-new-capability block with full suite re-verification, never mid-research-
-   rung (a moving toolchain confounds negative results).
+   **GPU gate — DONE EARLY (2026-07-07, rungs G0–G3 on branch `gpu-env`).** The blocker premise
+   was FALSE: the pinned `mojo==1.0.0b2` PyPI wheel carries full GPU support (driver ≥ 580; the
+   dev box's RTX 2060 is Modular's dev-tier), so no MAX-platform migration and no pin change were
+   needed. Landed exactly as this gate prescribed — a zero-new-capability infrastructure block with
+   re-verification: the ES fitness boundary is GPU-batched (`src/gpu_es.mojo`, one launch per
+   iteration over all candidates × demos, per-pixel math shared with the CPU path via the
+   `attn_pixel_*` functions), the predicted 10–30×/fit landed at **~17–18×** at the corpus budget,
+   bit-identity to CPU indeed did not survive (as predicted — reduction order), so proofs were
+   re-proven at their held-out bars + a fitness-level parity test (`test_gpu_parity`); CPU stays
+   the reference (`arc_solve --cpu`, `ESPER_CPU=1` for the harness). The CMS chain and the
+   task-stream (#6) now start from the GPU-budget baseline.
 6. **Persistent slow weights + task-stream (continual meta-learning).** Stop re-seeding cold per
    task: the engine processes a **stream** of tasks and its slow weights **persist**, Reptile-nudged
    after each in-context fit (M9's outer loop made continual — the prior is never reset). Measurable,

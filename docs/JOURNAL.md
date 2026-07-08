@@ -1496,3 +1496,128 @@ colour, the 3-start + colour-write path) **1.0**. `./esper fast` green. One shri
 train 0.194**, so it's a pre-existing hard case (crop border-loss corrupts the colour histogram
 signature at that seed), NOT a Rung D regression — the non-grow path is byte-identical by construction
 (mode slot frozen 0, two-start budget unchanged) and the matching numbers confirm it.
+
+---
+
+## 2026-07-07 — GPU environment: already there (pixi evaluated and rejected)
+
+**09:40–10:05.** Goal: prepare the environment for GPU processing, starting from Modular's
+GPU-puzzles howto (puzzles.modular.com/howto.html), which recommends pixi. Measured first instead
+of installing: probed the existing uv venv's Mojo 1.0.0b2 directly.
+
+**Finding: no environment work was needed.** The PyPI `mojo` wheel already carries full GPU
+support — `has_accelerator()` → True, `DeviceContext()` enumerates the RTX 2060, and a real
+`vec_add` kernel (`enqueue_create_buffer` → `enqueue_function` → `synchronize` → `map_to_host`)
+compiled, launched, and read back correct results end-to-end on the first working attempt. The
+driver (580.159.03) exactly meets Modular's ≥580 requirement (below that you'd need
+`MODULAR_NVPTX_COMPILER_PATH` → system `ptxas`); Turing is Modular's "known compatible for
+development" tier — fine for our purposes, just not production-serving validated.
+
+**Why pixi was rejected**, not just skipped: the puzzles repo's pixi env pins `mojo <1.0.0`
+(pre-1.0 nightlies — `fn`, `alias`, unqualified stdlib imports). Adopting it would have *broken*
+our hard 1.0.0b2 pin and its idioms. Pixi's actual value there is conda-side CUDA
+profilers/sanitizers, which we don't need yet; if we ever do, it can be added alongside uv without
+touching the Mojo toolchain.
+
+**Landed** (branch `gpu-env`): `tests/test_gpu_env.mojo` — the smoke test proving the environment
+claim (device name + 1024-element vec_add, per-element check, `raise Error` on mismatch). Gated
+with `comptime if not has_accelerator()` so device code isn't even compiled on GPU-less hosts —
+CI passes as an explicit SKIP. Untagged → runs in the fast tier (sub-second on GPU). One 1.0
+gotcha for future kernels: `@parameter if` is deprecated in b2 — use `comptime if`; kernel pointer
+params need the usual explicit `MutAnyOrigin`. Idioms recorded in CLAUDE.md (Toolchain section).
+
+---
+
+## 2026-07-07 — GPU rungs G0–G3: the ES fitness boundary batched on the GPU
+
+**10:20–12:30, branch `gpu-env`.** With the environment proved GPU-capable this morning, the
+refactor landed in four measured rungs. The compute map (explored first) was stark: ~all engine
+FLOPs are the windowed attention-gather forward inside `fitness`/`fitness_shape` — 2·N·n_demos
+forwards per ES iteration × thousands of iterations — while the searched vector is 7–14 wide. So
+the GPU seam is exactly the **fitness boundary** and nothing else: the RNG draw (same serial
+stream as the CPU path), antithetic coefficients, gradient reduction and update stay on CPU; one
+kernel launch per iteration scores all (candidate × demo) pairs.
+
+**G0 (CPU-only, behavior-preserving).** The window-scan bodies of `apply_shaped` /
+`attn_gather_toroidal` / `attn_gather_reflect` extracted into `attn_pixel_{plain,toroidal,reflect}`
+free functions over raw pointers — the SINGLE source of truth both the CPU loops and the GPU
+kernels call (the design rule that makes CPU/GPU divergence structurally impossible). Verified:
+test_attn_memory and test_shape_change scores identical to the recorded baselines.
+
+**G1 (same-shape path).** `src/gpu_es.mojo`: `_fitness_kernel_plain` — one thread block per
+(candidate, demo), threads striding output pixels, fixed-order shared-memory tree reduction (no
+atomics ⇒ a GPU run is bit-identical to ITSELF; per-task seeding keeps corpus numbers
+reproducible). `fit_operator_gpu` mirrors `fit_operator[AttnGatherMemory]`'s schedule exactly;
+`fit_geomcolor`/`fit_geomcount` route through it under `comptime if has_accelerator()` +
+`use_gpu` (CPU-only hosts, e.g. CI, compile zero device code). Buffers alloc-once per fit;
+per-iteration traffic is KBs. **The determinism contract (user decision): GPU ≠ CPU bitwise**
+(MSE reduction order differs ⇒ ES trajectories diverge); parity is pinned where it is meaningful —
+`test_gpu_parity` checks device fitness == CPU fitness (observed ≤ 2e-6 relative on grids up to
+30×30, penalties exact), quality at the usual held-out bars. Measured: same-shape real-ARC task
+135a2760 at 64/1500: **73 s (12 cores saturated) → 4.4 s (~17×, one core + GPU)**.
+
+**G2 (shape path).** `_fitness_kernel_shape`: same block layout; per-demo PREDICTED output dims
+computed once on the host (the written shape slots are frozen during the ES) and ZEROED for
+mismatched demos (kernel no-ops — no OOB; `_assemble_fitness` applies the heavy penalty, shared
+with G1). Mode slot dispatches toroidal/reflect in-kernel. `fit_shape_gpu` is deliberately
+non-generic: the Composed/Settle pair share the SHAPEGEOM layout and differ only in `fill_scale`,
+carried by a `settle` flag. Both DISCOVER and SETTLE phases of `fit_shape_geom`'s multi-start now
+run batched. Parity: toroidal/reflect/soft/mismatch cases all EXACT (|diff| = 0). The full-tier
+shape proofs re-verified on the GPU path at their bars — test_shape_change 36 s, test_mirror_tiling
+26 s, test_shape_color 53 s (each formerly minutes).
+
+**G3 (drivers + headline).** `arc_solve`: GPU default on accelerator hosts, `--cpu` forces the
+reference path, and the report header prints the backend (`fitness backend: gpu (NVIDIA GeForce
+RTX 2060)`) so runs are self-documenting. `eval_parallel.sh`: on a GPU host the worker default
+drops to 2 (one process nearly saturates the device; `ESPER_CPU=1` restores the nproc CPU A/B
+mode). Gotcha for future me: the script expects the venv on PATH — a worker dying instantly with
+"scored 0 tasks in 0s" means `mojo` wasn't found, not a GPU failure.
+
+**Headline (120-task public-eval split, budget 64/1500):** `Solved 0/120, mean held-out 0.486434,
+scored in 409 s (~6.8 min)` on 2 workers. Wall-time vs the recorded CPU baselines at the same
+budget: 8204 s (memory-pressured) / ~3360 s (clean) → **~8–20× harness-level**, and the GPU run
+did MORE work per shape task (the multi-start shape path wasn't wired into arc_solve at those
+baselines). Honesty note: mean held-out 0.486 vs the 2026-07-03 CPU run's 0.388 is NOT a GPU
+effect and NOT directly comparable — that baseline predates the shape seam + Rungs C/D on this
+driver; this is the FIRST corpus number with the shape path wired in (81 same / 39 shape
+dispatches). Exact-solve stays 0/120, as expected pre-CMS. The clean same-engine A/B is the
+3-task probe: **5m12s CPU → 17 s GPU (~18×)**, identical held-out scores.
+
+**What stays CPU (measured as not worth it):** closed-form writes (once per task), the self-mod
+families (off the corpus path), noise/gradient/update (7–14 dims). The CPU `Memory` path remains
+the generic reference for every family; `gpu_es.mojo` is deliberately specialized to the corpus
+forwards. The ROADMAP's pre-CMS "GPU gate" is hereby done early — its blocker premise (slim wheel
+lacks `gpu`) was false for 1.0.0b2, and its prediction (bit-identity will not survive; re-prove at
+bars) held exactly. Full-budget (128/4000) corpus runs are now affordable — the budget-raise
+experiment is the natural follow-up.
+
+---
+
+## 2026-07-08 — Budget-raise experiment: the corpus is expressiveness-limited, not budget-limited
+
+The follow-up the GPU speedup unlocked, run by hand on the 120-task public-eval split (2 GPU
+workers): full proof budget 128/4000 → `0/120, mean held-out 0.483976, 1809 s (~30 min)`. Versus
+yesterday's 64/1500 run (0.486434, 409 s): **5.3× more ES compute moved the mean −0.0025** —
+seed-trajectory noise, not signal. Conclusion: the 7-param gather + written factors saturate this
+corpus at the corpus budget already; the remaining gap is EXPRESSIVENESS (multi-step / object-level
+rules), which is precisely the CMS-chain rung. The budget knob is dead as a score lever; the GPU
+win is wall time (the full-budget corpus number went from a ~10 h overnight to 30 min).
+
+Two operational notes from the run: (1) a second invocation WITHOUT the trailing budget pair
+produced bit-identical numbers — omitting `fit_N fit_iters` selects arc_solve's DEFAULT (the full
+128/4000), not the corpus budget, so it was an exact repeat; a clean live demonstration of the
+per-task-seed reproducibility contract. (2) Both runs land within ~5% wall time of each other —
+the harness is GPU-bound and stable at 2 workers.
+
+---
+
+## 2026-07-08 — In-process INFO progress for the corpus eval
+
+Monitoring an eval no longer needs an outside `watch` on temp files: `arc_solve` now prints
+`INFO [+<elapsed>s] task k/n start|done (<s>/task, avg, eta)` around every task (perf_counter_ns;
+the eta is per-process = per-shard under the harness), and `eval_parallel.sh` streams each
+worker's output live to the terminal with a `[wN]` prefix via `stdbuf -oL … | tee | sed`. The
+`tee` keeps the per-worker capture files prefix-FREE — the `^  task:` positional aggregation is
+untouched (verified: 6/6 result lines on a 2-worker mini run; footer format identical). Verified
+liveness through a pipe (INFO lines visible mid-run, not at exit). INFO is additive monitoring
+output only; consumers keep reading the unchanged `  task:` lines. `./esper fast` green.

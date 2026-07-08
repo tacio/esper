@@ -77,6 +77,38 @@ are unchanged across memories.
   two-start; budget split by the actual start count). `fit_shape_color` is the Rung-C analogue
   (colour pre-map → `fit_shape_geom` on the prefix, V frozen in the suffix).
 
+## GPU-batched fitness — `src/gpu_es.mojo`
+
+The GPU rungs (G1–G2, journal 2026-07-07). The compute map is stark: ~all engine FLOPs are the
+windowed attention-gather forward inside `fitness`/`fitness_shape`, evaluated 2·N·n_demos times per
+ES iteration over thousands of iterations, while the searched vector is 7–14 wide. So the GPU seam
+is exactly the **fitness boundary**: the noise draw (same serial RNG stream as the CPU path),
+antithetic coefficients, gradient reduction and parameter update stay on the CPU; one kernel launch
+per iteration scores every (candidate × demo) pair — one thread block per pair, threads striding
+output pixels, a fixed-order shared-memory tree reduction for the SSE (no atomics ⇒ a GPU run is
+bit-identical to itself; it is NOT bit-identical to a CPU run — reduction order differs, so ES
+trajectories diverge; parity is pinned at the fitness level by `test_gpu_parity`, quality at the
+usual held-out bars).
+
+- The kernels call the **same `attn_pixel_{plain,toroidal,reflect}` free functions** the CPU
+  `Memory.apply` loops use (extracted in rung G0, memory_es.mojo) — the gather math lives once.
+- `_fitness_kernel_plain` / `fit_operator_gpu` — the same-shape path (`fit_geomcolor`/`fit_local`/
+  `fit_geomcount` route through it). `_fitness_kernel_shape` / `fit_shape_gpu` — the shape path
+  (predicted per-demo output dims computed once on the host — the written shape slots are frozen —
+  and ZEROED for mismatched demos so the kernel no-ops instead of reading OOB; mode slot dispatches
+  toroidal vs reflect in-kernel; the DISCOVER/SETTLE difference is exactly `fill_scale`, carried by
+  a `settle` flag). `_assemble_fitness` reproduces the CPU fitness semantics (per-demo negative MSE
+  mean / heavy penalty, L2 anchor) once for both.
+- **Routing**: the composed fit drivers in esper_evolution.mojo gate on `comptime if
+  has_accelerator()` (CPU-only hosts compile zero device code — CI unaffected) with a runtime
+  `use_gpu: Bool = True` opt-out plumbed from `arc_solve --cpu` for A/B runs. The CPU path remains
+  the generic reference for every memory family; gpu_es is deliberately specialized to the corpus
+  path's forwards.
+- Buffers are created once per fit and reused (the alloc-once discipline); per-iteration traffic is
+  ~KBs (candidates up, partials down). Measured at the corpus budget: a same-shape real-ARC task
+  73 s → 4.4 s (~17×); a 3-task probe 5m12s → 17 s; the full-tier shape proofs dropped from minutes
+  to ≤ 1 min each.
+
 ## I/O + the Domain seam — `src/arc_io.mojo`
 
 - `_read_grid_block` — reads one validated grid-block (16-byte header: two little-endian Int64
