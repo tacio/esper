@@ -198,6 +198,26 @@ forward composition):
   (table keyed on `(centre colour, #Moore-8 neighbours differing)`), composed on the GeomColor
   gather via `fit_local` (fit the gather, then write on the RESIDUAL), gated so a pure
   geometry/colour task writes no table and stays byte-identical (strict superset).
+- `ContentFetchComposedMemory` (**Rung CF** — the written content-keyed gather): the fifth
+  closed-form factor, reaching the deep floor's CONTENT-ADDRESSED class (copy/move/draw/extend —
+  output written where the input evidence is not). A written **fetch view** (one of the 15
+  `GridSubstrate` content-selected reads) + a 16-entry **relational action table**
+  (key = `is_bg × rel_bucket`; actions KEEP / COPY-the-fetched-value / constant colour), applied on
+  a SNAPSHOT of the LocalWrite prefix's prediction. `fit_content` compares **two full cold
+  branches on the final demo residual** — {fitted prefix + content write} vs {EXACT-identity
+  prefix (sharp beta) + content write} — because a drifted prefix can in-sample-beat identity while
+  starving the content substrate (JOURNAL 2026-07-08). Same strict-superset gate family: no view
+  written ⇒ byte-identical to LocalWrite.
+
+## Grid substrate — `src/grid_substrate.mojo`
+
+`GridSubstrate` (**Rung CF**): per-grid content representations the fetch views read — plurality
+background, 4-connected components (size/bbox/colour), largest/smallest/unique/majority registers +
+bbox anchors, nearest-nonbg BFS (colour + capped distance), four first-nonbg ray sweeps;
+`fetch(view, r, c) → [rel_bucket, fetched_value]` over 15 views. Substrate in the factor-scan
+sense (representations a learned read operates over, never a transform); border/wrap conventions
+mirror `tools/factor_scan.py` exactly (the 22/146 coverage evidence was measured under them).
+Computed once per grid at write/apply time — never inside an ES hot loop.
 
 ## Self-write families — `src/memory_selfmod.mojo`, `src/memory_selfmod_grid.mojo`
 
@@ -280,7 +300,12 @@ fast/full tiers).
   `test_few_demo` (**few-demo robustness** at the corpus-median 3 demos: aggregate ≥0.85 + an n=8
   regression guard), `test_local_write` (**Rung A**: the local content-override `LocalWriteComposedMemory`
   solves {outline, fill_enclosed} ≥0.95 cold; controls — GeomColor-only ablation fails outline (the
-  local write is load-bearing), a pure recolor writes no table (strict superset); few-demo n=3).
+  local write is load-bearing), a pure recolor writes no table (strict superset); few-demo n=3),
+  `test_substrate` (fast tier: exact assertions on `GridSubstrate` components/registers/BFS/rays/
+  fetch over hand-built grids), `test_content_fetch` (**Rung CF**: the five content-addressed
+  classes {ray_down, recolor_largest, halo_nearest, anchor_shift, objlocal_mirror} each ≥0.95
+  held-out cold with fresh colours per demo; controls — LocalWrite-prefix-only ablation fails
+  ray_down, a pure recolor writes no view (strict superset); few-demo n=3).
 - **Shape seam:** `test_shape_change` (**the output-size seam**: {crop1, flip_h_crop1, subsample2,
   upscale2, tile2} each ≥0.95 held-out at a FRESH size, per-task cold; controls: no-shape-write → 0,
   plain non-toroidal gather fails tile2), `test_mirror_tiling` (**Rung D**: mirror_tile{2,3}

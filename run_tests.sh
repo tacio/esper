@@ -68,6 +68,7 @@ from synth_tasks import (
     generate_task_groups,
     generate_shape_task_groups,
     generate_local_task_groups,
+    generate_content_task_groups,
 )
 generate_task_groups("flip_h", sys.argv[1], num_tasks=2, n_train=6, rows=4, cols=4, seed=0)
 generate_task_groups("recolor", sys.argv[1], num_tasks=1, n_train=6, rows=4, cols=4, seed=1)
@@ -76,6 +77,8 @@ if sys.argv[2] == "full":
     generate_shape_task_groups("recolor_crop1", sys.argv[1], num_tasks=1, n_train=6, seed=3)
     # Rung A: a LOCAL-content bundle so the fit_local write path runs end-to-end.
     generate_local_task_groups("outline", sys.argv[1], num_tasks=1, n_train=6, rows=10, cols=10, seed=4)
+    # Rung CF: a CONTENT-ADDRESSED bundle so the fit_content write path runs end-to-end.
+    generate_content_task_groups("ray_down", sys.argv[1], num_tasks=1, n_train=6, rows=10, cols=10, seed=5)
 print("Generated task bundles in", sys.argv[1])
 PY
 mojo run -I src src/arc_solve.mojo "$GEN_DIR"/*.task

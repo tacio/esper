@@ -6,13 +6,13 @@ from std.math import round
 from std.time import perf_counter_ns
 
 from memory_composed import (
-    LocalWriteComposedMemory,
-    LOCALWRITE_DIM,
+    ContentFetchComposedMemory,
+    CONTENTFETCH_DIM,
     ShapeGeomColorComposedMemory,
     SHAPEGEOMCOLOR_DIM,
 )
 from esper_evolution import (
-    fit_local,
+    fit_content,
     fit_shape_color,
     FIT_N,
     FIT_ALPHA0,
@@ -158,7 +158,7 @@ def solve_task(
             capacity = task.test[i].output_grid.size()
 
     # Cold per-task fit of the dispatched composed memory.
-    var state_dim = LOCALWRITE_DIM
+    var state_dim = CONTENTFETCH_DIM
     if shape_task:
         state_dim = SHAPEGEOMCOLOR_DIM
     var state = alloc[Float32](state_dim)
@@ -182,11 +182,13 @@ def solve_task(
         )
     else:
         # Colour table written from the demos, the annealed geometry ES on the
-        # V-pre-mapped demos, then the closed-form local-content write on the
-        # residual (Rung A). Byte-identical to the old GeomColor path when the
-        # local table stays empty (the strict-superset gate).
-        LocalWriteComposedMemory.seed(state)
-        fit_local(
+        # V-pre-mapped demos, the closed-form local-content write on the
+        # residual (Rung A), then the content-fetch view + action table on the
+        # remaining residual with the identity-fallback branch comparison
+        # (Rung CF). Byte-identical to the LocalWrite path when the content
+        # table stays unwritten (the strict-superset gates compose).
+        ContentFetchComposedMemory.seed(state)
+        fit_content(
             state,
             task.train,
             capacity,
@@ -231,7 +233,7 @@ def solve_task(
             var rows = task.test[i].input_grid.rows
             var cols = task.test[i].input_grid.cols
             if task.test[i].output_grid.size() == rows * cols:
-                LocalWriteComposedMemory.apply(
+                ContentFetchComposedMemory.apply(
                     state, task.test[i].input_grid, pred
                 )
                 m = exact_match(
@@ -276,7 +278,7 @@ def solve_task(
             var cols = task.train[i].input_grid.cols
             if task.train[i].output_grid.size() != rows * cols:
                 continue
-            LocalWriteComposedMemory.apply(
+            ContentFetchComposedMemory.apply(
                 state, task.train[i].input_grid, pred
             )
             train_sum += exact_match(

@@ -92,7 +92,8 @@ The engine is a small set of flat `-I src` Mojo modules. **The detailed per-modu
 - `src/arc_io.mojo` — the on-disk `.bin` / `.task` readers + the `Domain` trait / `GridDomain` (the metric seam the ES reaches metrics through — never ARC directly).
 - `src/memory.mojo` — **the memory-trait seams**: `Memory`, `SelfModMemory`, `ShapeMemory`. No runtime selector — each memory is a compile-time choice, measured on the subset it expresses.
 - `src/memory_es.mojo` — the **ES-fit forward family** (the dormant structured operator, MLP, the sequence-domain pair, the `AttnGather` geometry gather + the toroidal / reflect shape gathers).
-- `src/memory_composed.mojo` — the **emergent composed memories** (geometry × colour × count × shape; the shape-seam pair plus its Rung C colour and Rung A local-write layers).
+- `src/memory_composed.mojo` — the **emergent composed memories** (geometry × colour × count × shape; the shape-seam pair plus its Rung C colour, Rung A local-write, and Rung CF content-fetch layers).
+- `src/grid_substrate.mojo` — the **content substrate** (components, registers, rays, nearest-BFS) the Rung CF fetch views read; representations, never transforms.
 - `src/memory_selfmod.mojo`, `src/memory_selfmod_grid.mojo` — the **self-write memory families** (fast adaptation is the memory's own write rule over the demos; the ES meta-learns only the small slow vector).
 - `src/main.mojo`, `src/arc_solve.mojo` — the end-to-end driver + the **held-out generalization driver** (`eval_parallel.sh` shards it across processes).
 - `tools/arc_compiler.py`, `tools/synth_tasks.py` — the offline corpus compiler + the ground-truth synth generator (the only sanctioned Python; never on the runtime path).

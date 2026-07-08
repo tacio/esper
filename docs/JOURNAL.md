@@ -1813,3 +1813,26 @@ Two build discoveries, both measured mid-block (the smoke/proof runs caught them
    fallback branch must stay PURE (no in-sample-gated local table): a polluted prediction snapshot
    corrupts the registers/anchors the content views read on held-out grids (measured: view 9 exact
    in-sample, 0.82 held-out with a local table in the branch; 1.0 without).
+
+**19:33 — CF-2: corpus wiring + slice re-measure — GATE PASSED, the deep floor MOVED.**
+Same-shape path swapped to `ContentFetchComposedMemory`/`fit_content` (the exact Rung-A swap shape:
+two imports, state_dim, seed+fit, two apply sites; `mem: same` unchanged); full suite green with a
+`ray_down` CI bundle solving 1.0 end-to-end. Slice re-measure at the corpus budget (64/1500, GPU),
+subset dirs `data_bin/floor146` + `data_bin/solved_same`, before = the v3 lines (same budget):
+
+- **Pre-registered gate: PASS.** Net new solves on the scan-covered ids = **2** (9caf5b84
+  0.04→1.00 copy-registers; d037b0a7 0.11→1.00 copy-ray) with **0 regressions** on the 13
+  previously-solved same-shape tasks (the composed strict-superset gates held by construction).
+- **The context number is the real event: mean held-out on the full 146 deep-floor ids went
+  0.188 → 0.625** (133 up / 3 down / 10 flat), mean train-fit 0.337 → 0.764, and 19/146 now sit
+  at held-out ≥ 0.9 (0 before). The floor that three audits measured as content-addressed — and
+  that the budget-raise experiment proved compute-insensitive — responds to exactly the mechanism
+  the audits prescribed. Most of the movement is partial (the 0.99 exact-solve cliff converts only
+  2), which matches the scan's prediction: the covered ids' sharp-table LOO ranged 0.92–1.0 and
+  the ~72-id near-miss band was always going to be partial-fix territory.
+- The 3 down ids (bd4472b8, bd5af378, f76d97a5, all unsolved before and after) are
+  identity-fallback branch flips on in-sample ties — noise at the bottom of the band, not
+  regressions.
+
+Rung CF is done: built exactly on the audit trail (STOP → scan → literature → gated scan GO →
+gated build → measured corpus win), with every mechanism decision forced by a measured failure.

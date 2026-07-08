@@ -411,10 +411,24 @@ slice is dominated by that last class (19/39).
    from **copy-through semantics** (table votes KEEP/COPY over colour-abstract relational keys —
    `loo_paired_fetch`), not richer keys; the keyed-table variants stay near 0. Calibrated 5/5
    classes at 20/20, zero false covers, committed baseline bit-identical. Near-miss band grew
-   18 → ~72 ids — the class grazes half the floor. **Next rung (gated build): the content-keyed
-   gather** — `AttnGatherMemory` score = affine-position + content-match terms, output = the
-   attended cell's VALUE; one ES search, fill_scale freeze, pre-map + GPU shape carried over;
-   the 22 covered ids are the target list and the scan is the acceptance harness.
+   18 → ~72 ids — the class grazes half the floor.
+   → **Rung CF — BUILT AND LANDED (same day, commits 74a6016/d3e7d1b + the CF-2 swap): the deep
+   floor MOVED.** Mechanism per the user decision: the WRITTEN form (a `GridSubstrate` fetch view
+   + 16-entry relational KEEP/COPY/const action table on the LocalWrite prefix,
+   `ContentFetchComposedMemory`/`fit_content`), not the soft ES score — with one measured design
+   forcing: `fit_content` compares TWO FULL COLD BRANCHES (fitted prefix vs EXACT-identity
+   prefix, each + content write) on the final demo residual, because on content demos
+   write_color's V goes garbage, the gather drifts, and the drifted prefix in-sample-beats
+   identity while starving the content substrate. Proof: all five synth classes held-out 1.0
+   cold with their intended views; ablation/superset/few-demo controls green. Corpus (64/1500,
+   before = v3): **pre-registered gate PASS** — net new solves on the covered ids = 2, 0
+   regressions on previously-solved same-shape; and the context number is the real event:
+   **mean held-out on the full 146 deep-floor ids 0.188 → 0.625** (133 up / 3 down), train-fit
+   0.337 → 0.764, 19/146 now ≥ 0.9 held-out (0 before). The floor the budget-raise experiment
+   proved compute-insensitive responds to exactly the mechanism the audit trail prescribed.
+   Remaining: the partial-fix band (0.9-ish held-out, the ~72 near-miss ids) is the natural
+   target for the SOFT content-keyed gather (ES score + content terms) and/or rung #6's
+   constructive editor — both still gated through the scan harness.
    **GPU gate — DONE EARLY (2026-07-07, rungs G0–G3 on branch `gpu-env`).** The blocker premise
    was FALSE: the pinned `mojo==1.0.0b2` PyPI wheel carries full GPU support (driver ≥ 580; the
    dev box's RTX 2060 is Modular's dev-tier), so no MAX-platform migration and no pin change were
