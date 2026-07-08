@@ -1773,3 +1773,17 @@ content terms plus the usual residual factor writes plausibly converts a slice o
 from affine-position queries to position + content-match terms, output = the attended cell's
 value; one ES search, `fill_scale` freeze, pre-map recipe and GPU kernel shape carried over. The
 22 covered ids are the corpus target list; the scan stays the acceptance harness.
+
+## 2026-07-08 — Rung CF begins: the content-fetch layer (gated build)
+
+**16:20 — CF-0: grid substrate module landed.** Plan approved (mechanism = written fetch layer on
+the LocalWrite prefix, per the user's decision; corpus gate pre-registered at net>0 new solves on
+the 22 scan-covered ids + 0 regressions vs v3). `src/grid_substrate.mojo`: a per-grid
+`GridSubstrate` (plurality bg, 4-connected components with size/bbox/colour, largest/smallest/
+unique/majority registers + bbox anchors, nearest-nonbg multi-source BFS capped at 5, four
+first-nonbg ray sweeps) exposing `fetch(view, r, c) -> [rel_bucket, fetched_value]` over the 15
+views the Python scan measured — border/wrap conventions copied exactly (rays clamped, anchors
+toroidal) because the 22/146 evidence was measured under them. Substrate in the factor_scan sense:
+representations a learned read operates over, never a transform. First Mojo-1.0 friction: tuple
+returns of `(Int, Int)` don't satisfy Movable in this build — `InlineArray[Int, 2]` instead.
+`tests/test_substrate.mojo` (fast tier): exact assertions on hand-built grids — green.
