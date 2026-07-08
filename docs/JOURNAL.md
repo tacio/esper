@@ -1621,3 +1621,52 @@ worker's output live to the terminal with a `[wN]` prefix via `stdbuf -oL … | 
 untouched (verified: 6/6 result lines on a 2-worker mini run; footer format identical). Verified
 liveness through a pipe (INFO lines visible mid-run, not at exit). INFO is additive monitoring
 output only; consumers keep reading the unchanged `  task:` lines. `./esper fast` green.
+
+---
+
+## 2026-07-08 — Rung CMS-0: deep-floor audit — GATE RETURNED STOP (documented negative)
+
+**09:00 — Plan approved for the CMS rung.** Structure: CMS-0 (this measure-first audit),
+CMS-1 (chain mechanism + synth proof, only on GO), CMS-2 (corpus wiring), CMS-3 (the wall as a
+trigger). Pre-registered gate: GO iff ≥25 of the 146 deep-floor ids (same-shape train, held-out
+<0.4 at v3, mean train-fit 0.337 — the bucketing reproduced exactly) land in coherent
+chain-of-proven-factors-shaped clusters.
+
+**09:20 — `tools/deep_floor_audit.py`.** Per-task decomposition testing on the RAW demo pairs
+(no fitted memory in the loop): depth-2 baseline `out[i] = g(π(in)[i])` over the 8 lattice
+symmetries, vs the two proven depth-3 chain keys on the premapped grid — LocalWrite-class
+`(colour, toroidal ndiff8)` and count-class `(colour, toroidal count_P)`. All scores
+leave-one-demo-out so a rich key must GENERALIZE across demos (the Schug over-capacity hazard
+controlled inside the audit).
+
+**09:35 — The audit itself had to be calibrated before its verdict could be trusted.** Synth
+ground truth (known depth-3 chains vs pure depth-2 controls at corpus-like n=3) exposed two
+defects in the first cut: (1) clamped-border keys vs the engine's TOROIDAL convention broke
+`outline` chains at every border cell (score 0.83 where ~1.0 was true); (2) a GLOBAL per-cell
+threshold cannot separate "depth-2 plus a small load-bearing residual" (fill: d2 0.989, genuinely
+depth-3) from "pure depth-2 with LOO noise" (0.994) — the discriminator must be the PAIRED
+residual fix: of the cells the depth-2 table misses, the net fraction the chain key fixes, with
+the chain predictor mirroring the actual mechanism (a gated override that FALLS BACK to the base
+map on unseen keys, not a replacement — without the fallback, fill chains scored net_fix −11 from
+fragmentation misses). After both fixes: chain families label chain-local at net_fix +0.5…+0.99,
+depth-2 controls produce ZERO false chain labels (fx +0.00), and the only misses are chains whose
+factor has ≤2 cells of total demo support — genuine underdetermination, unlearnable in-context by
+any mechanism. Conservative in exactly the honest direction.
+
+**09:45 — Verdict: STOP (3/146 chain-shaped; gate ≥25).** Clusters: **81 unexplained** (neither
+proven key family nor any tested symmetry explains the residual — best net_fix < 0.25),
+**45 object-level** (object-count deltas ±3…±48: per-object selection / movement / counting),
+**17 chain-partial** (net_fix 0.25–0.5 — the proven-factor chain fixes only a quarter to half of
+the residual), 2 chain-count + 1 chain-local at the bar. Even chain + partial = 20 < 25. The Rung
+S finding repeats one level up: the deep floor is **not chain-of-proven-factors shaped** — the
+missing capability is the FACTORS (object-level / content-extraction reads), not the depth of
+their composition. Chaining what we have would express ~3 more tasks, not the floor.
+
+**Consequence for the roadmap.** CMS-1/2 as planned (a chain of the existing four factors) is
+NOT built — the audit saved the rung's machinery, as CMS-0 was designed to. The evidence points
+where Rung A already pointed: the 81+45 need a richer, meta-trained content read (rung #6's
+self-mod grid factor, designed with the wash-out mitigation), and the 17 chain-partials become
+its first corpus exhibit list. The three chain-shaped ids (543a7ed5, cc9053aa, e4888269) are
+real but too few to justify a rung. Audit + calibration protocol journaled here; the tool stays
+(`tools/deep_floor_audit.py`) as the reusable gate for any future factor proposal — a new factor
+family can be dropped into its key set and re-measured against the same 146 ids in ~20 s.

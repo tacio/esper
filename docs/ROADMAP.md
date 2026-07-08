@@ -376,12 +376,21 @@ slice is dominated by that last class (19/39).
    is load-bearing), strict superset (plain tile2 stays 1.0 at mode 0). No `test_shape_change`
    regression. **Corpus value up to +8 train solves, booked in the deferred v4 re-measure** (the
    shape-slice before/after isolates Rung D from Rung C). (JOURNAL 2026-07-06 16:01 / 16:42.)
-5. **Rung CMS — multi-block chain** (NL §7; mostly research). The deep floor (146 train same-shape
-   tasks at train-fit 0.34, most of eval): multi-step / object-level rules no single memory or pair
-   expresses — the (twice-proven) composition pattern chained in DEPTH (3+ stages, grid-in/grid-out
-   intermediates keep the Domain seam). Open questions: per-stage invariant-signal fitting past
-   depth 2 (no commuting factorization exists for arbitrary triples — expect a block-5-style wall
-   and plan the literature pass at it), and capacity control (the Schug guardrail).
+5. **Rung CMS — multi-block chain — AUDIT RETURNED STOP (documented negative, 2026-07-08).** The
+   deep floor (146 train same-shape tasks at train-fit 0.34, most of eval) was the target: chain the
+   twice-proven composition pattern in DEPTH (3+ grid-in/grid-out stages). The measure-first gate
+   (`tools/deep_floor_audit.py`, calibrated on synth ground truth before its verdict was trusted:
+   zero false chain labels on depth-2 controls, +0.5…+0.99 net residual fix on known chains) found
+   only **3/146 chain-of-proven-factors-shaped** (pre-registered GO ≥25; +17 partial at net_fix
+   0.25–0.5 still < the bar). Dominant clusters: **81 unexplained** (neither proven local/count key
+   explains the residual under any lattice symmetry) + **45 object-level** (object-count deltas
+   ±3…±48). The Rung S finding one level up: the deep floor is bound by the missing FACTORS
+   (object-level / content-extraction reads), not by composition depth — chaining the existing four
+   factors would express ~3 tasks, not the floor. CMS-1/2 (the chain build) is NOT built; the class
+   re-scopes to rung #6's meta-trained self-mod grid factor, with the 17 chain-partials as its
+   first corpus exhibit list. The audit tool stays as the reusable gate: any proposed new factor
+   family drops into its key set and re-measures against the same 146 ids in ~20 s. Depth-chaining
+   itself is deferred until a factor audit shows a chain-shaped population. (JOURNAL 2026-07-08.)
    **GPU gate — DONE EARLY (2026-07-07, rungs G0–G3 on branch `gpu-env`).** The blocker premise
    was FALSE: the pinned `mojo==1.0.0b2` PyPI wheel carries full GPU support (driver ≥ 580; the
    dev box's RTX 2060 is Modular's dev-tier), so no MAX-platform migration and no pin change were
