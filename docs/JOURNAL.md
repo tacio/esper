@@ -1590,3 +1590,21 @@ forwards. The ROADMAP's pre-CMS "GPU gate" is hereby done early — its blocker 
 lacks `gpu`) was false for 1.0.0b2, and its prediction (bit-identity will not survive; re-prove at
 bars) held exactly. Full-budget (128/4000) corpus runs are now affordable — the budget-raise
 experiment is the natural follow-up.
+
+---
+
+## 2026-07-08 — Budget-raise experiment: the corpus is expressiveness-limited, not budget-limited
+
+The follow-up the GPU speedup unlocked, run by hand on the 120-task public-eval split (2 GPU
+workers): full proof budget 128/4000 → `0/120, mean held-out 0.483976, 1809 s (~30 min)`. Versus
+yesterday's 64/1500 run (0.486434, 409 s): **5.3× more ES compute moved the mean −0.0025** —
+seed-trajectory noise, not signal. Conclusion: the 7-param gather + written factors saturate this
+corpus at the corpus budget already; the remaining gap is EXPRESSIVENESS (multi-step / object-level
+rules), which is precisely the CMS-chain rung. The budget knob is dead as a score lever; the GPU
+win is wall time (the full-budget corpus number went from a ~10 h overnight to 30 min).
+
+Two operational notes from the run: (1) a second invocation WITHOUT the trailing budget pair
+produced bit-identical numbers — omitting `fit_N fit_iters` selects arc_solve's DEFAULT (the full
+128/4000), not the corpus budget, so it was an exact repeat; a clean live demonstration of the
+per-task-seed reproducibility contract. (2) Both runs land within ~5% wall time of each other —
+the harness is GPU-bound and stable at 2 workers.
