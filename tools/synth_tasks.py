@@ -425,6 +425,240 @@ def generate_local_task_groups(
     return paths
 
 
+# ---------------------------------------------------------------------------
+# CONTENT-ADDRESSED transforms (Rung CF). Same-shape rules where the output is
+# written at positions other than where the input evidence sits (copy / draw /
+# recolor-by-register / move) — the deep-floor class no per-cell factor
+# expresses (JOURNAL 2026-07-08). Ground truth ContentFetchComposedMemory must
+# rediscover as a written fetch view + relational action table. Object-rich
+# grids (distinct-colour blobs / sparse dots) so registers and rays are
+# identifiable; colours vary per demo so a colour table cannot memorize.
+# ---------------------------------------------------------------------------
+def _dot_grid(rows, cols, rng, n_dots=4):
+    g = [[0] * cols for _ in range(rows)]
+    cells = rng.sample(
+        [(r, c) for r in range(rows) for c in range(cols)], n_dots
+    )
+    for r, c in cells:
+        g[r][c] = rng.randint(1, 9)
+    return g
+
+
+def _blob_grid(rows, cols, rng, n_blobs=3):
+    """Non-overlapping solid squares of DISTINCT colours and sizes on bg 0."""
+    g = [[0] * cols for _ in range(rows)]
+    blob_cols = rng.sample(range(1, 10), n_blobs)
+    sizes = rng.sample(range(1, 5), n_blobs)
+    for k in range(n_blobs):
+        h = w = sizes[k]
+        for _ in range(50):
+            r0 = rng.randrange(0, rows - h + 1)
+            c0 = rng.randrange(0, cols - w + 1)
+            if all(
+                g[r][c] == 0
+                for r in range(max(0, r0 - 1), min(rows, r0 + h + 1))
+                for c in range(max(0, c0 - 1), min(cols, c0 + w + 1))
+            ):
+                for r in range(r0, r0 + h):
+                    for c in range(c0, c0 + w):
+                        g[r][c] = blob_cols[k]
+                break
+    return g
+
+
+def _asym_blob_grid(rows, cols, rng, n_blobs=3):
+    """Blobs with a non-corner edge cell punched (bbox intact, h-asymmetric)."""
+    g = _blob_grid(rows, cols, rng, n_blobs)
+    for col, _, (r0, r1, c0, _c1), _ in _components4(g):
+        if col != 0 and r1 - r0 >= 2:
+            g[r0 + 1][c0] = 0
+    return g
+
+
+def _components4(g):
+    """4-connected same-colour components: (colour, size, bbox, cells)."""
+    rows, cols = len(g), len(g[0])
+    seen = [[False] * cols for _ in range(rows)]
+    comps = []
+    for r0 in range(rows):
+        for c0 in range(cols):
+            if seen[r0][c0]:
+                continue
+            col = g[r0][c0]
+            st = [(r0, c0)]
+            seen[r0][c0] = True
+            cells = []
+            while st:
+                r, c = st.pop()
+                cells.append((r, c))
+                for dr, dc in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                    rr, cc = r + dr, c + dc
+                    if (
+                        0 <= rr < rows
+                        and 0 <= cc < cols
+                        and not seen[rr][cc]
+                        and g[rr][cc] == col
+                    ):
+                        seen[rr][cc] = True
+                        st.append((rr, cc))
+            comps.append((
+                col,
+                len(cells),
+                (
+                    min(r for r, _ in cells),
+                    max(r for r, _ in cells),
+                    min(c for _, c in cells),
+                    max(c for _, c in cells),
+                ),
+                cells,
+            ))
+    return comps
+
+
+def _largest_nonbg(g):
+    """(colour, bbox) of the largest nonbg component (first-seen on ties —
+    the GridSubstrate convention)."""
+    best = None
+    for col, size, bbox, _ in _components4(g):
+        if col == 0:
+            continue
+        if best is None or size > best[0]:
+            best = (size, col, bbox)
+    return (None, None) if best is None else (best[1], best[2])
+
+
+def _ray_down(grid):
+    # Every bg cell takes the colour of the first nonbg cell strictly above
+    # (each dot beams downward) — the ray/draw class.
+    rows, cols = len(grid), len(grid[0])
+    out = [row[:] for row in grid]
+    for c in range(cols):
+        last = None
+        for r in range(rows):
+            if grid[r][c] != 0:
+                last = grid[r][c]
+            elif last is not None:
+                out[r][c] = last
+    return out
+
+
+def _recolor_largest(grid):
+    # Every nonbg cell takes the largest component's colour — the register
+    # class (breaks a colour table's injectivity by construction).
+    col, _ = _largest_nonbg(grid)
+    if col is None:
+        return [row[:] for row in grid]
+    return [[col if x != 0 else 0 for x in row] for row in grid]
+
+
+def _halo_nearest(grid):
+    # bg cells within (8-connected) distance 2 of an object take the nearest
+    # object's colour — the nearest-nonbg class.
+    from collections import deque
+
+    rows, cols = len(grid), len(grid[0])
+    out = [row[:] for row in grid]
+    dist = [[99] * cols for _ in range(rows)]
+    ncol = [[None] * cols for _ in range(rows)]
+    dq = deque()
+    for r in range(rows):
+        for c in range(cols):
+            if grid[r][c] != 0:
+                dist[r][c] = 0
+                ncol[r][c] = grid[r][c]
+                dq.append((r, c))
+    while dq:
+        r, c = dq.popleft()
+        if dist[r][c] >= 2:
+            continue
+        for dr in (-1, 0, 1):
+            for dc in (-1, 0, 1):
+                rr, cc = r + dr, c + dc
+                if (
+                    0 <= rr < rows
+                    and 0 <= cc < cols
+                    and dist[rr][cc] > dist[r][c] + 1
+                ):
+                    dist[rr][cc] = dist[r][c] + 1
+                    ncol[rr][cc] = ncol[r][c]
+                    dq.append((rr, cc))
+    for r in range(rows):
+        for c in range(cols):
+            if grid[r][c] == 0 and dist[r][c] <= 2 and ncol[r][c] is not None:
+                out[r][c] = ncol[r][c]
+    return out
+
+
+def _anchor_shift(grid):
+    # Toroidal shift bringing the largest component's bbox corner to the
+    # origin: out[r][c] = in[(r + r0) % rows][(c + c0) % cols] — the anchor
+    # (content-determined displacement) class.
+    col, bbox = _largest_nonbg(grid)
+    if col is None:
+        return [row[:] for row in grid]
+    rows, cols = len(grid), len(grid[0])
+    r0, c0 = bbox[0], bbox[2]
+    return [
+        [grid[(r + r0) % rows][(c + c0) % cols] for c in range(cols)]
+        for r in range(rows)
+    ]
+
+
+def _objlocal_hmirror(grid):
+    # Every cell takes the colour at the h-mirrored position within its own
+    # component's bbox — the object-local symmetry class.
+    rows, cols = len(grid), len(grid[0])
+    out = [row[:] for row in grid]
+    for _, _, (r0, r1, c0, c1), cells in _components4(grid):
+        for r, c in cells:
+            out[r][c] = grid[r][c0 + c1 - c]
+    return out
+
+
+CONTENT_TRANSFORMS = {
+    "ray_down": (_dot_grid, _ray_down),
+    "recolor_largest": (_blob_grid, _recolor_largest),
+    "halo_nearest": (_blob_grid, _halo_nearest),
+    "anchor_shift": (_blob_grid, _anchor_shift),
+    "objlocal_mirror": (_asym_blob_grid, _objlocal_hmirror),
+}
+
+
+def generate_content_task_groups(
+    transform, out_dir, num_tasks, n_train, rows, cols, seed
+):
+    """Emit `num_tasks` CONTENT-ADDRESSED task bundles (Rung CF ground truth).
+
+    Same-shape (they route through the same-shape solver path); the rule
+    writes output where the input evidence is NOT (copy/draw/register/move),
+    so neither the copy-gather nor any per-cell table expresses it. Held-out
+    test grid is a fresh layout with fresh colours.
+    """
+    if transform not in CONTENT_TRANSFORMS:
+        raise ValueError(
+            "Unknown content transform %r; choose from %s"
+            % (transform, ", ".join(sorted(CONTENT_TRANSFORMS)))
+        )
+    os.makedirs(out_dir, exist_ok=True)
+    grid_fn, fn = CONTENT_TRANSFORMS[transform]
+    rng = _random.Random(seed)
+
+    paths = []
+    for t in range(num_tasks):
+        train = []
+        for _ in range(n_train):
+            grid_in = grid_fn(rows, cols, rng)
+            train.append((grid_in, fn(grid_in)))
+        test_in = grid_fn(rows, cols, rng)
+        test = [(test_in, fn(test_in))]
+
+        path = os.path.join(out_dir, "%s_%d.task" % (transform, t))
+        _save_task(train, test, path)
+        paths.append(path)
+
+    return paths
+
+
 def _parse_args():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument(

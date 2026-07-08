@@ -12,6 +12,7 @@ from memory_es import (
     attn_gather_toroidal,
     attn_gather_reflect,
 )
+from grid_substrate import GridSubstrate, SUB_N_VIEWS, SUB_REL_K
 
 # ==========================================
 # Composed geometry × colour memory (ARC-AGI-2 block 5): retire the operator
@@ -372,6 +373,229 @@ struct LocalWriteComposedMemory(Memory):
         votes.free()
         total.free()
         gbuf.free()
+
+
+# ==========================================
+# Composed content-FETCH memory (Rung CF: the content-keyed gather, written)
+# ==========================================
+# The deep-floor audits (JOURNAL 2026-07-08) measured the 146-task floor as
+# CONTENT-ADDRESSED construction — output written at positions other than
+# where the input evidence sits — and the content-read scan's GO (22/146,
+# `tools/factor_scan.py` copy-* families) located the coverage in one
+# predictor class: a RELATIONAL key choosing between abstract actions
+# KEEP (leave the prefix prediction) / COPY (emit the value fetched from a
+# content-selected position) / a constant colour. This memory is that class,
+# composed as the fifth closed-form factor on top of the full LocalWrite
+# prefix (gather ES + written V + local table):
+#
+# - FETCH VIEWS — `GridSubstrate` (grid_substrate.mojo) computes 15 fixed
+#   content-selected reads per cell (rays, nearest-nonbg, global registers,
+#   anchor displacement, object-local bbox mirror) on the PREFIX'S PREDICTED
+#   grid, so the content factor composes after geometry+colour (fetched
+#   values are already in output colour space — the scan's premapped-grid
+#   convention, improved past its pre-colour-map caveat). The views are
+#   declared substrate/training wheels; the LEARNED parts are the view
+#   choice and the per-key actions.
+# - WRITE — one demo sweep votes every (view, key) pair's action (KEEP if
+#   out == prediction, else COPY if out == fetched, else the constant);
+#   support/majority thresholds as LocalWrite; the single best view by
+#   integer demo residual is kept IFF it strictly improves on the non-exact
+#   prefix (the write_local gate idiom), else everything wipes to sentinel —
+#   byte-identical to LocalWrite, so existing solves are protected by
+#   construction. The fixed 15-view sweep is constant compute (the
+#   fit_shape_geom multi-start precedent), never a runtime selector.
+#
+# Layout: [0:LOCALWRITE_DIM] the LocalWrite state | [+0] view id (-1 =
+# inactive) | [+1 : +1+16] the action table (key = is_bg*8 + rel_bucket;
+# entries: -1 sentinel / 0..9 const colour / 10 KEEP / 11 COPY).
+comptime CONTENTFETCH_KEYS = 2 * SUB_REL_K  # 16
+comptime CONTENTFETCH_OFF = LOCALWRITE_DIM  # the view slot
+comptime CONTENTFETCH_DIM = LOCALWRITE_DIM + 1 + CONTENTFETCH_KEYS
+comptime CONTENTFETCH_ACT_KEEP = 10
+comptime CONTENTFETCH_ACT_COPY = 11
+comptime CONTENTFETCH_N_ACTS = COLOR_DIM + 2
+
+
+struct ContentFetchComposedMemory(Memory):
+    comptime Dom = GridDomain
+
+    @staticmethod
+    def param_dim() -> Int:
+        return CONTENTFETCH_DIM
+
+    @staticmethod
+    def seed(weights: UnsafePointer[Float32, MutAnyOrigin]):
+        # LocalWrite seed + inactive view + all-sentinel action table: the
+        # unwritten memory is byte-identical to LocalWrite's seed.
+        LocalWriteComposedMemory.seed(weights)
+        for s in range(1 + CONTENTFETCH_KEYS):
+            weights[CONTENTFETCH_OFF + s] = Float32(-1.0)
+
+    @staticmethod
+    def fill_scale(scale: UnsafePointer[Float32, MutAnyOrigin], n: Int):
+        # Prefix keeps its preconditioner (which freezes V + local table);
+        # the view slot and action table are WRITTEN, scale 0 on any ES path.
+        LocalWriteComposedMemory.fill_scale(scale, LOCALWRITE_DIM)
+        for s in range(1 + CONTENTFETCH_KEYS):
+            scale[CONTENTFETCH_OFF + s] = 0.0
+
+    # The override for one cell: given the written action for its key, the
+    # prefix prediction and the fetched value, the cell's final colour.
+    # Identical in write-scoring and apply (the key -> action contract).
+    @staticmethod
+    def _act_value(act: Int, pred: Float32, fetched: Int) -> Float32:
+        if act == CONTENTFETCH_ACT_KEEP or act < 0:
+            return pred
+        if act == CONTENTFETCH_ACT_COPY:
+            # fetch absent -> fall back to the prefix prediction (the scan's
+            # gated-override fallback).
+            return Float32(fetched) if fetched >= 0 else pred
+        return Float32(act)  # constant colour
+
+    @staticmethod
+    def apply(
+        weights: UnsafePointer[Float32, MutAnyOrigin],
+        inp: ArcGrid,
+        dst: UnsafePointer[Float32, MutAnyOrigin],
+    ):
+        # Prefix prediction, then the content override. The substrate reads a
+        # SNAPSHOT of the prediction (all fetches see pre-override values,
+        # the scan's convention). Never on an ES hot path, so the snapshot
+        # alloc here is fine (the ES only ever fits the 7 attention slots).
+        LocalWriteComposedMemory.apply(weights, inp, dst)
+        var view = Int(round(weights[CONTENTFETCH_OFF]))
+        if view < 0:
+            return
+        var n = inp.rows * inp.cols
+        var snap = alloc[Float32](n)
+        for k in range(n):
+            snap[k] = round(dst[k])
+        var sub = GridSubstrate(snap, inp.rows, inp.cols)
+        for r in range(inp.rows):
+            for c in range(inp.cols):
+                var k = r * inp.cols + c
+                var rf = sub.fetch(view, r, c)
+                var is_bg = 1 if Int(round(snap[k])) == sub.bg else 0
+                var key = is_bg * SUB_REL_K + rf[0]
+                var act = Int(round(weights[CONTENTFETCH_OFF + 1 + key]))
+                dst[k] = Self._act_value(act, snap[k], rf[1])
+        snap.free()
+
+    @staticmethod
+    def write_content(
+        weights: UnsafePointer[Float32, MutAnyOrigin],
+        demos: List[ArcTaskPair],
+        capacity: Int,
+    ):
+        """Write the content-fetch view + action table, gated on the residual.
+
+        Assumes the LocalWrite prefix is ALREADY fit (call after fit_local).
+        One demo sweep votes every (view, key) action; per view a tentative
+        table (support + majority thresholds) is scored by integer demo
+        residual; the single best view is kept only if it strictly reduces
+        the residual of a non-exact prefix — else all slots stay sentinel
+        (strict superset of LocalWrite by construction).
+        """
+        var nd = len(demos)
+        for s in range(1 + CONTENTFETCH_KEYS):
+            weights[CONTENTFETCH_OFF + s] = Float32(-1.0)
+        if nd == 0:
+            return
+        comptime NV = SUB_N_VIEWS
+        comptime NK = CONTENTFETCH_KEYS
+        comptime NA = CONTENTFETCH_N_ACTS
+        var votes = alloc[Float32](NV * NK * NA)
+        var total = alloc[Float32](NV * NK)
+        for i in range(NV * NK * NA):
+            votes[i] = 0.0
+        for i in range(NV * NK):
+            total[i] = 0.0
+        # Per-demo prefix predictions, snapshotted once (integer-rounded).
+        var preds = alloc[Float32](nd * capacity)
+        var err_prefix = 0
+        for d in range(nd):
+            ref g = demos[d].input_grid
+            var pbuf = preds + d * capacity
+            LocalWriteComposedMemory.apply(weights, g, pbuf)
+            for k in range(g.rows * g.cols):
+                pbuf[k] = round(pbuf[k])
+                if Int(pbuf[k]) != Int(round(demos[d].output_grid.data[k])):
+                    err_prefix += 1
+        # Vote sweep: one substrate per demo, all views accumulated.
+        for d in range(nd):
+            ref g = demos[d].input_grid
+            var pbuf = preds + d * capacity
+            var sub = GridSubstrate(pbuf, g.rows, g.cols)
+            for r in range(g.rows):
+                for c in range(g.cols):
+                    var k = r * g.cols + c
+                    var out = Int(round(demos[d].output_grid.data[k]))
+                    if out < 0 or out >= COLOR_DIM:
+                        continue
+                    var is_bg = 1 if Int(pbuf[k]) == sub.bg else 0
+                    for view in range(NV):
+                        var rf = sub.fetch(view, r, c)
+                        var key = is_bg * SUB_REL_K + rf[0]
+                        var act = out  # constant-colour vote by default
+                        if out == Int(pbuf[k]):
+                            act = CONTENTFETCH_ACT_KEEP
+                        elif rf[1] >= 0 and out == rf[1]:
+                            act = CONTENTFETCH_ACT_COPY
+                        votes[(view * NK + key) * NA + act] += 1.0
+                        total[view * NK + key] += 1.0
+        # Tentative table per view (support + dominant majority), then score.
+        var table = alloc[Float32](NV * NK)
+        for view in range(NV):
+            for key in range(NK):
+                table[view * NK + key] = Float32(-1.0)
+                var t = total[view * NK + key]
+                if t < Float32(LOCALWRITE_MIN_SUPPORT):
+                    continue
+                var best = Float32(-1.0)
+                var best_a = -1
+                for a in range(NA):
+                    if votes[(view * NK + key) * NA + a] > best:
+                        best = votes[(view * NK + key) * NA + a]
+                        best_a = a
+                if best >= LOCALWRITE_MAJ_THRESH * t:
+                    table[view * NK + key] = Float32(best_a)
+        var err_view = alloc[Int](NV)
+        for view in range(NV):
+            err_view[view] = 0
+        for d in range(nd):
+            ref g = demos[d].input_grid
+            var pbuf = preds + d * capacity
+            var sub = GridSubstrate(pbuf, g.rows, g.cols)
+            for r in range(g.rows):
+                for c in range(g.cols):
+                    var k = r * g.cols + c
+                    var out = Int(round(demos[d].output_grid.data[k]))
+                    var is_bg = 1 if Int(pbuf[k]) == sub.bg else 0
+                    for view in range(NV):
+                        var rf = sub.fetch(view, r, c)
+                        var key = is_bg * SUB_REL_K + rf[0]
+                        var act = Int(table[view * NK + key])
+                        var pv = Self._act_value(act, pbuf[k], rf[1])
+                        if Int(round(pv)) != out:
+                            err_view[view] += 1
+        var best_view = -1
+        var best_err = err_prefix
+        for view in range(NV):
+            if err_view[view] < best_err:
+                best_err = err_view[view]
+                best_view = view
+        # GLOBAL GATE: strict improvement over a non-exact prefix, else wiped.
+        if err_prefix > 0 and best_view >= 0:
+            weights[CONTENTFETCH_OFF] = Float32(best_view)
+            for key in range(NK):
+                weights[CONTENTFETCH_OFF + 1 + key] = table[
+                    best_view * NK + key
+                ]
+        votes.free()
+        total.free()
+        preds.free()
+        table.free()
+        err_view.free()
 
 
 # ==========================================

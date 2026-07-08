@@ -1787,3 +1787,29 @@ toroidal) because the 22/146 evidence was measured under them. Substrate in the 
 representations a learned read operates over, never a transform. First Mojo-1.0 friction: tuple
 returns of `(Int, Int)` don't satisfy Movable in this build — `InlineArray[Int, 2]` instead.
 `tests/test_substrate.mojo` (fast tier): exact assertions on hand-built grids — green.
+
+**19:07 — CF-1: the content-fetch memory PROVEN cold, all five classes exact.**
+`ContentFetchComposedMemory` (memory_composed.mojo): view slot + 16-entry action table
+(key = is_bg × rel_bucket; actions −1/const/KEEP/COPY) written closed-form on the LocalWrite
+prefix; `fit_content` (esper_evolution.mojo) = fit_local → write_content; synth ground truth
+`CONTENT_TRANSFORMS` (5 families) + `generate_content_task_groups`; proof
+`tests/test_content_fetch.mojo` (full tier): **ray_down / recolor_largest / halo_nearest /
+anchor_shift / objlocal_mirror each held-out 1.0, each selecting its intended view** (0/5/4/9/13),
+ablation control degrades (0.85), strict superset writes no view at 1.0, few-demo n=3 at 1.0.
+`./esper fast` green.
+
+Two build discoveries, both measured mid-block (the smoke/proof runs caught them):
+1. **The fitted prefix can be WORSE than identity on content demos — and comparing prefixes
+   in-sample picks the wrong one.** `write_color`'s count matching writes a garbage V on content
+   rules (their colour counts shift incoherently), the gather then drifts on the garbage-premapped
+   demos (halo: prediction ≠ input on 117/144 cells; M ≈ random contraction), and a drifted prefix
+   still in-sample-beats identity by a few memorized cells (anchor: 196 vs 210). The honest form —
+   the plan's own fit_shape_geom precedent — is TWO FULL COLD BRANCHES compared on the FINAL demo
+   residual: {fitted prefix + content write} vs {EXACT identity + content write}, keep the lower.
+   Constant compute, never a runtime selector; tasks the fitted prefix serves keep it (0-regressions
+   preserved by construction).
+2. **Two subtle substrate-integrity rules.** The seed gather is only approximately identity (soft
+   beta blurs every colour boundary — the fallback must sharpen beta to be a true identity); and the
+   fallback branch must stay PURE (no in-sample-gated local table): a polluted prediction snapshot
+   corrupts the registers/anchors the content views read on held-out grids (measured: view 9 exact
+   in-sample, 0.82 held-out with a local table in the branch; 1.0 without).

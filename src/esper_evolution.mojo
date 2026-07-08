@@ -20,6 +20,8 @@ from memory_composed import (
     GeomColorComposedMemory,
     GeomCountComposedMemory,
     LocalWriteComposedMemory,
+    ContentFetchComposedMemory,
+    CONTENTFETCH_DIM,
     ShapeGeomComposedMemory,
     ShapeGeomSettleMemory,
     ShapeGeomColorComposedMemory,
@@ -781,6 +783,93 @@ def fit_local(
     )
     # 2. Write the local-content table on the gather's residual (one pass, gated).
     LocalWriteComposedMemory.write_local(state, demos, grid_capacity)
+
+
+# ==========================================
+# Composed content-fetch fit (Rung CF: the content-keyed gather, written)
+# ==========================================
+# The per-task in-context fit for ContentFetchComposedMemory: the full fitted
+# LocalWrite prefix (gather ES + written V + local table), then the closed-form
+# content-fetch write on ITS residual — the fifth composed factor, reaching the
+# content-addressed class (copy/move/draw/extend) no per-cell factor expresses
+# (deep-floor audits, JOURNAL 2026-07-08). The write is a constant-compute
+# 15-view sweep after the prefix is fit, gated on strict residual improvement
+# (strict superset — see write_content).
+#
+# IDENTITY-PREFIX FALLBACK (measured end-to-end, the fit_shape_geom
+# multi-start precedent): on content-addressed demos the fitted prefix can be
+# WORSE than identity — write_color's count matching writes a garbage V
+# (content rules change colour counts incoherently) and the gather then
+# drifts on the garbage-premapped demos, destroying the grid the content
+# substrate reads. Two full cold branches are therefore compared on the FINAL
+# integer demo residual (prefix + content write each), and the better one is
+# kept — comparing prefixes alone is not enough (measured: a drifted prefix
+# in-sample-memorizes a few cells past identity while its garbled prediction
+# starves the content factor). The fallback branch is a PURE exact identity
+# (sharp beta, no local table): its in-sample-gated writers would pollute the
+# snapshot the content substrate reads on held-out grids. Two fixed starts,
+# constant compute, never a runtime selector; a task the fitted prefix
+# serves end-to-end always keeps it, so existing solves are unaffected.
+def _contentfetch_demo_err(
+    state: UnsafePointer[Float32, MutAnyOrigin],
+    demos: List[ArcTaskPair],
+    grid_capacity: Int,
+) raises -> Int:
+    var buf = alloc[Float32](grid_capacity)
+    var err = 0
+    for d in range(len(demos)):
+        ref g = demos[d].input_grid
+        ContentFetchComposedMemory.apply(state, g, buf)
+        for k in range(g.rows * g.cols):
+            if Int(round(buf[k])) != Int(round(demos[d].output_grid.data[k])):
+                err += 1
+    buf.free()
+    return err
+
+
+def fit_content(
+    state: UnsafePointer[Float32, MutAnyOrigin],
+    demos: List[ArcTaskPair],
+    grid_capacity: Int,
+    n_fit: Int,
+    alpha0: Float32,
+    alpha1: Float32,
+    sigma0: Float32,
+    sigma1: Float32,
+    iters: Int,
+    reg_lambda: Float32,
+    use_gpu: Bool = True,
+) raises:
+    # 1. Fit the LocalWrite prefix in place (gather ES + V + local table).
+    fit_local(
+        state,
+        demos,
+        grid_capacity,
+        n_fit,
+        alpha0,
+        alpha1,
+        sigma0,
+        sigma1,
+        iters,
+        reg_lambda,
+        use_gpu,
+    )
+    # 2. Content write on the fitted branch.
+    ContentFetchComposedMemory.write_content(state, demos, grid_capacity)
+    # 3. Identity-fallback branch, compared END-TO-END (header comment): a
+    #    pure exact identity prefix (sharp beta — the seed beta is soft and
+    #    only approximately the identity, see GeomColor.apply) + its own
+    #    content write; keep whichever branch's final demo residual is lower.
+    var err_fit = _contentfetch_demo_err(state, demos, grid_capacity)
+    if err_fit > 0:
+        var id_state = alloc[Float32](CONTENTFETCH_DIM)
+        ContentFetchComposedMemory.seed(id_state)
+        id_state[ATTN_BETA_OFF] = Float32(100.0)
+        ContentFetchComposedMemory.write_content(id_state, demos, grid_capacity)
+        var err_id = _contentfetch_demo_err(id_state, demos, grid_capacity)
+        if err_id < err_fit:
+            memcpy(dest=state, src=id_state, count=CONTENTFETCH_DIM)
+        id_state.free()
 
 
 # ==========================================
