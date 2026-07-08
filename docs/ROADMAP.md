@@ -396,10 +396,16 @@ slice is dominated by that last class (19/39).
    distance-to-object; `tools/factor_scan.py`, false-positive-controlled) cover a union of
    **4/146** — the floor lies outside the WHOLE class of per-cell functions over position-aligned
    context. Its dominant property is CONTENT-ADDRESSED construction (move/copy/draw/extend: output
-   written at positions other than where the input evidence sits). Next: a literature pass aimed
-   exactly there — content-attention (AttnGather generalized from position-queries to learned
-   content-keys), object-slot representations feeding the self-mod write (rung #6), constructive
-   TTT approaches — with the scan harness as the pre-build gate for whatever it proposes.
+   written at positions other than where the input evidence sits). → **Literature pass DONE (same
+   day; `RESEARCH-NOTES.md` 2026-07-08):** the field's 2025 ARC crop converged on exactly this
+   property — nobody in the prize's top tier computes the output in one per-cell pass; the theme
+   is iterative *generate→verify→refine* (TRM: 7M-param recursive answer-editing, 45% ARC-AGI-1;
+   CompressARC: 76K params, no pretraining, 20% — the cold-fit bar's closest relative). Distilled:
+   (a) nearest rung = **content-keyed gather** (AttnGather's query: affine-position → position +
+   content terms; copy/move/draw becomes expressible, same single ES search + GPU kernel shape),
+   pre-gated by content-addressed read families in `factor_scan`; (b) rung #6 = a **constructive
+   self-mod editor** (iterated small edits over a materialized answer grid, reading object-slot
+   relations); (c) MDL description-length-vs-residual as the uniform capacity guardrail.
    **GPU gate — DONE EARLY (2026-07-07, rungs G0–G3 on branch `gpu-env`).** The blocker premise
    was FALSE: the pinned `mojo==1.0.0b2` PyPI wheel carries full GPU support (driver ≥ 580; the
    dev box's RTX 2060 is Modular's dev-tier), so no MAX-platform migration and no pin change were

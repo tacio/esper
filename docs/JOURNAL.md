@@ -1709,3 +1709,32 @@ over the input grid), object-slot / grouped representations feeding the self-mod
 (rung #6), and constructive/generative test-time-training approaches from the ARC Prize crop.
 The scan harness stays the gate: any proposed mechanism's expressible class can be dropped in as
 a key/predictor and re-measured against the same 146 ids before it is built.
+
+## 2026-07-08 — Literature pass: content-addressed construction (RESEARCH-NOTES updated)
+
+**14:00** — Ran the literature pass the factor scan commissioned. Full findings + sources in
+`RESEARCH-NOTES.md` (2026-07-08 section); the shape of the answer:
+
+The field's 2025 ARC crop converged on exactly the property the floor demands. Nobody in the
+prize's top tier computes the output in one per-cell pass — the unifying theme is *generate →
+verify → refine*, and the two most Esper-relevant results are tiny-model constructive loops:
+**TRM** (7M params, 2 layers, 45% ARC-AGI-1) maintains a materialized answer grid `y` + latent
+scratchpad `z` and repeatedly applies one small net (`z ← net(x,y,z)`; `y ← net(y,z)`) — each
+pass can write where it didn't read, which is precisely the measured missing capability; and
+**CompressARC** (76K params, *no pretraining, no dataset*, 20% ARC-AGI-1) — the closest published
+relative of our cold-fit bar, proof that per-task-only fitting has real headroom. TRM's ablations
+double as a Schug confirmation: 2 layers beats 4, one net beats two — recursion depth substitutes
+for parameters, which favors a derivative-free ES.
+
+**Distilled next steps** (booked in RESEARCH-NOTES + to flow into ROADMAP when acted on):
+1. *Nearest rung* — content-keyed gather: AttnGather's query generalized from affine-position
+   (7 params) to position+content, making copy/move/draw expressible with a handful of extra
+   params, same single ES search, same GPU kernel shape. Gated the same way as everything since
+   CMS-0: prototype content-addressed read families in `factor_scan` first, build only on
+   coverage evidence over the 146.
+2. *Rung #6 shaping* — the meta-trained self-mod write rule becomes an iterated editor over a
+   materialized answer grid (TRM's loop), reading object-slot *relations* (Slot Abstractors'
+   relational bottleneck: relations-only reads cost −52% when removed — i.e. they're load-bearing
+   for generalization) to decide where to write; ES meta-learns only the small rule.
+3. *MDL acceptance* — description-length-vs-residual as the uniform capacity guardrail on written
+   stages (CompressARC's objective, decoupled from its backprop).
