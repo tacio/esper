@@ -29,6 +29,30 @@ content-match terms) would express. Pre-registered gate (user decision
 mechanism; below => documented STOP, floor re-scopes to the constructive
 self-mod editor (rung #6).
 
+Extension (post-CF, partial-fix-band build 2026-07-08): CF's hard content
+table converts only 2 of the 22 to exact and leaves a ~72-id partial-fix band
+(~0.9 held-out). The SOFTSCORE_FAMILIES below test the SOFT content-keyed
+gather's incremental class over the fixed copy-* reads — a centre-RELATIVE
+relation (nearest cell whose component is strictly larger/smaller than the
+centre's; the Slot-Abstractors relational bottleneck), faithful to the Mojo
+gather's `argmax_j[-beta|q_i-x_j|^2 + w.feat]` read (nearest-of-relation, emit
+value). PRE-REGISTERED gate (plan, before the run): soft-gather class newly
+COVERS >= 15 deep-floor ids beyond the hard content union => GO to building
+`ContentGatherComposedMemory`; below => documented STOP for the soft gather
+(Phase 2 rung #6 proceeds independently). RESULT 2026-07-09: soft incremental =
+3 (25094a63 52364a65 7d1f7ee8) < 15 => STOP; the soft gather does not open new
+band territory beyond the sharp CF table.
+
+Extension (rung #6 constructive editor, 2026-07-09): the EDITOR_FAMILIES +
+scan_editor below simulate the TRM-style iterated-edit loop (materialized
+answer grid, one colour-abstract local relational rule read over the EVOLVING
+grid, up to EDITOR_T passes, writes become evidence — positions-written !=
+positions-read, the content-addressed construction no single per-cell pass
+expresses). PRE-REGISTERED gate (plan, before the run): the iterated editor
+newly COVERS >= 15 deep-floor ids that the ENTIRE per-cell/content new-family
+union does NOT reach at the 0.9 bar => GO to building `GridEditorSelfModMemory`;
+below => documented STOP.
+
     python tools/factor_scan.py [train_dump]
 
 Reports per-family coverage, group unions (object-level vs content), a
@@ -57,6 +81,32 @@ SIZE_CAP = 30
 
 
 # ---- per-grid precomputation (substrate: components, histogram, mirrors) --
+
+
+def _bfs_nearest_col(q, R, C, sources):
+    """8-connected multi-source BFS (capped at DIST_CAP): nearest SOURCE
+    cell's colour per cell (None if unreached). Sources carry their own
+    colour, so the frontier propagates the nearest source colour — the same
+    shape as near_col, restricted to an arbitrary source subset."""
+    col = [[None] * C for _ in range(R)]
+    d = [[DIST_CAP + 1] * C for _ in range(R)]
+    dq = deque()
+    for (r, c) in sources:
+        col[r][c] = q[r][c]
+        d[r][c] = 0
+        dq.append((r, c))
+    while dq:
+        r, c = dq.popleft()
+        if d[r][c] >= DIST_CAP:
+            continue
+        for dr in (-1, 0, 1):
+            for dc in (-1, 0, 1):
+                rr, cc = r + dr, c + dc
+                if 0 <= rr < R and 0 <= cc < C and d[rr][cc] > d[r][c] + 1:
+                    d[rr][cc] = d[r][c] + 1
+                    col[rr][cc] = col[r][c]
+                    dq.append((rr, cc))
+    return col
 
 
 def precompute(q):
@@ -184,6 +234,32 @@ def precompute(q):
             if q[r][c] != bg:
                 last = q[r][c]
 
+    # centre-RELATIVE relational reads (the soft content-keyed gather's
+    # incremental class over the fixed copy-* families: an additive content
+    # score biases the position-nearest gather toward a source satisfying a
+    # relation to the CENTRE — nearest cell whose component is strictly
+    # larger / smaller than the centre's, emit its colour. Faithful to the
+    # Mojo `argmax_j[-beta|q_i-x_j|^2 + w.feat]` read: nearest-of-relation,
+    # value = that cell's colour; NON-collapsing and distinct from the GLOBAL
+    # largest/smallest registers copy-registers already expresses).
+    csize = [[sizes[comp[r][c]] for c in range(C)] for r in range(R)]
+    larger_near = [[None] * C for _ in range(R)]
+    smaller_near = [[None] * C for _ in range(R)]
+    distinct_sz = sorted({csize[r][c] for r in range(R) for c in range(C)
+                          if q[r][c] != bg})
+    for t in distinct_sz:
+        bigger = _bfs_nearest_col(
+            q, R, C, [(r, c) for r in range(R) for c in range(C)
+                      if q[r][c] != bg and csize[r][c] > t])
+        smaller = _bfs_nearest_col(
+            q, R, C, [(r, c) for r in range(R) for c in range(C)
+                      if q[r][c] != bg and csize[r][c] < t])
+        for r in range(R):
+            for c in range(C):
+                if q[r][c] != bg and csize[r][c] == t:
+                    larger_near[r][c] = bigger[r][c]
+                    smaller_near[r][c] = smaller[r][c]
+
     # global content registers + anchors (bbox top-left of the register comp)
     nonbg_ids = [i for i in range(cid) if colours[i] != bg]
     large_i = max(nonbg_ids, key=lambda i: sizes[i], default=None)
@@ -209,6 +285,7 @@ def precompute(q):
         "ray": {"u": ray_u, "d": ray_d, "l": ray_l, "r": ray_r},
         "large_col": large_col, "small_col": small_col, "uniq_col": uniq_col,
         "major_col": major_col, "anchors": anchors,
+        "larger_near": larger_near, "smaller_near": smaller_near,
     }
 
 
@@ -379,8 +456,201 @@ COPY_FAMILIES = {
                       for x in ("h", "v")],
 }
 
+# ---- soft content-keyed gather families (the ES-fit score's incremental
+# class over the fixed copy-* reads) --------------------------------------
+#
+# The soft gather selects its source by `argmax_j[-beta|q_i-x_j|^2 + w.feat]`:
+# a position-nearest read biased by a fitted content-match term, emitting the
+# won cell's VALUE (sharp beta => copy-through). Its incremental power over
+# copy-* is a CENTRE-RELATIVE relation: the source is the nearest cell whose
+# component is strictly larger / smaller than the centre's (Slot-Abstractors'
+# larger-than/smaller-than relations) — distinct from copy-registers' GLOBAL
+# largest/smallest, and non-collapsing (the fetched colour genuinely varies).
+# Same (key, fetched) shape + loo_paired_fetch scoring as COPY_FAMILIES so the
+# coverage numbers are directly comparable; each returns (chain_key, fetched).
+
+
+def fetch_larger_near(P, r, c):
+    f = P["larger_near"][r][c]
+    return ((P["q"][r][c] == P["bg"], f is not None, f == P["q"][r][c]), f)
+
+
+def fetch_smaller_near(P, r, c):
+    f = P["smaller_near"][r][c]
+    return ((P["q"][r][c] == P["bg"], f is not None, f == P["q"][r][c]), f)
+
+
+SOFTSCORE_FAMILIES = {
+    "soft-larger": [fetch_larger_near],
+    "soft-smaller": [fetch_smaller_near],
+}
+
 KEEP = "KEEP"
 COPY = "COPY"
+
+
+# ---- rung #6 constructive editor: iterated-edit simulation ----------------
+#
+# The per-cell scan (single pass over the INPUT substrate) cannot express an
+# iterated editor. scan_editor simulates the TRM-style loop faithfully:
+# maintain a materialized answer grid y (init = input); for up to T passes
+# apply ONE colour-abstract local relational rule reading the CURRENT y, and
+# write where it fires. Because y evolves, a write becomes evidence for the
+# next pass (propagate / flood / extend) — the content-addressed construction
+# a single per-cell pass cannot reach (positions written != positions read).
+#
+# The rule is a LOO-fit abstract action table (KEEP/COPY only — pure-constant
+# votes are DROPPED so palette memorization can't fake coverage; the editor
+# earns coverage only through RELATIONAL propagation). Substrate is the cheap
+# _light grid (bg + 4 rays, O(RC)) so T passes stay tractable.
+
+DIRS4 = ((-1, 0), (1, 0), (0, -1), (0, 1))
+EDITOR_T = 16
+
+
+def _light(q):
+    """Cheap per-pass substrate for the editor: bg + first-nonbg rays. No
+    components / BFS / larger_near (the editor's fetch fns need only q's
+    neighbours and directional scans over the EVOLVING grid)."""
+    R, C = len(q), len(q[0])
+    bg = Counter(x for row in q for x in row).most_common(1)[0][0]
+    ray_u = [[None] * C for _ in range(R)]
+    ray_d = [[None] * C for _ in range(R)]
+    ray_l = [[None] * C for _ in range(R)]
+    ray_r = [[None] * C for _ in range(R)]
+    for c in range(C):
+        last = None
+        for r in range(R):
+            ray_u[r][c] = last
+            if q[r][c] != bg:
+                last = q[r][c]
+        last = None
+        for r in range(R - 1, -1, -1):
+            ray_d[r][c] = last
+            if q[r][c] != bg:
+                last = q[r][c]
+    for r in range(R):
+        last = None
+        for c in range(C):
+            ray_l[r][c] = last
+            if q[r][c] != bg:
+                last = q[r][c]
+        last = None
+        for c in range(C - 1, -1, -1):
+            ray_r[r][c] = last
+            if q[r][c] != bg:
+                last = q[r][c]
+    return {"q": q, "R": R, "C": C, "bg": bg,
+            "ray": {"u": ray_u, "d": ray_d, "l": ray_l, "r": ray_r}}
+
+
+def ed_flood(P, r, c):
+    """Majority non-bg 4-neighbour colour in the current grid (region
+    thicken / flood front). key = (centre is bg, has a non-bg neighbour)."""
+    q, R, C, bg = P["q"], P["R"], P["C"], P["bg"]
+    nb = [q[r + dr][c + dc] for dr, dc in DIRS4
+          if 0 <= r + dr < R and 0 <= c + dc < C and q[r + dr][c + dc] != bg]
+    f = Counter(nb).most_common(1)[0][0] if nb else None
+    return ((q[r][c] == bg, f is not None), f)
+
+
+def _ed_dir(dr, dc):
+    def fn(P, r, c):
+        q, R, C, bg = P["q"], P["R"], P["C"], P["bg"]
+        rr, cc = r + dr, c + dc
+        f = q[rr][cc] if 0 <= rr < R and 0 <= cc < C else None
+        if f == bg:
+            f = None
+        return ((q[r][c] == bg, f is not None), f)
+    return fn
+
+
+def _ed_ray(d):
+    def fn(P, r, c):
+        f = P["ray"][d][r][c]
+        return ((P["q"][r][c] == P["bg"], f is not None), f)
+    return fn
+
+
+EDITOR_FAMILIES = {
+    "ed-flood": [ed_flood],
+    "ed-dir": [_ed_dir(dr, dc) for dr, dc in DIRS4],
+    "ed-ray": [_ed_ray(d) for d in ("u", "d", "l", "r")],
+}
+
+
+def loo_editor(demos, keyfn, T=EDITOR_T):
+    """LOO: fit the abstract KEEP/COPY table from the other demos (input
+    substrate -> output value, constant votes dropped), then ITERATE the held
+    demo's grid from input for up to T passes over the evolving substrate;
+    stop at a fixed point. Returns (d2, final_loo, net_fix, residual) vs the
+    identity baseline — same tuple shape / bars as loo_paired_fetch."""
+    n = len(demos)
+    if n < 2:
+        return 0.0, 0.0, 0.0, 1.0
+    total = d2_hit = final_hit = fixed = broken = 0
+    for held in range(n):
+        tc = {}
+        for d in range(n):
+            if d == held:
+                continue
+            ig, og = demos[d]
+            P = _light(ig)
+            for r in range(P["R"]):
+                for c in range(P["C"]):
+                    key, f = keyfn(P, r, c)
+                    out, cen = og[r][c], ig[r][c]
+                    if out == cen:
+                        v = KEEP
+                    elif f is not None and out == f:
+                        v = COPY
+                    else:
+                        continue  # abstract-only: drop constant/undetermined
+                    tc.setdefault(key, Counter())[v] += 1
+        ig, og = demos[held]
+        R, C = len(ig), len(ig[0])
+        y = [row[:] for row in ig]
+        for _ in range(T):
+            P = _light(y)
+            ny = [row[:] for row in y]
+            changed = False
+            for r in range(R):
+                for c in range(C):
+                    key, f = keyfn(P, r, c)
+                    if key in tc and tc[key].most_common(1)[0][0] == COPY \
+                            and f is not None and ny[r][c] != f:
+                        ny[r][c] = f
+                        changed = True
+            y = ny
+            if not changed:
+                break
+        for r in range(R):
+            for c in range(C):
+                total += 1
+                h2 = ig[r][c] == og[r][c]
+                hf = y[r][c] == og[r][c]
+                d2_hit += h2
+                final_hit += hf
+                if hf and not h2:
+                    fixed += 1
+                elif h2 and not hf:
+                    broken += 1
+    miss2 = total - d2_hit
+    net_fix = (fixed - broken) / miss2 if miss2 else 0.0
+    return (d2_hit / total, final_hit / total, net_fix, miss2 / total)
+
+
+def scan_editor(demos):
+    """Best (d2, final_loo, net_fix, residual) per editor family (best-of its
+    direction variants), identity premap only (conservative: the band is
+    identity-dominant; PI premaps would only add coverage, never remove)."""
+    best = {}
+    for fam, variants in EDITOR_FAMILIES.items():
+        for fn in variants:
+            stats = loo_editor(demos, fn)
+            if fam not in best or stats[1] > best[fam][1]:
+                best[fam] = stats
+    return best
 
 
 def loo_paired_fetch(per_demo):
@@ -491,6 +761,21 @@ def scan_task(demos):
                                 ((P["q"][r][c], key, f), og[r][c]))
                     per_demo.append(cells)
                 consider(fam, loo_paired_fetch(per_demo), pi)
+        # soft content-keyed gather families (centre-relative relational reads,
+        # same KEEP/COPY voting as copy-*; measures the soft gather's
+        # incremental class over the fixed copy families)
+        for fam, variants in SOFTSCORE_FAMILIES.items():
+            for fn in variants:
+                per_demo = []
+                for P, (_, og) in zip(pres, demos):
+                    cells = []
+                    for r in range(P["R"]):
+                        for c in range(P["C"]):
+                            key, f = fn(P, r, c)
+                            cells.append(
+                                ((P["q"][r][c], key, f), og[r][c]))
+                    per_demo.append(cells)
+                consider(fam, loo_paired_fetch(per_demo), pi)
         # proven-factor baselines (same numbers as the audit)
         per_demo = []
         for q, (_, og) in zip(qs, demos):
@@ -521,17 +806,25 @@ def main(train_dump):
     ids = deep_floor_ids(train_dump)
     print(f"factor scan over {len(ids)} deep-floor ids; "
           f"cover = net_fix >= {NET_FIX_BAR} & loo >= {CHAIN_LOO_BAR}")
-    content_names = (list(CONTENT_FAMILIES) + ["fetch-anchor"]
-                     + list(COPY_FAMILIES))
+    hard_content_names = (list(CONTENT_FAMILIES) + ["fetch-anchor"]
+                          + list(COPY_FAMILIES))
+    soft_names = list(SOFTSCORE_FAMILIES)
+    content_names = hard_content_names + soft_names
     all_new = list(FAMILIES) + content_names
     cover_sets = {f: set() for f in all_new + list(BASELINES)}
+    editor_sets = {f: set() for f in EDITOR_FAMILIES}
     per_task = {}
     for n, tid in enumerate(ids):
-        best = scan_task(load_demos(tid))
+        demos = load_demos(tid)
+        best = scan_task(demos)
         per_task[tid] = best
         for fam, stats in best.items():
             if covered(stats):
                 cover_sets[fam].add(tid)
+        # rung #6 iterated-edit simulation (identity premap, best-of variants)
+        for fam, (d2, ch, fx, res) in scan_editor(demos).items():
+            if fx >= NET_FIX_BAR and ch >= CHAIN_LOO_BAR and res >= RESIDUAL_FLOOR:
+                editor_sets[fam].add(tid)
         if (n + 1) % 25 == 0:
             print(f"  ... {n + 1}/{len(ids)}")
 
@@ -546,12 +839,50 @@ def main(train_dump):
     base_union = set().union(*(cover_sets[f] for f in BASELINES))
     obj_union = set().union(*(cover_sets[f] for f in FAMILIES))
     content_union = set().union(*(cover_sets[f] for f in content_names))
+    hard_content_union = set().union(
+        *(cover_sets[f] for f in hard_content_names))
+    soft_union = set().union(*(cover_sets[f] for f in soft_names))
+    soft_incremental = soft_union - hard_content_union
     print(f"\nunion of NEW families: {len(union)}/{len(ids)}"
           f"   (proven baselines: {len(base_union)};"
           f" new-only: {len(union - base_union)})")
     print(f"  object-level per-cell group: {len(obj_union)}"
           f"   CONTENT-ADDRESSED group: {len(content_union)}"
-          f"   (gate: content union >= 20)")
+          f"   (gate CF: content union >= 20)")
+    # PRE-REGISTERED soft-gather gate (plan, before this run): the soft
+    # content-keyed gather is built in Mojo iff its centre-relative relational
+    # class newly COVERS >= 15 deep-floor ids the hard copy-*/fetch-* families
+    # do NOT already cover. Below => documented STOP for the soft gather;
+    # Phase 2 (rung #6 constructive editor) proceeds independently.
+    print(f"  SOFT-GATHER group: {len(soft_union)}"
+          f"   incremental over hard-content: {len(soft_incremental)}"
+          f"   (gate SOFT: incremental >= 15  =>  "
+          f"{'GO' if len(soft_incremental) >= 15 else 'STOP'})")
+    if soft_incremental:
+        print("  soft-incremental ids: "
+              + " ".join(sorted(soft_incremental)))
+
+    # rung #6 constructive editor: coverage of the iterated-edit simulation.
+    editor_union = set().union(*editor_sets.values()) if editor_sets else set()
+    editor_incremental = editor_union - union
+    print("\nrung #6 iterated-editor coverage (colour-abstract local rule, "
+          "evolving grid, <=%d passes):" % EDITOR_T)
+    for fam, s in sorted(editor_sets.items(), key=lambda kv: -len(kv[1])):
+        print(f"  {fam:12s} {len(s):3d}")
+    # PRE-REGISTERED editor gate (plan, before this run): the constructive
+    # editor is built in Mojo iff its iterated simulation newly COVERS >= 15
+    # deep-floor ids that the ENTIRE per-cell/content new-family union does NOT
+    # reach at the 0.9 bar (genuinely new capability — iterative construction,
+    # positions-written != positions-read — not a re-expression of a per-cell
+    # read CF already grazes). Below => documented STOP for rung #6.
+    print(f"  EDITOR union: {len(editor_union)}"
+          f"   incremental over per-cell/content union: "
+          f"{len(editor_incremental)}"
+          f"   (gate EDITOR: incremental >= 15  =>  "
+          f"{'GO' if len(editor_incremental) >= 15 else 'STOP'})")
+    if editor_incremental:
+        print("  editor-incremental ids: "
+              + " ".join(sorted(editor_incremental)))
 
     print("\ngreedy set cover (new families):")
     remaining = set(union)

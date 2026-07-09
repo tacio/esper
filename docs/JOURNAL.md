@@ -1836,3 +1836,61 @@ subset dirs `data_bin/floor146` + `data_bin/solved_same`, before = the v3 lines 
 
 Rung CF is done: built exactly on the audit trail (STOP → scan → literature → gated scan GO →
 gated build → measured corpus win), with every mechanism decision forced by a measured failure.
+
+## 2026-07-09
+
+**P1A — soft content-keyed gather, scan pre-gate: STOP (documented negative).**
+Added a `softscore-*` family group to `factor_scan.py` (`soft-larger`/`soft-smaller`: nearest
+cell whose component is strictly larger/smaller than the centre's, emit its colour) — the faithful
+scan proxy for the Mojo gather's `argmax_j[−β·|q_i−x_j|² + w·feat]` read (I rejected an earlier
+"reflection-through-a-content-landmark" family: additive-score argmax can't express reflection
+about a data point, so it would have been an unfaithful proxy). Substrate is a new
+`_bfs_nearest_col` multi-source BFS over centre-relative size classes, added to `precompute`;
+existing families don't read the new fields, so committed coverage stays bit-identical (verified:
+every prior family line diffs clean against `content_scan_v1.txt`).
+
+Calibration (`scratch/calib_softscore.py`): **20/20 positive controls covered, 0/20 negative
+false-covers** — the family expresses its own rule and generalizes at n=3, and depth-2 recolor
+doesn't trip it.
+
+Corpus scan (`scratch/soft_scan_v1.txt`): soft-larger covers 11, soft-smaller 9 — but they overlap
+almost entirely with `copy-registers`/`copy-ray`/`fetch-ray4`. **Incremental over the hard-content
+union = 3** (`25094a63 52364a65 7d1f7ee8`), against the pre-registered bar of **15 ⇒ STOP**. The
+soft, ES-moveable score doesn't open new band territory beyond what the sharp CF table already
+grazes; the ~72-id near-miss band is not a "score just under the bar" problem, it's a
+different-mechanism problem. No Mojo built for Phase 1 (measure-first discipline: a failing scan is
+a documented negative, not a reason to build). Phase 2 (rung #6 constructive editor) proceeds
+independently — the plan anticipated exactly this fork.
+
+**P2A — rung #6 constructive editor, scan pre-gate: STOP (documented negative).**
+Added `EDITOR_FAMILIES` + `scan_editor` to `factor_scan.py`: a faithful offline simulation of the
+TRM-style iterated-edit loop — materialize an answer grid `y` (init = input), apply ONE
+colour-abstract local relational rule read over the *evolving* grid (`ed-flood` = majority non-bg
+4-neighbour; `ed-dir` = directional neighbour; `ed-ray` = first non-bg along a ray), write where
+it fires, up to 16 passes to a fixed point. Fit = the same `loo_paired_fetch` KEEP/COPY voting but
+**pure-constant votes dropped**, so palette memorization can't fake coverage — the editor earns
+coverage only through *relational propagation* (writes become evidence: positions-written !=
+positions-read, the one thing a single per-cell pass structurally cannot express). Cheap `_light`
+substrate (bg + 4 rays, O(RC), no components/BFS) keeps 16 passes tractable (~10s for all 146).
+
+Calibration (`scratch/calib_editor.py`): **20/20 extend-right, 20/20 flood-down positives covered,
+0/20 recolor false-covers** — the proxy genuinely fires on iterative propagation and stays silent
+on non-propagation. So the corpus result is a real signal, not an under-powered proxy.
+
+Corpus scan (`scratch/editor_scan_v1.txt`): **EDITOR union = 1, incremental over the entire
+per-cell/content new-family union = 0**, against the pre-registered bar of **15 ⇒ STOP**. The
+deep floor does **not** contain a colour-abstract local-propagation class of any size — it is a
+content-addressed **SELECTION** problem (copy-registers / copy-ray / copy-nearest, which CF already
+expresses), not an iterative **CONSTRUCTION** problem. Committed families stayed bit-identical
+(only the appended editor block differs).
+
+**Strategic finding (both branches off Rung CF STOP).** The plan's two proposed forward mechanisms
+— soft ES-moveable selection (Phase 1) and iterative construction (Phase 2) — *both* fail their
+pre-registered gates (incremental 3 and 0). The evidence relocates the problem: the ~72-id
+partial-fix band is not "the score is just under the bar" (soft gather) nor "the output is
+constructed elsewhere" (editor) — it is CF's **selection consistency**. The near-miss block is
+dominated by `copy-*` families sitting at LOO 0.70–0.90 (just under the 0.90 bar) with net_fix
+0.25–0.5: the right *source* is being grazed but the keyed table isn't consistent enough to cross.
+The next rung, on this evidence, is **sharpening CF's existing content read** (key granularity /
+tie-breaking / LOO consistency on the band), not a new memory family. No Mojo built for either
+phase — measure-first held: two rungs' worth of build averted by two ~10-minute scans.

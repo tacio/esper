@@ -426,9 +426,23 @@ slice is dominated by that last class (19/39).
    **mean held-out on the full 146 deep-floor ids 0.188 → 0.625** (133 up / 3 down), train-fit
    0.337 → 0.764, 19/146 now ≥ 0.9 held-out (0 before). The floor the budget-raise experiment
    proved compute-insensitive responds to exactly the mechanism the audit trail prescribed.
-   Remaining: the partial-fix band (0.9-ish held-out, the ~72 near-miss ids) is the natural
-   target for the SOFT content-keyed gather (ES score + content terms) and/or rung #6's
-   constructive editor — both still gated through the scan harness.
+   Remaining: the partial-fix band (0.9-ish held-out, the ~72 near-miss ids).
+   → **Both forward branches STOP at the scan gate (2026-07-09).** Pre-registered, calibrated, and
+   run: (a) the **SOFT content-keyed gather** — `softscore-*` centre-relative relational families
+   (nearest larger/smaller component, faithful to the Mojo `argmax_j[-β|q_i-x_j|²+w·feat]` read;
+   calib 20/20 pos, 0/20 neg) — covers only **+3 ids** incremental over the hard content union
+   (bar 15); (b) **rung #6 constructive editor** — `scan_editor`, a faithful iterated-edit
+   simulation (materialized grid, colour-abstract local relational rule over the *evolving* grid,
+   ≤16 passes to fixed point, constant votes dropped; calib 20/20 extend + 20/20 flood, 0/20
+   recolor) — covers **+0 ids** incremental over the entire per-cell/content union (bar 15). The
+   evidence relocates the band: it is not "the score is just under the bar" (gather) nor "the
+   output is constructed elsewhere" (editor) — the deep floor is a content-addressed **SELECTION**
+   problem CF already grazes (near-misses are `copy-*` families at LOO 0.70–0.90, right source /
+   inconsistent table), not an iterative-construction or ES-soft-score problem. **Next rung on this
+   evidence: sharpen CF's existing content read** (key granularity / tie-breaking / band LOO
+   consistency), not a new memory family. No Mojo built — two rungs' worth of build averted by two
+   ~10-min scans. (Detail: `docs/JOURNAL.md` 2026-07-09; boards `scratch/soft_scan_v1.txt`,
+   `scratch/editor_scan_v1.txt`.)
    **GPU gate — DONE EARLY (2026-07-07, rungs G0–G3 on branch `gpu-env`).** The blocker premise
    was FALSE: the pinned `mojo==1.0.0b2` PyPI wheel carries full GPU support (driver ≥ 580; the
    dev box's RTX 2060 is Modular's dev-tier), so no MAX-platform migration and no pin change were

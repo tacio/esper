@@ -133,6 +133,34 @@ constructive iteration (#1).
 3. **MDL acceptance (#4):** adopt description-length-vs-residual as the uniform form of the
    capacity guardrail on written stages; CompressARC parked as the ES-fit reserve architecture.
 
+### Follow-through (2026-07-09): both forward branches scanned → STOP; the band is a SELECTION problem
+
+Rung CF landed the WRITTEN content read and moved the deep floor (mean held-out 0.188 → 0.625),
+leaving a ~72-id partial-fix band at ~0.9. The two mechanisms distilled above (#1/#3 constructive
+editor, #2 soft content-keyed gather) were each prototyped as a calibrated `factor_scan` family
+class and pre-gated on the 146 before any Mojo:
+
+- **Soft content-keyed gather (#2).** `softscore-*` = centre-*relative* relational reads (nearest
+  cell whose component is strictly larger/smaller than the centre's, emit its value) — the faithful
+  scan proxy for the additive-score argmax `src[argmax_j(-β|q_i-x_j|² + Σw_k·feat_k)]` (I rejected a
+  "reflect through a content landmark" family: additive-score argmax cannot express reflection about
+  a data point). Calib 20/20 pos, 0/20 neg. Result: **+3 ids** incremental over the hard content
+  union (bar 15) → **STOP**. The ES-moveable soft score does not open band territory beyond the
+  sharp CF table.
+- **Constructive editor (#1+#3).** `scan_editor` = a faithful TRM-loop simulation: materialized
+  answer grid, one colour-abstract local relational rule read over the *evolving* grid, ≤16 passes
+  to a fixed point, **constant votes dropped** (coverage earned only through relational propagation
+  — writes-as-evidence, positions-written ≠ positions-read). Calib 20/20 extend + 20/20 flood,
+  0/20 recolor. Result: **+0 ids** incremental over the entire per-cell/content union (bar 15) →
+  **STOP**. The deep floor contains no colour-abstract local-propagation class of any size.
+
+**Reframe.** The band is not under-powered *selection scores* (gather) nor *elsewhere-construction*
+(editor): it is CF's **selection consistency**. The near-miss block is dominated by `copy-*`
+families at LOO 0.70–0.90 with net_fix 0.25–0.5 — the correct *source* grazed, the keyed table not
+consistent enough to cross the 0.90 bar. The measure-first evidence points the next rung at
+*sharpening CF's existing content read* (key granularity, tie-breaking, band LOO consistency), not
+a new memory family. MDL acceptance (#4) is unspent and still applies there.
+
 ## 2026-07-02 — Composing emergent memories (the block-5 soft/sharp wall)
 
 **Trigger.** Block 5 (compose geometry + colour into one memory, retire `OperatorMemory`) hit an
