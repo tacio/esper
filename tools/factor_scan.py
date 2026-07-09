@@ -489,6 +489,193 @@ KEEP = "KEEP"
 COPY = "COPY"
 
 
+# ---- CF-read probe: deterministic tie-break + finer keys ------------------
+#
+# The band evidence (scratch/content_scan_v1.txt): the ~72 partial-fix ids are
+# dominated by copy-* families at LOO 0.70-0.90 — the right SOURCE is grazed
+# but the closed-form voted table isn't consistent enough to cross the 0.9
+# cover bar. Two deterministic sharpenings, measured here in Python BEFORE any
+# Mojo is touched (the pre-rung-#6 probe, ROADMAP rung #6):
+#
+#   (a) TIE-BREAK. loo_paired_fetch uses Counter.most_common(1), whose tie
+#       resolution is insertion-order (nondeterministic w.r.t. demo order).
+#       loo_paired_fetch_det resolves ties by an explicit action precedence,
+#       so a near-tied band bucket becomes a stable, portable decision.
+#   (b) KEY GRANULARITY. The copy-* chain keys are coarse (e.g. copy-ray keys
+#       only on `f is not None`), so one bucket mixes cells whose true action
+#       is KEEP with cells whose action is COPY -> impure majority. The finer
+#       variants add the KEEP/COPY-disambiguating `f == centre` bit (and, where
+#       it fits, register identity / distance band), splitting the impure
+#       bucket. Each finer key's non-is_bg part stays < SUB_REL_K (8) buckets so
+#       it ports to Mojo's `fetch` rel bucket without widening the 16-entry
+#       table (CONTENTFETCH_KEYS = 2 * SUB_REL_K).
+#
+# Both are scored on the EXACT copy-* fetch sources (same reads), so any gain is
+# attributable to sharper selection, not a new capability. Honesty guard:
+# scratch/calib_cfprobe.py (positives covered, support-starvation negatives 0).
+
+# action precedence for deterministic tie resolution (higher wins a vote tie).
+# COPY/KEEP (relational, generalizing) beat a memorized constant; among
+# constants the lower colour index wins (stable, mirrors a lowest-index rule).
+PREC = {"COPY": (3, 0), "KEEP": (2, 0)}
+
+
+def _det_argmax(counter):
+    """Deterministic most-common: max count, then action precedence, then a
+    stable key. Constants (int colours) rank below KEEP/COPY; lower colour
+    wins among constants."""
+    return max(
+        counter.items(),
+        key=lambda kv: (kv[1], PREC.get(kv[0], (1, -kv[0] if isinstance(
+            kv[0], int) else 0))),
+    )[0]
+
+
+def loo_paired_fetch_det(per_demo):
+    """loo_paired_fetch with DETERMINISTIC tie resolution (via _det_argmax) at
+    both the base (t2) and abstract-action (tc) decision sites. Identical
+    otherwise — same tuple shape, same net_fix accounting."""
+    n = len(per_demo)
+    if n < 2:
+        return 0.0, 0.0, 0.0, 1.0
+    total = d2_hit = ch_hit = fixed = broken = 0
+    for held in range(n):
+        t2 = {}
+        tc = {}
+        for d in range(n):
+            if d == held:
+                continue
+            for (k2, kc, f), out in per_demo[d]:
+                t2.setdefault(k2, Counter())[out] += 1
+                if out == k2:
+                    v = KEEP
+                elif f is not None and out == f:
+                    v = COPY
+                else:
+                    v = out
+                tc.setdefault(kc, Counter())[v] += 1
+        for (k2, kc, f), out in per_demo[held]:
+            total += 1
+            h2 = k2 in t2 and _det_argmax(t2[k2]) == out
+            if kc in tc:
+                v = _det_argmax(tc[kc])
+                pred = k2 if v == KEEP else f if v == COPY else v
+                hc = h2 if pred is None else pred == out
+            else:
+                hc = h2
+            d2_hit += h2
+            ch_hit += hc
+            if hc and not h2:
+                fixed += 1
+            elif h2 and not hc:
+                broken += 1
+    miss2 = total - d2_hit
+    net_fix = (fixed - broken) / miss2 if miss2 else 0.0
+    return (d2_hit / total, ch_hit / total, net_fix, miss2 / total)
+
+
+# Finer-key copy fetches: same SOURCE as the committed copy-* fetch, but the
+# chain key adds the KEEP/COPY-disambiguating `f == centre` bit (+ small,
+# portable extras). Each returns (finer_key, fetched).
+def fetch_ray_fine(P, r, c, d):
+    f = P["ray"][d][r][c]
+    ctr = P["q"][r][c]
+    # non-is_bg part in {0,1,2}: absent / present!=centre / present==centre
+    rel = 0 if f is None else (2 if f == ctr else 1)
+    return ((ctr == P["bg"], rel), f)
+
+
+def fetch_nearest_fine(P, r, c):
+    f = P["near_col"][r][c]
+    ctr = P["q"][r][c]
+    band = min(P["near_d"][r][c], 2)  # {0,1,>=2} -> banded distance (3)
+    same = 1 if f == ctr else 0
+    # non-is_bg part in {0..5} = band*2 + same  (< SUB_REL_K)
+    return ((ctr == P["bg"], band * 2 + same), f)
+
+
+def fetch_register_fine(P, r, c, reg):
+    f = P[reg]
+    ctr = P["q"][r][c]
+    # non-is_bg part in {0,1,2,3}: (f==centre) and (f==bg) both encoded
+    rel = (1 if f == ctr else 0) + (2 if f == P["bg"] else 0)
+    return ((ctr == P["bg"], rel), f)
+
+
+def fetch_anchor_fine(P, r, c, a, s):
+    anc = P["anchors"][a]
+    ctr = P["q"][r][c]
+    if anc is None:
+        return ((ctr == P["bg"], 0), None)
+    f = P["q"][(r + s * anc[0]) % P["R"]][(c + s * anc[1]) % P["C"]]
+    rel = 2 if f == ctr else 1  # present==centre / present!=centre
+    return ((ctr == P["bg"], rel), f)
+
+
+def fetch_objlocal_fine(P, r, c, axis):
+    r0, r1, c0, c1 = P["bboxes"][P["comp"][r][c]]
+    ctr = P["q"][r][c]
+    f = P["q"][r][c0 + c1 - c] if axis == "h" else P["q"][r0 + r1 - r][c]
+    rel = 2 if f == ctr else 1
+    return ((ctr == P["bg"], rel), f)
+
+
+PROBE_COPY_FAMILIES = {
+    "copy-ray": [lambda P, r, c, d=d: fetch_ray_fine(P, r, c, d)
+                 for d in ("u", "d", "l", "r")],
+    "copy-nearest": [fetch_nearest_fine],
+    "copy-registers": [
+        lambda P, r, c, g=g: fetch_register_fine(P, r, c, g)
+        for g in ("large_col", "small_col", "uniq_col", "major_col")],
+    "copy-anchor": [lambda P, r, c, a=a, s=s: fetch_anchor_fine(P, r, c, a, s)
+                    for a, s in ANCHOR_VARIANTS],
+    "copy-objlocal": [lambda P, r, c, x=x: fetch_objlocal_fine(P, r, c, x)
+                      for x in ("h", "v")],
+}
+
+
+def _score_copy(pres, demos, fn):
+    per_demo = []
+    for P, (_, og) in zip(pres, demos):
+        cells = []
+        for r in range(P["R"]):
+            for c in range(P["C"]):
+                key, f = fn(P, r, c)
+                cells.append(((P["q"][r][c], key, f), og[r][c]))
+        per_demo.append(cells)
+    return per_demo
+
+
+def scan_task_probe(demos):
+    """Two probe groups, each best-(chain_loo,net_fix,res,pi) per family across
+    geometries — same shape as scan_task so `covered` applies unchanged:
+      tb   = committed copy-* sources, DETERMINISTIC voting (isolates how much
+             of the band is pure tie nondeterminism).
+      fine = finer keys (KEEP/COPY-disambiguating bit) + deterministic voting
+             (the full sharpening)."""
+    tb = {}
+    fine = {}
+
+    def consider(store, fam, stats, pi):
+        if fam not in store or stats[1] > store[fam][1]:
+            store[fam] = (*stats, pi)
+
+    for pi in PI_NAMES:
+        qs = [apply_pi(ig, pi) for ig, _ in demos]
+        if any(q is None for q in qs):
+            continue
+        pres = [precompute(q) for q in qs]
+        for fam, variants in COPY_FAMILIES.items():  # committed coarse sources
+            for fn in variants:
+                consider(tb, fam,
+                         loo_paired_fetch_det(_score_copy(pres, demos, fn)), pi)
+        for fam, variants in PROBE_COPY_FAMILIES.items():  # finer keys
+            for fn in variants:
+                consider(fine, fam,
+                         loo_paired_fetch_det(_score_copy(pres, demos, fn)), pi)
+    return tb, fine
+
+
 # ---- rung #6 constructive editor: iterated-edit simulation ----------------
 #
 # The per-cell scan (single pass over the INPUT substrate) cannot express an
@@ -802,10 +989,11 @@ def covered(stats):
     return fx >= NET_FIX_BAR and ch >= CHAIN_LOO_BAR and res >= RESIDUAL_FLOOR
 
 
-def main(train_dump):
+def main(train_dump, probe=False):
     ids = deep_floor_ids(train_dump)
     print(f"factor scan over {len(ids)} deep-floor ids; "
-          f"cover = net_fix >= {NET_FIX_BAR} & loo >= {CHAIN_LOO_BAR}")
+          f"cover = net_fix >= {NET_FIX_BAR} & loo >= {CHAIN_LOO_BAR}"
+          + ("   [+CF-READ PROBE]" if probe else ""))
     hard_content_names = (list(CONTENT_FAMILIES) + ["fetch-anchor"]
                           + list(COPY_FAMILIES))
     soft_names = list(SOFTSCORE_FAMILIES)
@@ -813,6 +1001,8 @@ def main(train_dump):
     all_new = list(FAMILIES) + content_names
     cover_sets = {f: set() for f in all_new + list(BASELINES)}
     editor_sets = {f: set() for f in EDITOR_FAMILIES}
+    tb_sets = {f: set() for f in COPY_FAMILIES}
+    fine_sets = {f: set() for f in PROBE_COPY_FAMILIES}
     per_task = {}
     for n, tid in enumerate(ids):
         demos = load_demos(tid)
@@ -825,6 +1015,14 @@ def main(train_dump):
         for fam, (d2, ch, fx, res) in scan_editor(demos).items():
             if fx >= NET_FIX_BAR and ch >= CHAIN_LOO_BAR and res >= RESIDUAL_FLOOR:
                 editor_sets[fam].add(tid)
+        if probe:
+            tb_best, fine_best = scan_task_probe(demos)
+            for fam, stats in tb_best.items():
+                if covered(stats):
+                    tb_sets[fam].add(tid)
+            for fam, stats in fine_best.items():
+                if covered(stats):
+                    fine_sets[fam].add(tid)
         if (n + 1) % 25 == 0:
             print(f"  ... {n + 1}/{len(ids)}")
 
@@ -884,6 +1082,42 @@ def main(train_dump):
         print("  editor-incremental ids: "
               + " ".join(sorted(editor_incremental)))
 
+    if probe:
+        # PRE-REGISTERED CF-read probe gate (plan approved before this run):
+        # sharpen CF's existing content read with DETERMINISTIC fixes
+        # (tie-break + finer keys). GO to porting into Mojo write_content iff
+        # the sharpened copy-* families newly COVER >= 15 deep-floor ids the
+        # committed new-family union does NOT already reach. Below => documented
+        # STOP = rung #6's opening evidence (closed-form voting can't be
+        # deterministically sharpened -> the meta-learned read is justified).
+        tb_union = set().union(*tb_sets.values()) if tb_sets else set()
+        fine_union = set().union(*fine_sets.values()) if fine_sets else set()
+        probe_union = tb_union | fine_union
+        tb_incr = tb_union - union
+        fine_incr = fine_union - union
+        probe_incr = probe_union - union
+        print("\n== CF-READ PROBE (deterministic sharpening of the copy-* "
+              "read) ==")
+        print("  per-family covered (finer key + det vote):")
+        for fam, s in sorted(fine_sets.items(), key=lambda kv: -len(kv[1])):
+            print(f"    {fam:14s} {len(s):3d}")
+        print(f"  tie-break-only union: {len(tb_union)}"
+              f"   incremental over committed: {len(tb_incr)}")
+        print(f"  finer-key+det union:  {len(fine_union)}"
+              f"   incremental over committed: {len(fine_incr)}")
+        print(f"  PROBE union (tb | fine): {len(probe_union)}"
+              f"   incremental over committed: {len(probe_incr)}"
+              f"   (gate CFPROBE: incremental >= 15  =>  "
+              f"{'GO' if len(probe_incr) >= 15 else 'STOP'})")
+        if probe_incr:
+            print("  probe-incremental ids: " + " ".join(sorted(probe_incr)))
+            for tid in sorted(probe_incr):
+                src = "tb" if tid in tb_incr else "fine"
+                pick = fine_sets if tid in fine_union else tb_sets
+                fam = max((f for f in pick if tid in pick[f]),
+                          key=lambda f: 1)
+                print(f"    {tid}  {fam:14s} [{src}]")
+
     print("\ngreedy set cover (new families):")
     remaining = set(union)
     while remaining:
@@ -917,4 +1151,6 @@ def main(train_dump):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1] if len(sys.argv) > 1 else "scratch/arc2_train_v3.txt")
+    args = [a for a in sys.argv[1:] if a != "--probe"]
+    probe = "--probe" in sys.argv
+    main(args[0] if args else "scratch/arc2_train_v3.txt", probe=probe)

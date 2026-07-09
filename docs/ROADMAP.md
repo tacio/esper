@@ -477,10 +477,17 @@ slice is dominated by that last class (19/39).
    *family*): a single flat prior across a heterogeneous stream washes out — the fix is per-family
    structure that is itself emergent (the Schug hypernetwork route, RESEARCH-NOTES #2: per-task
    code × shared templates) and/or the CMS frequency hierarchy (#5), where slow blocks consolidate
-   what fast blocks keep re-discovering. **Pre-rung probe (cheap, measure-first):** a day-scale
-   Python check of whether the band's LOO inconsistency yields to DETERMINISTIC fixes
-   (tie-breaking / key granularity) in the scan harness — a cheap win if yes, the rung's opening
-   evidence if no. **Serves both visions**: on Vision A it is the meta-learned prior at corpus
+   what fast blocks keep re-discovering. **Pre-rung probe — DONE (2026-07-09): STOP → this rung's
+   opening evidence.** The day-scale Python check (`tools/factor_scan.py --probe`, additive/
+   bit-identical default; `scratch/cfprobe_scan_v1.txt`) found the band's LOO inconsistency does
+   **not** yield to deterministic fixes: a deterministic tie-break converts **+0** band ids (not
+   tie nondeterminism) and finer colour-abstract keys **+1** (≪ the pre-registered ≥15 bar). The
+   calibration (`scratch/calib_cfprobe.py`, GUARD PASS, 0/20 false-covers) grounds it structurally:
+   an `f == centre` key bit is **provably vacuous** for KEEP vs COPY (the actions coincide exactly
+   when it fires), so the only discriminating bits are colour/object-IDENTITY keys — which the
+   content scan already found stay near 0. The band is therefore CF's **selection consistency at
+   2–3 demos**, fixable only by a content-dependent (i.e. **meta-learned**) read — exactly this
+   rung. (JOURNAL 2026-07-09 19:45.) **Serves both visions**: on Vision A it is the meta-learned prior at corpus
    scale; it is also the tabled **first rung of Vision B** — the same persistence machinery,
    later driven by self-generated novelty instead of demonstration pairs.
 

@@ -1981,3 +1981,51 @@ baseline is cleaner than the raw ±: every rung's booked corpus value landed whe
 predicted. v4 result files: `scratch/arc2_{train,eval}_v4.txt`; comparison script
 `scratch/v4_compare.py`. This is the "before" number for whatever comes next (the rung #6
 circle-back or the CF-read probe).
+
+## 2026-07-09 — CF-read probe: deterministic sharpening STOPs (+1 ≪ 15) → rung #6's opening evidence
+
+**19:45 — the pre-rung-#6 measure-first probe (ROADMAP rung #6, plan-approved).** With the v4
+baseline booked, the roadmap gates rung #6 behind one cheap Python check: *does the ~72-id
+partial-fix band's LOO inconsistency yield to DETERMINISTIC fixes (tie-breaking / key granularity)
+in the scan harness?* A cheap win → sharpen CF's written read in Mojo; a negative → the documented
+opening evidence that the closed-form read needs a **meta-learned** replacement (the actual value
+of rung #6). Built additively in `tools/factor_scan.py` behind a `--probe` flag (the default board
+stays **bit-identical** — verified by diff), so nothing committed moves:
+
+- **(a) Deterministic tie-break** (`loo_paired_fetch_det` + `_det_argmax`): replaces
+  `Counter.most_common(1)` (insertion-order ties) at both the base and abstract-action decision
+  sites with an explicit precedence (COPY/KEEP beat a memorized constant; lower colour wins among
+  constants). Scores the EXACT committed copy-* sources, isolating how much of the band is pure tie
+  nondeterminism.
+- **(b) Finer keys** (`PROBE_COPY_FAMILIES`): the same copy-* sources with the
+  KEEP/COPY-disambiguating `f == centre` bit (+ small portable extras: register-vs-bg, nearest
+  distance-band), each kept < `SUB_REL_K = 8` buckets so a winner would port into Mojo's `fetch`
+  rel without widening the 16-entry `CONTENTFETCH_KEYS` table.
+
+**Result (`scratch/cfprobe_scan_v1.txt`, over the 146 deep-floor ids):**
+
+- **tie-break-only incremental over the committed union: +0.** The band's inconsistency is *not*
+  arbitrary tie resolution — a deterministic vote breaks nothing loose.
+- **finer-key incremental: +1** (only `9ddd00f0`, via `copy-nearest`).
+- **PROBE union incremental: 1 — GATE CFPROBE (pre-registered ≥15 ⇒ GO): STOP.**
+
+**The calibration surfaced *why* — a clean theoretical finding, not a weak proxy**
+(`scratch/calib_cfprobe.py`, GUARD PASS: **0/20 false-covers** on both a pure-recolor and a
+random-output/support-starvation negative, for coarse and finer alike). On the KEEP/COPY-split
+positive **finer AND coarse both cover 20/20** — because an **`f == centre` key bit is provably
+VACUOUS for KEEP vs COPY**: exactly when it fires (fetched == centre) the two actions emit the same
+colour, so it can never separate them; when it does not fire, the key is the coarse one. The only
+KEEP/COPY-discriminating bits are colour/object-**IDENTITY** keys — and the content scan already
+found those "stay near 0" (JOURNAL 2026-07-08: coverage is copy-through semantics, *not* richer
+keys). So the STOP is doubly grounded: empirically (+1) and structurally (the abstract-relational
+key space has no deterministic granularity left to spend on the band).
+
+**What the probe relocates.** The band is not tie nondeterminism (a-fix +0) and not a missing
+colour-abstract key bit (b-fix +1, vacuity proof). It is CF's **selection consistency at 2–3
+demos**: `copy-*` families graze the right source at LOO 0.70–0.90 but the closed-form voted table
+can't cross 0.90 without a *content-dependent* read that a fixed abstract key can't encode. That is
+precisely the case for a **meta-learned read/write rule whose slow weights consolidate across the
+task stream** — rung #6's headline. Two rungs' worth of Mojo build again averted by a ~day-scale
+Python scan; measure-first held. Files: `tools/factor_scan.py` (`--probe`, additive),
+`scratch/calib_cfprobe.py`, `scratch/cfprobe_scan_v1.txt`, baseline `scratch/cfprobe_baseline.txt`.
+No `src/` (Mojo) touched — Phase 2 was gated on GO.
