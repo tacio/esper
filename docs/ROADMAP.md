@@ -487,7 +487,25 @@ slice is dominated by that last class (19/39).
    when it fires), so the only discriminating bits are colour/object-IDENTITY keys — which the
    content scan already found stay near 0. The band is therefore CF's **selection consistency at
    2–3 demos**, fixable only by a content-dependent (i.e. **meta-learned**) read — exactly this
-   rung. (JOURNAL 2026-07-09 19:45.) **Serves both visions**: on Vision A it is the meta-learned prior at corpus
+   rung. (JOURNAL 2026-07-09 19:45.)
+   **Increment 1 — the cross-task meta-read probe: GATE CF6 STOP (2026-07-09, robust).** Before
+   building any Mojo, a second day-scale probe (`tools/factor_scan.py --meta-probe`, additive/
+   bit-identical default; `scratch/cf6probe_scan_v1.txt`) tested the *actual bet* of this rung — that
+   the identity keys near-0 **per task** become informative when their weighting is **consolidated
+   across the band** (one shared "slow" selection read, a multinomial-logistic surrogate of the Mojo
+   `softmax(τ·(W·feat+b))` head, fit over a train split of band tasks and scored on held-out). It does
+   **not**: **held-out covered = 0** on the pre-registered band (18 ids) and **0 at every wider band
+   out to 84 ids** (`scratch/cf6probe_sensitivity.py`, ≈ the ~72 near-miss population), under both the
+   logistic fit and an ES-over-the-same-read guard. Not a broken harness: the calibration
+   (`scratch/calib_cf6probe.py`, GUARD PASS) covers **24/24 held-out** on synth positives whose rule
+   IS a shared cross-task read, 0 false-covers on three negatives — including a NO-SHARED-STRUCTURE
+   control with train-acc 0.75 yet 0 held-out (the split provably detects overfitting). **Verdict:**
+   the band's selection inconsistency is genuinely **per-task**; a **flat shared prior does not move
+   it** — the measured form of the "single flat prior across a heterogeneous stream washes out"
+   hazard above. So this rung **re-scopes**: the justified path is **per-family / emergent structure**
+   (the Schug hypernetwork — per-task code × shared templates, RESEARCH-NOTES #2 — and/or the CMS
+   frequency hierarchy, #5), **not** a flat meta-learned read + persistence. (JOURNAL 2026-07-09
+   20:52; no `src/` touched — increment 2 was gated on GO.) **Serves both visions**: on Vision A it is the meta-learned prior at corpus
    scale; it is also the tabled **first rung of Vision B** — the same persistence machinery,
    later driven by self-generated novelty instead of demonstration pairs.
 

@@ -2029,3 +2029,59 @@ task stream** — rung #6's headline. Two rungs' worth of Mojo build again avert
 Python scan; measure-first held. Files: `tools/factor_scan.py` (`--probe`, additive),
 `scratch/calib_cfprobe.py`, `scratch/cfprobe_scan_v1.txt`, baseline `scratch/cfprobe_baseline.txt`.
 No `src/` (Mojo) touched — Phase 2 was gated on GO.
+
+### 2026-07-09 20:52 — Rung #6, increment 1: the cross-task meta-read probe — GATE CF6 STOP (0/band, robust)
+
+**Started rung #6** (persistent slow weights + task-stream; the real payload is replacing CF's
+closed-form voted read with a *meta-learned* read whose slow weights consolidate across the stream).
+Per the measure-first discipline — and the user's decision (probe first; build the stream driver
+only after a read GOes) — increment 1 is a **cheap Python probe of the bet rung #6 makes**, not a
+Mojo build. The CF-read probe (19:45 above) proved the band doesn't yield to *deterministic*
+sharpening and that the only KEEP/COPY-discriminating bits are colour/object-**identity** keys —
+which the **per-task** 3-demo vote finds near-0. The untested question: do those identity features
+become informative when their weighting is **consolidated ACROSS the band** (one shared "slow" read
+vector)? This probe measures exactly that, before any Mojo.
+
+**Mechanism** (`tools/factor_scan.py --meta-probe`, additive; default board **bit-identical** —
+`main()` untouched, verified by `git diff`): (1) select the copy-* partial-fix band (best copy-*
+at LOO 0.70–0.90, net_fix 0.25–0.50, uncovered); (2) per cell build an **identity feature vector**
+the colour-abstract vote discards — rank/symmetry-normalized, *never raw colour* (the #1 false-GO
+leak): is_bg, f-present, f==centre, f==bg, centre/fetched freq-rank one-hots, size-rank / largest /
+smallest, bbox-pos, nearest-distance band, ray/register agreement — plus the KEEP/COPY/CONST action
+label `loo_paired_fetch` votes over; (3) fit **ONE shared multinomial-logistic selection read**
+over cells pooled across a *train split* of band tasks (mirrors the Mojo SelfModMemory
+`a=softmax(τ·(W·feat+b))` head; W is pure selection, the CONST value stays the per-task fast write);
+(4) freeze W, score each held-out band task by per-task LOO (only CONST written from that task's own
+demos — Mojo slow-frozen / fast-from-demos), count newly `covered` ids; (5) 4-fold. Pre-registered
+**GATE CF6: held-out covered ≥ 15 ⇒ GO** (port to a Mojo `ContentFetchSelfMod` + stream driver);
+< 15 ⇒ STOP.
+
+**Result (`scratch/cf6probe_scan_v1.txt`): band = 18, held-out covered = 0/18 — GATE CF6 STOP.**
+All four variants agree: PRIMARY (all features) 0, portable-features-only 0, CONST-disabled 0, and
+the ES-over-the-same-linear-read guard 0. And it is **robust to the band definition**
+(`scratch/cf6probe_sensitivity.py`, one extra scan): widening the band to chain[0.60,0.90)/fix≥0.20
+(45 ids), chain[0.50,0.90)/fix≥0.10 (58), and MAX = *any* uncovered copy-* chain<0.90/fix>0 (84 ids,
+≈ the ~72 near-miss population) **all still give held-out covered = 0** under both logistic and ES.
+
+**Why this is a true negative, not a broken harness.** The calibration
+(`scratch/calib_cf6probe.py`, GUARD PASS) runs the *same* shared-fit / held-out pipeline and
+**covers 24/24 held-out** on two synth positives whose generating rule IS a shared cross-task
+content read (COPY-iff-largest-component; COPY-iff-most-common-nonbg-colour) — rules the
+colour-abstract vote provably can't express — while yielding **0 false-covers** on all three
+negatives, including the critical **NO-SHARED-STRUCTURE** control (each task an independent random
+rule): there, train action-accuracy is 0.75 (high) yet held-out coverage is 0, proving the k-fold
+split *detects* overfitting and the probe cannot hallucinate coverage by memorizing the train split.
+So the pipeline demonstrably lights up when shared structure exists — and stays dark on the real
+band.
+
+**What it means for rung #6 (the re-scope).** The copy-* band's selection inconsistency is genuinely
+**per-task** — there is no flat shared selection rule over identity/content features that separates
+KEEP/COPY and generalizes across held-out band tasks. This is the *measured* form of the hazard the
+ROADMAP flagged from day one: **a single flat prior across a heterogeneous stream washes out.** So
+rung #6's naive framing (persist slow weights + one meta-learned read) will not move the band; the
+justified path is **per-family / emergent structure** — the Schug hypernetwork (per-task code ×
+shared templates, RESEARCH-NOTES #2) and/or the CMS frequency hierarchy (#5) — not a flat prior.
+A multi-day Mojo build (new SelfModMemory + stream driver) averted by a ~day-scale Python probe;
+measure-first held again. No `src/` (Mojo) touched — increment 2 was gated on GO. Files:
+`tools/factor_scan.py` (`--meta-probe`, additive), `scratch/calib_cf6probe.py`,
+`scratch/cf6probe_scan_v1.txt`, `scratch/cf6probe_sensitivity.py` + `.txt`.

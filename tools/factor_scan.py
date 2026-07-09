@@ -989,6 +989,342 @@ def covered(stats):
     return fx >= NET_FIX_BAR and ch >= CHAIN_LOO_BAR and res >= RESIDUAL_FLOOR
 
 
+# ---- rung #6 probe: does a CROSS-TASK (meta-learned) content read separate
+# the copy-* band that the per-task closed-form vote cannot? ----------------
+#
+# The CF-read probe (--probe) showed the band does not yield to DETERMINISTIC
+# sharpening: the only KEEP/COPY-discriminating bits are colour/object-IDENTITY
+# keys, which the PER-TASK 3-demo vote finds near-0 (voting starves at 3 demos).
+# Rung #6's bet: those identity features become informative when their WEIGHTING
+# is CONSOLIDATED ACROSS the band (one shared "slow" read vector). This block
+# measures exactly that, offline in Python, before any Mojo:
+#   1. select the ~72-id copy-* band (best copy-* at LOO 0.70-0.90, fix
+#      0.25-0.5, res>=floor, NOT covered by any committed family);
+#   2. build a per-cell IDENTITY feature vector (rank/symmetry-normalized, never
+#      raw colour) the colour-abstract vote discards, + the KEEP/COPY/CONST
+#      action label loo_paired_fetch votes over;
+#   3. fit ONE shared multinomial-logistic SELECTION read over cells pooled
+#      ACROSS a train split of band tasks (mirrors the Mojo SelfModMemory
+#      softmax head a=softmax(tau*(W.feat+b)); W is pure selection, the CONST
+#      value is the per-task fast write, never in W);
+#   4. freeze W, score each held-out band task with per-task LOO (only the CONST
+#      value is written from that task's OWN demos), count newly `covered` ids;
+#   5. GATE CF6: held-out covered >= 15 => GO (port to a Mojo ContentFetchSelfMod
+#      + stream driver); < 15 => STOP (consolidation ALSO fails to separate ->
+#      rung #6 re-scopes to per-family/emergent structure). Guards printed:
+#      rank/sym colour only; portable-feature-only; CONST-disabled; ES-vs-logistic
+#      (a clean GO wants logistic>=15 AND ES>=10, else optimizer-dependent).
+#      Honesty guard: scratch/calib_cf6probe.py (shared fit, held-out scored,
+#      0 false-covers incl. a NO-SHARED-STRUCTURE negative that must not be
+#      memorized across the train/test split).
+
+META_RANK_CAP = 4  # colour freq-rank buckets 0..3, >=4
+META_SIZE_CAP = 3  # component size-rank buckets 0..2, >=3
+KEEP_I, COPY_I, CONST_I = 0, 1, 2
+
+# feature layout: (name, portable-to-Mojo-ContentFetch-substrate?). The
+# non-portable dims (raw colour freq-rank one-hots, global register agreement)
+# are the ones a per-task Mojo read + GridSubstrate cannot cleanly express; the
+# portable-only ablation must itself clear the gate for a trustworthy GO.
+META_FEATURES = (
+    ("bias", True), ("is_bg", True), ("f_present", True),
+    ("f_eq_centre", True), ("f_eq_bg", True),
+    ("crank0", False), ("crank1", False), ("crank2", False),
+    ("crank3", False), ("crank4", False),
+    ("frank0", False), ("frank1", False), ("frank2", False),
+    ("frank3", False), ("frank4", False),
+    ("srank0", True), ("srank1", True), ("srank2", True), ("srank3", True),
+    ("is_largest", True), ("is_smallest", True),
+    ("pos_corner", True), ("pos_edge", True), ("pos_in", True), ("pos_bg", True),
+    ("nd0", True), ("nd1", True), ("nd2", True),
+    ("ray_agree", True), ("reg_agree", False),
+)
+META_DIM = len(META_FEATURES)
+META_PORTABLE = [i for i, (_, p) in enumerate(META_FEATURES) if p]
+
+
+def _meta_vec(P, r, c, f):
+    """Per-cell identity/relational features (rank/symmetry-normalized, NEVER a
+    raw colour index — the #1 false-GO leak). f = the copy-* fetched colour."""
+    q, bg = P["q"], P["bg"]
+    ctr = q[r][c]
+    is_bg = ctr == bg
+    v = [0.0] * META_DIM
+    v[0] = 1.0  # bias
+    v[1] = 1.0 if is_bg else 0.0
+    v[2] = 1.0 if f is not None else 0.0
+    v[3] = 1.0 if (f is not None and f == ctr) else 0.0
+    v[4] = 1.0 if (f is not None and f == bg) else 0.0
+    v[5 + min(P["rank"][ctr], META_RANK_CAP)] = 1.0
+    if f is not None:
+        v[10 + min(P["rank"].get(f, META_RANK_CAP), META_RANK_CAP)] = 1.0
+    if not is_bg:
+        i = P["comp"][r][c]
+        s = P["sizes"][i]
+        v[15 + min(P["size_rank"].get(s, META_SIZE_CAP), META_SIZE_CAP)] = 1.0
+        v[19] = 1.0 if s == P["big"] else 0.0
+        v[20] = 1.0 if s == P["small"] else 0.0
+        r0, r1, c0, c1 = P["bboxes"][i]
+        on_r, on_c = r in (r0, r1), c in (c0, c1)
+        v[21 if (on_r and on_c) else 22 if (on_r or on_c) else 23] = 1.0
+    else:
+        v[24] = 1.0  # pos_bg
+    v[25 + min(P["near_d"][r][c], 2)] = 1.0
+    if f is not None:
+        rays = P["ray"]
+        v[28] = sum(rays[d][r][c] == f for d in ("u", "d", "l", "r")) / 4.0
+        regs = (P["large_col"], P["small_col"], P["uniq_col"], P["major_col"])
+        v[29] = sum(x is not None and x == f for x in regs) / 4.0
+    return v
+
+
+def _meta_label(k2, f, out):
+    """The abstract action loo_paired_fetch votes over. f==centre & out==centre
+    collapses KEEP==COPY -> labelled KEEP (both predict centre anyway)."""
+    if out == k2:
+        return KEEP_I
+    if f is not None and out == f:
+        return COPY_I
+    return CONST_I
+
+
+def _best_copy(demos):
+    """Best copy-* family by chain_loo across PIs (the winning source the probe
+    fits its shared read over). Returns (stats4, fam, fn, pi) or None."""
+    best = None
+    for pi in PI_NAMES:
+        qs = [apply_pi(ig, pi) for ig, _ in demos]
+        if any(q is None for q in qs):
+            continue
+        pres = [precompute(q) for q in qs]
+        for fam, variants in COPY_FAMILIES.items():
+            for fn in variants:
+                stats = loo_paired_fetch(_score_copy(pres, demos, fn))
+                if best is None or stats[1] > best[0][1]:
+                    best = (stats, fam, fn, pi)
+    return best
+
+
+def _meta_task_cells(demos, fn, pi):
+    """Per-demo list of (feature-vec, centre, kc-bucket, fetched, out) on the
+    winning copy-* source, PI-mapped exactly as the source was scored."""
+    qs = [apply_pi(ig, pi) for ig, _ in demos]
+    pres = [precompute(q) for q in qs]
+    per_demo = []
+    for P, (_, og) in zip(pres, demos):
+        cells = []
+        for r in range(P["R"]):
+            for c in range(P["C"]):
+                key, f = fn(P, r, c)
+                cells.append(
+                    (_meta_vec(P, r, c, f), P["q"][r][c], key, f, og[r][c]))
+        per_demo.append(cells)
+    return per_demo
+
+
+def _balanced_w(y):
+    import numpy as np
+    freq = np.bincount(y, minlength=3).astype(float)
+    freq[freq == 0] = 1.0
+    w = 1.0 / freq
+    return w[y] / w[y].mean()
+
+
+def _fit_softmax(X, y, sw, l2=1.0, steps=400, lr=0.5):
+    """L2-regularized multinomial logistic (the Mojo softmax head's convex
+    surrogate). Deterministic full-batch GD."""
+    import numpy as np
+    n, D = X.shape
+    W = np.zeros((3, D))
+    Y = np.zeros((n, 3))
+    Y[np.arange(n), y] = 1.0
+    swc = sw[:, None]
+    for _ in range(steps):
+        Z = X @ W.T
+        Z -= Z.max(1, keepdims=True)
+        Pr = np.exp(Z)
+        Pr /= Pr.sum(1, keepdims=True)
+        g = ((Pr - Y) * swc).T @ X / n + l2 * W / n
+        W -= lr * g
+    return W
+
+
+def _fit_es(X, y, sw, restarts=5, steps=120, pop=24, sigma=0.6, seed=0):
+    """Random-restart antithetic ES over the SAME linear read, maximizing
+    train weighted action-accuracy — the optimizer-fragility guard (a separator
+    the convex logistic finds should survive a derivative-free search)."""
+    import numpy as np
+    rng = np.random.default_rng(seed)
+    n, D = X.shape
+
+    def acc(W):
+        return float((sw * (np.argmax(X @ W.T, 1) == y)).sum())
+
+    best_W, best = None, -1.0
+    for _ in range(restarts):
+        W = rng.standard_normal((3, D)) * 0.3
+        cur = acc(W)
+        s = sigma
+        for _ in range(steps):
+            E = rng.standard_normal((pop, 3, D))
+            grad = np.zeros((3, D))
+            for e in E:
+                grad += (acc(W + s * e) - acc(W - s * e)) * e
+            W = W + (0.1 / (pop * s)) * grad
+            s *= 0.985
+            cur = acc(W)
+        if cur > best:
+            best, best_W = cur, W.copy()
+    return best_W
+
+
+def covered4(stats):
+    _d2, ch, fx, res = stats
+    return fx >= NET_FIX_BAR and ch >= CHAIN_LOO_BAR and res >= RESIDUAL_FLOOR
+
+
+def _score_meta(demos, predict, no_const=False):
+    """Held-out band scoring: per-task LOO exactly like loo_paired_fetch, but
+    the KEEP/COPY/CONST DECISION is the frozen shared `predict(X)`; only the
+    CONST VALUE (tcout) and the identity baseline (t2) are written from the
+    task's OWN demos (matching Mojo slow-frozen / fast-from-demos). demos =
+    list of (X, k2s, kcs, fs, outs)."""
+    n = len(demos)
+    if n < 2:
+        return (0.0, 0.0, 0.0, 1.0)
+    total = d2 = ch = fixed = broken = 0
+    for held in range(n):
+        t2, tcout = {}, {}
+        for d in range(n):
+            if d == held:
+                continue
+            _X, k2s, kcs, _fs, outs = demos[d]
+            for k2, kc, out in zip(k2s, kcs, outs):
+                t2.setdefault(k2, Counter())[out] += 1
+                tcout.setdefault(kc, Counter())[out] += 1
+        Xh, k2s, kcs, fs, outs = demos[held]
+        acts = predict(Xh)
+        for i in range(len(outs)):
+            total += 1
+            k2, kc, f, out = k2s[i], kcs[i], fs[i], outs[i]
+            h2 = k2 in t2 and _det_argmax(t2[k2]) == out
+            a = acts[i]
+            if a == KEEP_I:
+                pred = k2
+            elif a == COPY_I:
+                pred = f
+            elif no_const:
+                pred = None
+            else:
+                pred = _det_argmax(tcout[kc]) if kc in tcout else None
+            hc = h2 if pred is None else pred == out
+            d2 += h2
+            ch += hc
+            if hc and not h2:
+                fixed += 1
+            elif h2 and not hc:
+                broken += 1
+    miss2 = total - d2
+    net_fix = (fixed - broken) / miss2 if miss2 else 0.0
+    return (d2 / total, ch / total, net_fix, miss2 / total)
+
+
+def meta_probe_run(tasks, cols, fitter, no_const=False, folds=4):
+    """k-fold over the band tasks: fit ONE shared read on the train folds'
+    pooled cells, freeze it, score each held-out band task. Returns the set of
+    held-out tids newly `covered4`."""
+    import numpy as np
+    covered_ids = set()
+    for fold in range(folds):
+        train = [t for i, t in enumerate(tasks) if i % folds != fold]
+        test = [t for i, t in enumerate(tasks) if i % folds == fold]
+        if not train or not test:
+            continue
+        Xs, ys = [], []
+        for t in train:
+            for (X, k2s, _kcs, fs, outs) in t["demos"]:
+                Xs.append(X[:, cols])
+                ys.append(np.fromiter(
+                    (_meta_label(k2s[i], fs[i], outs[i])
+                     for i in range(len(outs))), int, len(outs)))
+        X = np.concatenate(Xs)
+        y = np.concatenate(ys)
+        W = fitter(X, y, _balanced_w(y))
+
+        def predict(Xh, W=W):
+            return np.argmax(Xh[:, cols] @ W.T, 1)
+
+        for t in test:
+            if covered4(_score_meta(t["demos"], predict, no_const=no_const)):
+                covered_ids.add(t["tid"])
+    return covered_ids
+
+
+def meta_probe(train_dump):
+    import numpy as np
+    np.random.seed(0)
+    ids = deep_floor_ids(train_dump)
+    print(f"rung #6 cross-task meta-read probe over {len(ids)} deep-floor ids")
+
+    # 1. band = best copy-* in the partial-fix range AND not committed-covered.
+    band = []
+    for n, tid in enumerate(ids):
+        demos = load_demos(tid)
+        committed_cov = any(covered(s) for s in scan_task(demos).values())
+        bc = _best_copy(demos)
+        if bc is not None and not committed_cov:
+            (_d2, ch, fx, res), fam, fn, pi = bc
+            if 0.70 <= ch < 0.90 and 0.25 <= fx < 0.50 and res >= RESIDUAL_FLOOR:
+                band.append((tid, fam, fn, pi))
+        if (n + 1) % 25 == 0:
+            print(f"  ... band scan {n + 1}/{len(ids)}  (band so far {len(band)})")
+    print(f"\nband = {len(band)} copy-* near-miss ids (LOO 0.70-0.90, "
+          f"fix 0.25-0.50, uncovered); baseline covered = 0/band by construction")
+    if len(band) < 8:
+        print("band too small to k-fold; GATE CF6 => STOP (no consolidation "
+              "signal to measure)")
+        return
+
+    # 2. materialize per-cell features/labels on each band task's winning source.
+    tasks = []
+    for tid, _fam, fn, pi in band:
+        dm = []
+        for cells in _meta_task_cells(load_demos(tid), fn, pi):
+            dm.append((
+                np.array([c[0] for c in cells]),
+                [c[1] for c in cells], [c[2] for c in cells],
+                [c[3] for c in cells], [c[4] for c in cells]))
+        tasks.append({"tid": tid, "demos": dm})
+
+    allc = list(range(META_DIM))
+    # 3-4. the primary run + the four false-GO guard ablations.
+    full = meta_probe_run(tasks, allc, _fit_softmax)
+    portable = meta_probe_run(tasks, META_PORTABLE, _fit_softmax)
+    noconst = meta_probe_run(tasks, allc, _fit_softmax, no_const=True)
+    es = meta_probe_run(tasks, allc, _fit_es)
+
+    def pct(s):
+        return f"{len(s):3d}/{len(band)}"
+
+    print("\n== GATE CF6 (cross-task meta-learned selection read) ==")
+    print(f"  PRIMARY  logistic, all features:   held-out covered {pct(full)}")
+    print(f"  guard    portable features only:   held-out covered {pct(portable)}"
+          f"   (must also clear 15)")
+    print(f"  guard    CONST disabled (KEEP/COPY):held-out covered {pct(noconst)}"
+          f"   (most of PRIMARY must survive)")
+    print(f"  guard    ES over same linear read: held-out covered {pct(es)}"
+          f"   (clean GO wants >=10)")
+    go = len(full) >= 15 and len(portable) >= 15 and len(es) >= 10
+    print(f"\n  GATE CF6: PRIMARY >= 15 AND portable >= 15 AND ES >= 10  =>  "
+          f"{'GO' if go else 'STOP'}   (PRIMARY={len(full)}, "
+          f"portable={len(portable)}, ES={len(es)})")
+    if len(full) >= 15 and not go:
+        print("  NOTE: PRIMARY cleared but a guard did not -> optimizer- or "
+              "leak-dependent; treat as STOP (untrustworthy GO).")
+    if full:
+        print("  held-out covered ids: " + " ".join(sorted(full)))
+
+
 def main(train_dump, probe=False):
     ids = deep_floor_ids(train_dump)
     print(f"factor scan over {len(ids)} deep-floor ids; "
@@ -1151,6 +1487,10 @@ def main(train_dump, probe=False):
 
 
 if __name__ == "__main__":
-    args = [a for a in sys.argv[1:] if a != "--probe"]
-    probe = "--probe" in sys.argv
-    main(args[0] if args else "scratch/arc2_train_v3.txt", probe=probe)
+    flags = ("--probe", "--meta-probe")
+    args = [a for a in sys.argv[1:] if a not in flags]
+    dump = args[0] if args else "scratch/arc2_train_v3.txt"
+    if "--meta-probe" in sys.argv:
+        meta_probe(dump)
+    else:
+        main(dump, probe="--probe" in sys.argv)
