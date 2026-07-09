@@ -44,10 +44,10 @@ learns both *what* to think and, eventually, *how* to learn.
 
 - **Vision A — ARC-AGI 2 (current, active).** Raw held-out solve rate on the real ARC-AGI-2 corpus
   (`arc_solve --report`) via composable, emergent, self-modifying memories fit in-context by ES —
-  currently **22/1000 (train) / 0/120 (eval)** at the v3 measure (shape seam wired: 9 shape-changing
-  solves + few-demo hardening's +3; v2 was 10/1000, the M8 operator ceiling 5/1000); Rung C
-  (colour-on-shape) is synth-proven and wired, its corpus **v4** re-measure the next overnight
-  trigger. See "Next — the path to full ARC-AGI 2" below for the measurable rungs. Still hands the engine *goals* (a task's demonstration pairs are
+  currently **41/1000 (train) / 0/120 (eval)** at the **v4** measure (2026-07-09: Rungs A-build +
+  C + D + CF booked; same-shape corpus mean 0.806 train / 0.778 eval; v3 was 22/1000, v2 10/1000,
+  the M8 operator ceiling 5/1000). See "Next — the path to full ARC-AGI 2" below for the
+  measurable rungs. Still hands the engine *goals* (a task's demonstration pairs are
   compressed supervision) even though it never hands it a DSL.
 - **Vision B — open-ended mastery (WIP — not yet started, no design work done).** Inspired by
   Random Network Distillation, open-endedness, and unsupervised RL: an agent that masters its
@@ -323,9 +323,12 @@ slice is dominated by that last class (19/39).
 1. **Rung C — colour on top of shape — DONE (synth-proven + wired; corpus v4 deferred).** Landed as
    `ShapeGeomColorComposedMemory` (see "Status — done" above). The count-conservation kernel resolved
    via scale-invariant FRACTION signatures (contrast-preconditioned) + a measured global recolor
-   acceptance gate that preserves the pure-shape strict superset. Remaining: the **corpus v4
-   re-measure** (both splits, documented budget — the separate overnight trigger) to book the shape-
-   slice gain on the ~107 convertible train tasks + eval analogues; and the crop-border-loss
+   acceptance gate that preserves the pure-shape strict superset. The **corpus v4 re-measure is
+   DONE (2026-07-09)**: train **41/1000** (v3 22; same-shape 13→23 solves from CF, shape 9→18 from
+   C+D), eval 0/120 with mean 0.404→0.543 (same-shape slice 0.572→0.778; the shape slice's 0.054
+   stasis re-confirms Rung S). Two diagnosed in-sample branch flips, bisected to their rungs
+   (8597cfd7: a luck-solve lost to Rung C's better demo explanation; 963e52fc: Rung D's reflect
+   frame winning a near-tie in-sample, 1.0→0.89) — recorded, not fought. The crop-border-loss
    correspondence-write fallback stays documented (not needed — fractions + contrast sufficed).
 2. **Rung S — shape-from-content — AUDIT RETURNED STOP (documented negative, 2026-07-05).** The
    measure-first gate (`tools/shape_from_content.py`, over the exact 63 train / 19 eval dims-never-fit
@@ -454,19 +457,31 @@ slice is dominated by that last class (19/39).
    re-proven at their held-out bars + a fitness-level parity test (`test_gpu_parity`); CPU stays
    the reference (`arc_solve --cpu`, `ESPER_CPU=1` for the harness). The CMS chain and the
    task-stream (#6) now start from the GPU-budget baseline.
-6. **Persistent slow weights + task-stream (continual meta-learning).** Stop re-seeding cold per
-   task: the engine processes a **stream** of tasks and its slow weights **persist**, Reptile-nudged
-   after each in-context fit (M9's outer loop made continual — the prior is never reset). Measurable,
-   in order of strength: (a) at a fixed *narrow* eval budget, solve rate / fit speed **improves with
-   stream position** — "gets more intelligent through its own experience", the mission made a number;
-   (b) **no catastrophic forgetting** — tasks from early families still solve at stream end; (c) the
-   honest controls: a frozen-prior baseline and a shuffled stream (order-insensitivity of the final
-   prior). Known hazard to design around (the M9 lesson: priors help within a *family*): a single
-   flat prior across a heterogeneous stream washes out — the fix is per-family structure that is
-   itself emergent (the Schug hypernetwork route, RESEARCH-NOTES #2: per-task code × shared
-   templates) and/or the CMS frequency hierarchy (#5), where slow blocks consolidate what fast
-   blocks keep re-discovering. **Serves both visions**: on Vision A it is the meta-learned prior at
-   corpus scale; it is also the tabled **first rung of Vision B** — the same persistence machinery,
+6. **Persistent slow weights + task-stream (continual meta-learning) — SHARPENED (2026-07-09
+   discussion; JOURNAL that date).** Stop re-seeding cold per task: the engine processes a
+   **stream** of tasks and its slow weights **persist**, Reptile-nudged after each in-context fit
+   (M9's outer loop made continual — the prior is never reset). **The reframe from the 2026-07-09
+   discussion: persistence alone won't add solves** (the budget-raise experiment proved the corpus
+   compute-insensitive; a faster fit of the same memories solves the same tasks) — the rung's value
+   is **expressiveness-through-consolidation**: replace the closed-form WRITTEN reads (CF's voted
+   action table, LocalWrite's n-gram table, the salience scorers) with small **meta-learned
+   read/write rules** whose slow weights improve across the stream — the principled fix for the
+   3-demo regime where closed-form LOO voting starves, and the convergence point of Rung A-build's
+   verdict ("needs a richer/meta-trained local read") and the CF partial-fix band (~72 ids of
+   `copy-*` selection INCONSISTENCY, LOO 0.70–0.90). Measurable, in order of strength: (a) **solves
+   on the exhibit band (~72 near-miss ids + 17 chain-partials) improve with stream position** —
+   "gets more intelligent through its own experience", the mission made a number; (b) **no
+   catastrophic forgetting** — tasks from early families still solve at stream end; (c) the honest
+   controls: a frozen-prior baseline and a shuffled stream (order-insensitivity of the final
+   prior). Known hazard to design around from day one (the M9 lesson: priors help within a
+   *family*): a single flat prior across a heterogeneous stream washes out — the fix is per-family
+   structure that is itself emergent (the Schug hypernetwork route, RESEARCH-NOTES #2: per-task
+   code × shared templates) and/or the CMS frequency hierarchy (#5), where slow blocks consolidate
+   what fast blocks keep re-discovering. **Pre-rung probe (cheap, measure-first):** a day-scale
+   Python check of whether the band's LOO inconsistency yields to DETERMINISTIC fixes
+   (tie-breaking / key granularity) in the scan harness — a cheap win if yes, the rung's opening
+   evidence if no. **Serves both visions**: on Vision A it is the meta-learned prior at corpus
+   scale; it is also the tabled **first rung of Vision B** — the same persistence machinery,
    later driven by self-generated novelty instead of demonstration pairs.
 
 ## Beyond ARC-AGI 2

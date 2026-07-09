@@ -1894,3 +1894,90 @@ dominated by `copy-*` families sitting at LOO 0.70–0.90 (just under the 0.90 b
 The next rung, on this evidence, is **sharpening CF's existing content read** (key granularity /
 tie-breaking / LOO consistency on the band), not a new memory family. No Mojo built for either
 phase — measure-first held: two rungs' worth of build averted by two ~10-minute scans.
+
+## 2026-07-09 — Direction discussion: rung #6 sharpened; current course runs to the end first
+
+**11:15 — Strategy discussion (user + Claude), recorded for the circle-back.** The user proposed
+pivoting hard to rung #6 (persistent slow weights + task-stream), on the argument that missing
+problem types should be emergently discovered (meta-learned) rather than chased one expressiveness
+rung at a time. The discussion's conclusions, to steer by when we return:
+
+1. **The recent record is not "expressiveness failed"** — Rung CF moved the deep floor 0.188 →
+   0.625 (the largest single movement to date); the two same-day STOPs (soft gather +3, editor +0)
+   were ~10-minute scans that *averted* builds. What the evidence actually isolates is CF's
+   **selection consistency**: the ~72-id partial-fix band is dominated by `copy-*` families at LOO
+   0.70–0.90 — right source, inconsistent closed-form table.
+2. **The reframe that matters for rung #6: persistence alone won't add solves.** The budget-raise
+   experiment proved the corpus compute-insensitive, so "fit speed improves with stream position"
+   (the rung's current headline metric) measures the wrong thing; and the M9 lesson says a flat
+   Reptile prior across a heterogeneous stream washes out. The value of rung #6 is
+   **expressiveness-through-consolidation**: replace the closed-form WRITTEN reads (CF's voted
+   action table, LocalWrite's n-gram table, the salience scorers) with small META-LEARNED read/write
+   rules whose slow weights persist and improve across the task stream — the principled fix for the
+   3-demo regime where closed-form LOO voting starves. This also convergently matches Rung A-build's
+   verdict ("52 improved-yet-unsolved need a richer/meta-trained local read → rung #6") and the B4
+   discipline (fast adaptation = the memory's own write rule; ES fits only the slow vector) — CF's
+   written table is currently the one factor family NOT built that way.
+3. **Shaped rung #6, when we take it:** the task stream with persistent slow weights; the CF read
+   (later the local-write read) as a meta-learned rule, Reptile-nudged per in-context fit, with the
+   Schug mitigation (per-task code × shared templates) designed in from day one. Metrics reordered
+   by strength: (a) solves on the exhibit band (~72 ids + 17 chain-partials) improve with stream
+   position — the headline; (b) no forgetting on early families; (c) frozen-prior + shuffled-stream
+   controls. Framed this way it is not a pivot but the roadmap's own arrow — and it doubles as
+   Vision B's first rung (same persistence machinery, later driven by self-generated novelty).
+4. **One cheap measure-first probe belongs before the rung:** a day-scale Python check of whether
+   the band's LOO inconsistency yields to DETERMINISTIC fixes (tie-breaking, key granularity) in
+   the scan harness. Either outcome pays: a cheap win, or the documented negative that becomes
+   rung #6's opening evidence.
+
+**User decision: run the current course to the end first** (there are things to understand better
+before steering consciously) — starting with the deferred **corpus v4 re-measure**, which books
+Rungs C + D + CF into one honest baseline and is the "before" number any stream experiment needs
+anyway. Wiring verified before launch: same-shape → ContentFetchComposedMemory/fit_content (CF-2
+swap), shape → ShapeGeomColorComposedMemory/fit_shape_color (Rung C), reflect frame as the
+growth-gated third cold start in fit_shape_geom (Rung D). Budget 64/1500 (the documented corpus
+budget, comparable to v2/v3), GPU backend, both splits.
+
+## 2026-07-09 — Corpus v4 re-measure: train 41/1000 (v3: 22), the same-shape corpus mean at 0.81
+
+**11:19–12:01 — the deferred v4 run** (both splits, budget 64/1500, GPU, 2 workers; eval 344 s,
+train 2116 s — the full-corpus measure is now a lunch break, not an overnight). Books Rungs A-build
++ C + D + CF into one honest baseline. One harness stumble first: the initial launch died with the
+documented "scored 0 tasks in 0s" signature (eval_parallel.sh needs the venv on PATH — the runner
+script now activates it). Wiring verified before launch: same-shape → ContentFetchComposedMemory/
+fit_content, shape → ShapeGeomColorComposedMemory/fit_shape_color, reflect frame grow-gated in
+fit_shape_geom.
+
+**Headline (solve bar 0.99, per SOLVE_THRESHOLD):**
+
+- **Train: 41/1000 solved (v3: 22)** — mean held-out 0.628. Same-shape (680): mean 0.625 → 0.806,
+  solved 13 → 23 (Rung CF's corpus effect at full width — incl. its gate exhibits 9caf5b84,
+  d037b0a7, plus b1948b0a and 7 more). Shape (320): solved 9 → 18 (Rungs C + D — the mirror-tiling
+  and colour-on-shape families landing as booked), mean 0.239 → 0.249.
+- **Eval: 0/120 still** — but mean held-out 0.404 → 0.543; the same-shape slice (81) moved
+  0.572 → 0.778 (CF transfers to eval's distribution), while the shape slice (39) sat at
+  0.054 → 0.055, re-confirming Rung S: eval's shape slice is dims-never-fit content-extraction,
+  untouchable by any shape-write + gather.
+- Train movement: 621 up / 48 down; the 0.90–0.99 near-miss band is now **230 train ids** (was ~100
+  at v3) + 28 eval — the partial-fix frontier keeps widening faster than the solve cliff converts.
+
+**The two "lost" solves, bisected to their rungs (worktree A/B at ccdd8af → b2780af → 32f8f41;
+CPU == GPU on both, so not backend noise):**
+
+- **8597cfd7 (1.00 → 0.00, flipped at Rung C).** The v3 line was **train-fit 0.25, held-out 1.0**
+  (gap −0.75): a constant-2×2-output extraction task (content-model-bound class, per Rung S) whose
+  4-cell test output the v3 fit hit by luck while explaining the demos at chance. Rung C's fitted-V
+  branch explains the demos strictly better (train 0.75) and predicts differently. Losing a
+  coin-flip solve to a better in-sample explanation is the honest direction; the task's class was
+  never expressible.
+- **963e52fc (1.00 → 0.89, flipped at Rung D).** A width-doubling tile (5×7→5×14). The reflect
+  frame wins the multi-start in-sample (0.949 vs the toroidal frame's 0.930) but generalizes worse
+  (0.89 vs 1.0) — the known multi-start hazard: demo-fitness winner selection on a near-tie picks
+  the wrong identity frame. Real, small, and structural (not noise); the honest fix, if the class
+  ever matters at scale, is a tie-margin rule measured across the corpus, not per-task staging.
+
+Net verdict: **+21 new solves, −2 diagnosed flips (one of which was luck to begin with)** — the v4
+baseline is cleaner than the raw ±: every rung's booked corpus value landed where its synth proof
+predicted. v4 result files: `scratch/arc2_{train,eval}_v4.txt`; comparison script
+`scratch/v4_compare.py`. This is the "before" number for whatever comes next (the rung #6
+circle-back or the CF-read probe).
