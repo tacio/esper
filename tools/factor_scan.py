@@ -1325,6 +1325,218 @@ def meta_probe(train_dump):
         print("  held-out covered ids: " + " ".join(sorted(full)))
 
 
+# ---- rung #6 increment 2: does the copy-* band cluster into families each
+# with an internally-consistent read? (the per-family / hypernetwork probe) --
+#
+# GATE CF6 (--meta-probe) showed one FLAT shared read covers 0 held-out band
+# ids: a single prior across the heterogeneous band washes out. The ROADMAP's
+# fix for that exact hazard is per-family structure (Schug: per-task code x
+# shared templates). Before building it, this probe asks the cheap question:
+# if we CLUSTER the band and fit a shared read WITHIN each cluster, does
+# held-out coverage come back? Plus a per-task expressivity CEILING (fit each
+# task on its own cells, score in-sample) to read a STOP correctly:
+#   clustered >= 15                    => GO (mixture of consolidatable rules)
+#   clustered < 15, ceiling HIGH       => band per-task-irreducible (transfer)
+#   clustered < 15, ceiling LOW        => read class too weak (expressivity)
+# Guard: scratch/calib_famprobe.py (a synth MIXTURE must be recovered by
+# clustering but NOT by the flat fit; a per-task-random band must stay 0).
+
+
+def _score_full(task, predict):
+    """Non-LOO in-sample score of one task (t2/tcout from ALL its demos): the
+    per-task expressivity ceiling — can this read class represent the task's
+    KEEP/COPY/CONST decision at all, given the features?"""
+    t2, tcout = {}, {}
+    for (_X, k2s, kcs, _fs, outs) in task["demos"]:
+        for k2, kc, out in zip(k2s, kcs, outs):
+            t2.setdefault(k2, Counter())[out] += 1
+            tcout.setdefault(kc, Counter())[out] += 1
+    total = d2 = ch = fixed = broken = 0
+    for (X, k2s, kcs, fs, outs) in task["demos"]:
+        acts = predict(X)
+        for i in range(len(outs)):
+            total += 1
+            k2, kc, f, out = k2s[i], kcs[i], fs[i], outs[i]
+            h2 = _det_argmax(t2[k2]) == out
+            a = acts[i]
+            if a == KEEP_I:
+                pred = k2
+            elif a == COPY_I:
+                pred = f
+            else:
+                pred = _det_argmax(tcout[kc]) if kc in tcout else None
+            hc = h2 if pred is None else pred == out
+            d2 += h2
+            ch += hc
+            if hc and not h2:
+                fixed += 1
+            elif h2 and not hc:
+                broken += 1
+    miss2 = total - d2
+    return (d2 / total, ch / total,
+            (fixed - broken) / miss2 if miss2 else 0.0, miss2 / total)
+
+
+def _per_task_ceiling(tasks, cols):
+    import numpy as np
+    cov = 0
+    for t in tasks:
+        Xs, ys = [], []
+        for (X, k2s, _kc, fs, outs) in t["demos"]:
+            Xs.append(X[:, cols])
+            ys.append(np.fromiter(
+                (_meta_label(k2s[i], fs[i], outs[i])
+                 for i in range(len(outs))), int, len(outs)))
+        X = np.concatenate(Xs)
+        y = np.concatenate(ys)
+        W = _fit_softmax(X, y, _balanced_w(y))
+
+        def predict(Xh, W=W):
+            return np.argmax(Xh[:, cols] @ W.T, 1)
+
+        if covered4(_score_full(t, predict)):
+            cov += 1
+    return cov
+
+
+def _task_signature(task):
+    """Per-task code proxy for k-means: class-conditional feature means (mean
+    feature vec over the task's KEEP / COPY / CONST cells, concatenated). Uses
+    feature means, NOT a per-task fitted W (which would overfit 3-demo tasks and
+    leak the label into the cluster)."""
+    import numpy as np
+    sums = [np.zeros(META_DIM) for _ in range(3)]
+    cnts = [0, 0, 0]
+    for (X, k2s, _kc, fs, outs) in task["demos"]:
+        for i in range(len(outs)):
+            a = _meta_label(k2s[i], fs[i], outs[i])
+            sums[a] += X[i]
+            cnts[a] += 1
+    return np.concatenate([
+        sums[a] / cnts[a] if cnts[a] else np.zeros(META_DIM) for a in range(3)])
+
+
+def _kmeans(X, k, seed=0, iters=50):
+    import numpy as np
+    n = len(X)
+    if k >= n:
+        return np.arange(n)
+    rng = np.random.default_rng(seed)
+    cent = X[rng.choice(n, k, replace=False)].copy()
+    labels = -np.ones(n, int)
+    for _ in range(iters):
+        d = ((X[:, None, :] - cent[None, :, :]) ** 2).sum(2)
+        nl = d.argmin(1)
+        if (nl == labels).all():
+            break
+        labels = nl
+        for j in range(k):
+            m = labels == j
+            if m.any():
+                cent[j] = X[m].mean(0)
+    return labels
+
+
+def _clustered_cover(tasks, labels, cols):
+    """Within each cluster, leave-one-TASK-out shared-read fit + held-out score
+    (folds = cluster size => true LOO, max training data per held-out task).
+    Union of held-out `covered4` ids across clusters."""
+    ids = set()
+    labs = list(labels)
+    for lab in sorted(set(labs)):
+        grp = [t for t, l in zip(tasks, labs) if l == lab]
+        if len(grp) >= 2:
+            ids |= meta_probe_run(grp, cols, _fit_softmax, folds=len(grp))
+    return ids
+
+
+def family_probe(train_dump):
+    import numpy as np
+    np.random.seed(0)
+    ids = deep_floor_ids(train_dump)
+    print(f"rung #6 per-family (mixture) read probe over {len(ids)} deep-floor "
+          "ids")
+
+    # 1. MAX partial-fix band: any uncovered copy-* with chain<0.90, fix>0.
+    band = []
+    for n, tid in enumerate(ids):
+        demos = load_demos(tid)
+        committed = any(covered(s) for s in scan_task(demos).values())
+        bc = _best_copy(demos)
+        if bc is not None and not committed:
+            (_d2, ch, fx, res), fam, fn, pi = bc
+            if ch < 0.90 and fx > 0.0 and res >= RESIDUAL_FLOOR:
+                band.append((tid, fam, fn, pi))
+        if (n + 1) % 25 == 0:
+            print(f"  ... band scan {n + 1}/{len(ids)}  (band {len(band)})")
+    print(f"\nband = {len(band)} uncovered copy-* partial-fix ids (MAX; "
+          f"chain<0.90, fix>0)")
+    if len(band) < 12:
+        print("band too small to cluster; GATE FAM => STOP")
+        return
+
+    tasks, fams = [], []
+    for tid, fam, fn, pi in band:
+        dm = []
+        for cells in _meta_task_cells(load_demos(tid), fn, pi):
+            dm.append((
+                np.array([c[0] for c in cells]),
+                [c[1] for c in cells], [c[2] for c in cells],
+                [c[3] for c in cells], [c[4] for c in cells]))
+        tasks.append({"tid": tid, "demos": dm})
+        fams.append(fam)
+
+    allc = list(range(META_DIM))
+    n_band = len(band)
+
+    # 2. flat baseline (LOO) — must reproduce the CF6 ~0 on this population.
+    flat = meta_probe_run(tasks, allc, _fit_softmax, folds=n_band)
+    # 3. per-task expressivity ceiling (in-sample fit+score).
+    ceiling = _per_task_ceiling(tasks, allc)
+    # 4a. cluster by winning source family.
+    src_cov = _clustered_cover(tasks, fams, allc)
+    src_sizes = {f: fams.count(f) for f in sorted(set(fams))}
+    # 4b. cluster by k-means on the per-task class-conditional signature.
+    sig = np.array([_task_signature(t) for t in tasks])
+    sig = (sig - sig.mean(0)) / (sig.std(0) + 1e-9)
+    km_best, km_bestk = set(), 0
+    for k in range(2, 6):
+        cov = _clustered_cover(tasks, _kmeans(sig, k, seed=0), allc)
+        if len(cov) > len(km_best):
+            km_best, km_bestk = cov, k
+    best = src_cov if len(src_cov) >= len(km_best) else km_best
+
+    def frac(s):
+        return f"{len(s):3d}/{n_band}"
+
+    print("\nsource-family band sizes: "
+          + "  ".join(f"{f}={n}" for f, n in src_sizes.items()))
+    print("\n== GATE FAM (per-family mixture read) ==")
+    print(f"  flat baseline (1 read, LOO):        held-out covered {frac(flat)}"
+          f"   (CF6 reproduction, expect ~0)")
+    print(f"  per-task expressivity CEILING:      in-sample covered "
+          f"{ceiling:3d}/{n_band}   (read-class expressible per task?)")
+    print(f"  clustered by SOURCE family:         held-out covered "
+          f"{frac(src_cov)}")
+    print(f"  clustered by K-MEANS (best k={km_bestk}):     held-out covered "
+          f"{frac(km_best)}")
+    go = len(best) >= 15
+    print(f"\n  GATE FAM: best clustered >= 15  =>  {'GO' if go else 'STOP'}"
+          f"   (best={len(best)}, flat={len(flat)}, ceiling={ceiling})")
+    if not go:
+        hi = ceiling >= 15
+        print("  STOP branch: " + (
+            "ceiling HIGH -> tasks individually expressible but TRANSFER fails "
+            "even within families => band per-task-irreducible; defer it / "
+            "re-scope (CMS frequency hierarchy)."
+            if hi else
+            "ceiling LOW -> the linear read CLASS can't express the band even "
+            "per-task => EXPRESSIVITY bottleneck (richer features / nonlinear "
+            "head), not persistence/structure."))
+    if best:
+        print("  clustered-covered ids: " + " ".join(sorted(best)))
+
+
 def main(train_dump, probe=False):
     ids = deep_floor_ids(train_dump)
     print(f"factor scan over {len(ids)} deep-floor ids; "
@@ -1487,10 +1699,12 @@ def main(train_dump, probe=False):
 
 
 if __name__ == "__main__":
-    flags = ("--probe", "--meta-probe")
+    flags = ("--probe", "--meta-probe", "--family-probe")
     args = [a for a in sys.argv[1:] if a not in flags]
     dump = args[0] if args else "scratch/arc2_train_v3.txt"
-    if "--meta-probe" in sys.argv:
+    if "--family-probe" in sys.argv:
+        family_probe(dump)
+    elif "--meta-probe" in sys.argv:
         meta_probe(dump)
     else:
         main(dump, probe="--probe" in sys.argv)

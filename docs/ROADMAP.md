@@ -505,7 +505,28 @@ slice is dominated by that last class (19/39).
    hazard above. So this rung **re-scopes**: the justified path is **per-family / emergent structure**
    (the Schug hypernetwork — per-task code × shared templates, RESEARCH-NOTES #2 — and/or the CMS
    frequency hierarchy, #5), **not** a flat meta-learned read + persistence. (JOURNAL 2026-07-09
-   20:52; no `src/` touched — increment 2 was gated on GO.) **Serves both visions**: on Vision A it is the meta-learned prior at corpus
+   20:52; no `src/` touched — increment 2 was gated on GO.)
+   **Increment 2 — the per-family (mixture) read probe: GATE FAM STOP, and the wall is EXPRESSIVITY
+   (2026-07-10).** Before building the hypernetwork, a probe (`tools/factor_scan.py --family-probe`,
+   additive/bit-identical; `scratch/famprobe_scan_v1.txt`) tested whether the band **clusters into
+   families each with an internally-consistent read** — and, crucially, measured a **per-task
+   expressivity ceiling** (fit each task's read on its OWN cells, score in-sample). On the 84-id MAX
+   band: flat 0/84, clustered-by-source 0/84, clustered-by-k-means 0/84, and **ceiling 2/84**. The
+   ceiling is the finding: the per-cell linear read over ~30 identity/relational features expresses
+   only 2 of 84 tasks *even with no transfer asked*, so clustering/consolidation/persistence (all
+   about sharing across tasks) **cannot** help — you can't consolidate a decision that isn't
+   expressible per-task. **The band's wall is expressivity, not persistence/structure** — rung #6's
+   whole family of levers (flat prior, meta-learned read, per-family hypernetwork) is the wrong tool
+   *for this population*. Guarded: the ceiling reads 16/20 on a known-expressible synth rule vs 0/20
+   on noise (the band sits with noise); clustering was validated on a synth mixture (k-means recovers
+   21/24 held-out, beats flat) with 0 false-covers on random/recolor/noise
+   (`scratch/calib_famprobe.py`, GUARD PASS). **Convergent verdict** across three probes (CF-read,
+   CF6, FAM): the copy-* band is **content-addressed CONSTRUCTION** (output written where the
+   per-cell evidence isn't) that **no per-cell read/consolidation mechanism can express** — its
+   justified lever is **a richer, non-per-cell read** (the constructive / iterated-edit direction or
+   a content substrate carrying the construction), a *separate* rung. Rung #6's consolidation value,
+   if any, belongs to a **per-task-expressible** population, not the band. (JOURNAL 2026-07-10 09:09;
+   no `src/` touched — increment 3 was gated on GO.) **Serves both visions**: on Vision A it is the meta-learned prior at corpus
    scale; it is also the tabled **first rung of Vision B** — the same persistence machinery,
    later driven by self-generated novelty instead of demonstration pairs.
 

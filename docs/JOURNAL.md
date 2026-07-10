@@ -2085,3 +2085,58 @@ A multi-day Mojo build (new SelfModMemory + stream driver) averted by a ~day-sca
 measure-first held again. No `src/` (Mojo) touched — increment 2 was gated on GO. Files:
 `tools/factor_scan.py` (`--meta-probe`, additive), `scratch/calib_cf6probe.py`,
 `scratch/cf6probe_scan_v1.txt`, `scratch/cf6probe_sensitivity.py` + `.txt`.
+
+### 2026-07-10 09:09 — Rung #6, increment 2: the per-family (mixture) read probe — GATE FAM STOP, and the *reason* is EXPRESSIVITY (ceiling 2/84)
+
+CF6 (increment 1) showed a *flat* shared read covers 0 band ids → "a single prior across the
+heterogeneous band washes out." The ROADMAP's prescribed fix for that hazard is **per-family
+structure** (Schug: per-task code × shared templates). Before building that hypernetwork (a large
+Mojo lift), the measure-first discipline says probe the bet: **does the band cluster into families
+each with an internally-consistent read?** Increment 2 is that probe (`tools/factor_scan.py
+--family-probe`, additive; default board bit-identical, `main()` untouched), and crucially it also
+measures a **per-task expressivity ceiling** so a STOP names the right next lever.
+
+**Mechanism** (reuses the CF6 machinery): (1) take the MAX partial-fix band — any uncovered copy-*
+with chain<0.90, fix>0 (**84 ids**, ≈ the near-miss population); (2) **flat baseline** — one shared
+read, leave-one-task-out; (3) **per-task ceiling** — fit each task's read on its OWN cells and score
+*in-sample* (can this read class even represent the task's KEEP/COPY/CONST, no transfer demanded?);
+(4) **clustered** — group tasks by winning source family AND by k-means (k=2..5) on a per-task
+class-conditional feature signature, then within-cluster leave-one-task-out fit + held-out score.
+
+**Result (`scratch/famprobe_scan_v1.txt`, band = 84):**
+- flat baseline: **0/84** (reproduces CF6 on this population).
+- clustered by source family: **0/84**; clustered by k-means (all k): **0/84**.
+- **per-task expressivity ceiling: 2/84.** — the load-bearing number.
+- **GATE FAM (best clustered ≥ 15 ⇒ GO): STOP** (best = 0).
+
+**The ceiling relocates the whole problem.** Clustering/consolidation/persistence are all about
+*sharing and transfer across tasks* — but the ceiling says the per-cell linear read over these ~30
+identity/relational features (is_bg, f==centre, colour freq-ranks, size-rank/largest/smallest,
+bbox-pos, nearest-distance, ray/register agreement) can express only **2 of 84** band tasks *even
+fitting each on its own cells with no generalization asked*. You cannot cluster or hypernetwork your
+way to expressing a decision that isn't expressible per-task in the first place — the ceiling caps
+every downstream consolidation variant at ~2. So the band's wall is **expressivity, not
+persistence/structure**: rung #6's entire family of levers (flat prior, meta-learned read,
+per-family hypernetwork) is the wrong tool for this population.
+
+**Guarded, not a broken metric.** The ceiling was validated on synth: **16/20** on a known-expressible
+rule (COPY-iff-largest-component) vs **0/20** on pure noise — the real band's 2/84 sits with noise,
+not with an expressible rule. The clustering path was validated by `scratch/calib_famprobe.py`
+(GUARD PASS): on a synth MIXTURE of two directly-opposing sub-rules (COPY-iff-largest vs
+COPY-iff-NOT-largest) k-means clustering **recovers 21/24 held-out and beats the flat read**, while
+per-task-random / recolor / support-starvation bands all give **0** clustered — clustering covers a
+real mixture yet cannot fabricate coverage.
+
+**Where this leaves rung #6.** Three increments of ~day-scale probes (CF-read deterministic,
+CF6 cross-task, FAM per-family) have now converged on one verdict for the copy-* band: it is a
+**content-addressed CONSTRUCTION** problem (output written where the per-cell evidence isn't — the
+deep-floor's dominant property all along; the earlier editor probe's "output constructed elsewhere"),
+and **no read/consolidation mechanism over per-cell identity features can express it** (ceiling 2/84).
+Rung #6 (persistence + meta-learned read + per-family structure) does **not** address this wall and
+should not be built *for the band*; its consolidation value, if any, belongs to a *different*
+population that is per-task expressible. The band's justified next lever is **expressivity** — a
+richer, non-per-cell read (the constructive/iterated-edit direction, or a content substrate that
+carries the construction), which is a separate rung. A large hypernetwork Mojo build averted by the
+probe that measured the ceiling. No `src/` touched (increment 3 was gated on GO). Files:
+`tools/factor_scan.py` (`--family-probe`, additive), `scratch/calib_famprobe.py`,
+`scratch/famprobe_scan_v1.txt`.
