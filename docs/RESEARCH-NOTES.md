@@ -191,6 +191,21 @@ them — Chalumeau), pixel-scale VAE/RSSM world models (grids are already symbol
 adversary networks (ACCEL-style curation replaces them), and any self-scored success metric (DGM's
 cautionary tale; the outer metric stays held-out transfer).
 
+**Addendum (2026-07-10, B-POC-1 build).** Rung 1's phrase "proves the intrinsic-fitness seam in
+`Domain`" resolved, on contact with the code, into a split: the **trajectory-Example seam** is
+proven through `Memory.apply` (= a full deterministic rollout whose flat prediction is the
+trajectory's behaviour characterization, so the unchanged generic ES core can fit a policy toward a
+target end-state — B-POC-4's scoring path), while the **intrinsic fitness itself is driver-hosted**
+— `Domain.distance` is a static, per-example, target-based method and cannot see a runtime novelty
+archive, exactly as `meta_fit_selfmod`'s meta-fitness could not. Two empirical amendments from
+calibration: (1) NS-ES over raw antithetic novelty differences barely moves (BC-distance scale
+~0.1 and shrinking as the archive densifies) — **unit-std fitness shaping** of the coefficients is
+load-bearing, quadrupling coverage at the same budget; (2) in an open world, **entropy is a strong
+raw-visitation baseline** (a uniform random-ACTION controller touches more distinct per-tick cells
+than anything else measured) — the honest gated claim for directed search is within the
+deterministic policy class, on both visitation AND distinct end-states, the repertoire currency
+B-POC-2 consumes.
+
 ---
 
 ## 2026-07-08 — Content-addressed construction (the deep-floor negative)

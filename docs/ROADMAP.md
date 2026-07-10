@@ -49,7 +49,7 @@ learns both *what* to think and, eventually, *how* to learn.
   the M8 operator ceiling 5/1000). See "Next — the path to full ARC-AGI 2" below for the
   measurable rungs. Still hands the engine *goals* (a task's demonstration pairs are
   compressed supervision) even though it never hands it a DSL.
-- **Vision B — open-ended mastery (WIP — study round done 2026-07-10, POC not started).** Inspired by
+- **Vision B — open-ended mastery (active — B-POC-1 done 2026-07-10).** Inspired by
   Random Network Distillation, open-endedness, and unsupervised RL: an agent that masters its
   environment with **zero hand-coded goals** — intrinsic motivation (self-generated novelty) replaces
   the demonstration pairs entirely. This is a stricter reading of the mission than Vision A (it drops
@@ -58,7 +58,15 @@ learns both *what* to think and, eventually, *how* to learn.
   A literature study round (`RESEARCH-NOTES.md` 2026-07-10) shaped it into a five-rung POC ladder
   (novelty-ES coverage → MAP-Elites repertoire → world model + learning progress → the convergence
   test scored as held-out few-shot transfer → ACCEL-style UED on the world itself), all ES-native by
-  cited precedent, over a pure-Mojo avatar-on-`ArcGrid` micro-world. Milestones not yet scheduled.
+  cited precedent, over a pure-Mojo avatar-on-`ArcGrid` micro-world.
+  **B-POC-1 landed 2026-07-10** (`src/sandbox.mojo` + `src/novelty_es.mojo`,
+  `test_novelty_coverage`): in a reward-free 16×16 gravity sandbox, an NS-ES meta-population whose
+  only fitness is self-generated novelty covers **10,578 distinct cells / 1,372 distinct end-states
+  vs. 2,166 / 461** for an equal-budget (13,205 rollouts) random-policy baseline — **4.9× / 3.0×**,
+  deterministic, seconds on CPU. Honest caveats booked in JOURNAL: a random-ACTION reference (a
+  stochastic controller outside the deterministic policy class) still covers more raw cells —
+  entropy is a strong visitation baseline in an open world; the gated claim is within-class directed
+  search, the currency that feeds the B-POC-2 repertoire. Next rung: B-POC-2 (MAP-Elites archive).
 - **Convergence hypothesis.** The two visions are expected to meet: primitives discovered by
   open-ended exploration (Vision B) become the reusable vocabulary that few-shot composition
   (Vision A) draws on to solve a task fast from a handful of examples — unsupervised "pretraining"

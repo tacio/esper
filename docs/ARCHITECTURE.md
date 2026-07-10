@@ -234,6 +234,28 @@ the ES meta-learns only the small slow vector.
   sigmoid-threshold read, whole 2-level rule inferred in-context), `GridCountMapSelfModMemory`
   (arbitrary count→colour maps: meta-learned scoring salience + soft count-bin value table).
 
+## Vision B sandbox — `src/sandbox.mojo`, `src/novelty_es.mojo`
+
+The B-POC-1 pair (open-ended rung 1): a reward-free world + the NS-ES intrinsic-fitness driver.
+
+- `sandbox.mojo` — a deterministic 16×16 gridworld with **no reward channel**: an avatar with 6
+  actions (move×4 / paint / cycle-brush) under ONE parameterizable dynamics rule (gravity;
+  `grav_dir`/`grav_rate` live in `SandboxTask` — the future UED mutation surface). Holds the policy
+  (egocentric 5×5 patch + 4 compass scalars → tanh(8) → 6 logits, argmax, `POLICY_DIM = 294`), the
+  behaviour characterization (16 block-occupancy fractions + avatar pos, `BC_DIM = 18`), the
+  Go-Explore-style cell key + `CellSet` (the coverage metric), and the seam conformances:
+  `SandboxDomain(Domain)` (Example = `SandboxTask`) and `SandboxPolicyMemory(Memory)` whose
+  `apply` = a full rollout writing the trajectory's BC — so the unchanged generic
+  `fit_operator` can already fit a policy toward a target end-state (B-POC-4's scoring path).
+- `novelty_es.mojo` — `NoveltyArchive` (flat BC store; re-entrant kNN novelty, k=10 mean) +
+  `ns_es_run`, the NS-ES meta-population driver (Conti et al. 2018): K agents, shared archive,
+  novelty-proportional agent selection, one antithetic ES step per iteration whose scalar fitness is
+  the candidate's archive novelty. A bespoke copy of the `meta_fit_selfmod` skeleton (novelty cannot
+  flow through the static, target-based `Domain.distance`); deliberate deviations, both calibrated:
+  fixed alpha/sigma (the objective is non-stationary) and unit-std **fitness shaping** of the
+  antithetic coefficients (raw novelty differences are tiny and shrink as the archive densifies —
+  un-shaped steps barely moved the centers).
+
 ## Drivers — `src/main.mojo`, `src/arc_solve.mojo`
 
 - `main.mojo` — end-to-end driver: builds an `OP_DIM` node, seeds slow (prior) and fast (init) to
@@ -319,6 +341,10 @@ fast/full tiers).
 - **Self-mod family (B2–B4):** `test_seq_domain`, `test_attn_memory`, `test_selfmod_memory`,
   `test_delta_selfmod`, `test_grid_context_selfmod`, `test_grid_nbhd_selfmod`,
   `test_grid_countmap_selfmod`.
+- **Vision B:** `test_novelty_coverage` (**B-POC-1**: with zero hand-coded goals, the NS-ES
+  meta-population covers ≥3× the distinct cells and ≥2× the distinct end-states of an equal-budget
+  random-policy baseline in the sandbox; inline gravity unit check; fully deterministic under
+  `seed(0)`).
 
 Phase-A expressible subset = {identity, flip_h, flip_v, transpose, recolor}; `shift` deferred (the
 affine zero-fills, synth `_shift` wraps).

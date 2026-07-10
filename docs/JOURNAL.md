@@ -2176,3 +2176,44 @@ wrong lever for the copy-* band — has a natural home here as the MAP-Elites re
 (B-POC-2), exactly as ROADMAP's "tabled first rung of Vision B" note anticipated. ROADMAP's Vision B
 bullet updated from bare placeholder to point at the study + POC ladder. No `src/` touched — this
 was a research round; POC design/implementation is a separate decision.
+
+### 2026-07-10 12:35 — B-POC-1 lands: reward-free novelty search works on the substrate (with two honest findings)
+
+Vision B's first implemented rung, built to the approved plan: `src/sandbox.mojo` (a deterministic
+16×16 gridworld with NO reward channel — avatar, move×4/paint/cycle-brush, one parameterizable
+gravity rule whose `grav_dir`/`grav_rate` sit in `SandboxTask` as the future UED surface; the
+294-param patch+compass→tanh(8)→6-logit argmax policy; the 18-dim block-occupancy BC; the
+Go-Explore cell key + `CellSet`; `SandboxDomain`/`SandboxPolicyMemory` conformances) and
+`src/novelty_es.mojo` (`NoveltyArchive` with re-entrant SIMD kNN novelty, and `ns_es_run`, the
+Conti-style NS-ES meta-population driver copied from the `meta_fit_selfmod` skeleton).
+`tests/test_novelty_coverage.mojo` is the proof; `./esper fast` runs it (untagged, ~8s).
+
+**The calibration story (the interesting part).** The first run FAILED its own gate: NS-ES
+2,519 cells vs. random-policy 2,177 at an equal 13k-rollout budget — 1.16×, nowhere near the
+planned 2×. Diagnosis via an instrumented scratch driver: the ES was barely moving — the selected
+center drifted |Δw| ≈ 1.5 over a whole run against an init norm of ~8.6, because raw antithetic
+novelty differences live at the BC-distance scale (~0.1) and shrink as the archive densifies, so
+the plan's "no annealing" call was necessary but not sufficient. Fix: **unit-std fitness shaping**
+of the antithetic coefficients (OpenAI-ES practice; step = α/N·Σ(coeff/sd)·ε), which makes the
+step size scale-free. A second finding from the same sweep: at equal total rollouts, **more
+iterations beat more samples** (400×16 ≫ 200×32) — every iteration adds an archive entry and
+re-aims the search; novelty needs direction more than gradient precision. Final config
+K=5, iters=400, N=16, α=0.2, σ=0.4.
+
+**Locked numbers** (seed 0, bit-reproducible across runs — verified by diffing two full runs):
+NS-ES **10,578** distinct cells / **1,372** distinct end-states vs. random-policy **2,166 / 461**
+at the same 13,205-rollout budget → **4.88× / 2.98×**. Gates locked at 3×/2× with an absolute
+floor of 1,000 cells (headroom ~60/50%). Runtime ~8s total.
+
+**The honest caveat, printed by the test and booked here:** a uniform random-ACTION reference —
+a stochastic controller, not expressible by our deterministic policy class — covers MORE raw
+per-tick cells than anything else (15,068) and 3,392 end-states. In an open world, entropy is a
+formidable visitation baseline; Go-Explore's superiority story lives in hard-exploration worlds,
+not this one. The gated claim is therefore deliberately within-class: directed search vs.
+undirected search over the SAME deterministic policy space, on visitation AND on distinct
+end-states — end-states being what the novelty objective actually optimizes and the repertoire
+currency B-POC-2 (MAP-Elites) will consume. Also recorded in the RESEARCH-NOTES addendum: the
+"intrinsic fitness through the Domain seam" phrasing resolved into trajectory-Example-through-
+`Memory.apply` (proven, B-POC-4's path) + driver-hosted novelty (like `meta_fit_selfmod`'s
+meta-fitness); and `ns_es_run` allocates its stripes inline once per run, the `meta_fit_selfmod`
+precedent, rather than a separate workspace struct.
