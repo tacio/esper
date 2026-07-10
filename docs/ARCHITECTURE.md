@@ -234,9 +234,10 @@ the ES meta-learns only the small slow vector.
   sigmoid-threshold read, whole 2-level rule inferred in-context), `GridCountMapSelfModMemory`
   (arbitrary count→colour maps: meta-learned scoring salience + soft count-bin value table).
 
-## Vision B sandbox — `src/sandbox.mojo`, `src/novelty_es.mojo`
+## Vision B sandbox — `src/sandbox.mojo`, `src/novelty_es.mojo`, `src/map_elites.mojo`
 
-The B-POC-1 pair (open-ended rung 1): a reward-free world + the NS-ES intrinsic-fitness driver.
+The B-POC-1 pair (open-ended rung 1): a reward-free world + the NS-ES intrinsic-fitness driver;
+plus the B-POC-2 repertoire (rung 2): the persistent elite-per-cell skill library.
 
 - `sandbox.mojo` — a deterministic 16×16 gridworld with **no reward channel**: an avatar with 6
   actions (move×4 / paint / cycle-brush) under ONE parameterizable dynamics rule (gravity;
@@ -255,6 +256,17 @@ The B-POC-1 pair (open-ended rung 1): a reward-free world + the NS-ES intrinsic-
   fixed alpha/sigma (the objective is non-stationary) and unit-std **fitness shaping** of the
   antithetic coefficients (raw novelty differences are tiny and shrink as the archive densifies —
   un-shaped steps barely moved the centers).
+- `map_elites.mojo` — the **persistent repertoire** (B-POC-2): `EliteMap`, an open-addressing
+  Int64→slot map (the `CellSet` pattern) keyed by the END-STATE cell, whose payload is the elite
+  policy's weights + BC + settle tick; within-bin quality = **directness** (`settle_tick` — the
+  earliest tick from which the trajectory sits in its final cell; strictly-smaller replaces). Two
+  variation drivers share the map: `me_mutation_run` (canonical MAP-Elites — uniform elite parent,
+  Gaussian child, one rollout, fill-or-improve) and `me_emitter_run` (CMA-ME-flavoured — a single
+  novelty-ES emitter on the `ns_es_run` skeleton, re-seeded from a uniform elite every E
+  iterations, EVERY rollout harvested into the map; its pert stripe is N×2×`POLICY_DIM` because
+  harvesting needs both antithetic weight vectors live at insert time). Budgets are compared in
+  rollouts — one insert attempt per rollout in every arm. The map is in-memory by design;
+  serialization is B-POC-4's seam.
 
 ## Drivers — `src/main.mojo`, `src/arc_solve.mojo`
 
@@ -344,7 +356,10 @@ fast/full tiers).
 - **Vision B:** `test_novelty_coverage` (**B-POC-1**: with zero hand-coded goals, the NS-ES
   meta-population covers ≥3× the distinct cells and ≥2× the distinct end-states of an equal-budget
   random-policy baseline in the sandbox; inline gravity unit check; fully deterministic under
-  `seed(0)`).
+  `seed(0)`); `test_repertoire` (**B-POC-2**: the best MAP-Elites arm stores ≥2× as many distinct
+  replayable skills as the NS-ES baseline ever touched end-states at the same budget, with a 100 %
+  elite replay gate and a refinement gate — replacements happened and lowered the mean settle
+  tick; fully deterministic under `seed(0)`).
 
 Phase-A expressible subset = {identity, flip_h, flip_v, transpose, recolor}; `shift` deferred (the
 affine zero-fills, synth `_shift` wraps).

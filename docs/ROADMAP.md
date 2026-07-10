@@ -49,7 +49,7 @@ learns both *what* to think and, eventually, *how* to learn.
   the M8 operator ceiling 5/1000). See "Next — the path to full ARC-AGI 2" below for the
   measurable rungs. Still hands the engine *goals* (a task's demonstration pairs are
   compressed supervision) even though it never hands it a DSL.
-- **Vision B — open-ended mastery (active — B-POC-1 done 2026-07-10).** Inspired by
+- **Vision B — open-ended mastery (active — B-POC-1 & B-POC-2 done 2026-07-10).** Inspired by
   Random Network Distillation, open-endedness, and unsupervised RL: an agent that masters its
   environment with **zero hand-coded goals** — intrinsic motivation (self-generated novelty) replaces
   the demonstration pairs entirely. This is a stricter reading of the mission than Vision A (it drops
@@ -66,7 +66,16 @@ learns both *what* to think and, eventually, *how* to learn.
   deterministic, seconds on CPU. Honest caveats booked in JOURNAL: a random-ACTION reference (a
   stochastic controller outside the deterministic policy class) still covers more raw cells —
   entropy is a strong visitation baseline in an open world; the gated claim is within-class directed
-  search, the currency that feeds the B-POC-2 repertoire. Next rung: B-POC-2 (MAP-Elites archive).
+  search, the currency that feeds the B-POC-2 repertoire.
+  **B-POC-2 landed 2026-07-10** (`src/map_elites.mojo`, `test_repertoire`): the transient search
+  became a **persistent skill library** — MAP-Elites over Go-Explore end-state cells, elite quality
+  = directness (earliest settle tick), two variation arms vs. the NS-ES baseline at the same 13,205
+  rollouts. The **ES-emitter arm stores 4,317 distinct replayable skills vs. 1,372** end-states NS-ES
+  ever touched (**3.1×**; pure-mutation arm 1,716; 100 % of stored elites re-reach their bin on
+  replay; 1,135 quality-improving replacements). Informative by-product: the emitter wants a step
+  size **4× larger** than NS-ES's (α = 0.8 vs 0.2) — overshooting the novelty peak still lands
+  somewhere new, and the map keeps it. Exact empowerment deferred (possible B-POC-2.5).
+  Next rung: B-POC-3 (world model + learning progress).
 - **Convergence hypothesis.** The two visions are expected to meet: primitives discovered by
   open-ended exploration (Vision B) become the reusable vocabulary that few-shot composition
   (Vision A) draws on to solve a task fast from a handful of examples — unsupervised "pretraining"

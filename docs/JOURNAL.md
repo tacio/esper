@@ -2217,3 +2217,41 @@ currency B-POC-2 (MAP-Elites) will consume. Also recorded in the RESEARCH-NOTES 
 `Memory.apply` (proven, B-POC-4's path) + driver-hosted novelty (like `meta_fit_selfmod`'s
 meta-fitness); and `ns_es_run` allocates its stripes inline once per run, the `meta_fit_selfmod`
 precedent, rather than a separate workspace struct.
+
+**2026-07-10 14:02 — B-POC-2: the search becomes a skill library (`src/map_elites.mojo`, `test_repertoire`).**
+Vision B rung 2, ~2 hours after rung 1, reusing everything it built. The design question was what
+"MAP-Elites" means with no reward: **bin = the end-state Go-Explore cell** (so the repertoire is
+directly denominated in B-POC-1's end-state currency), and **within-bin quality = directness** —
+the earliest tick from which the trajectory sits in its final cell and never leaves (`settle_tick`,
+computed from the per-tick cells log; goal-free, and a directer skill is better reuse currency for
+B-POC-4). User locked three choices up front: compare BOTH variation arms against the NS-ES
+baseline at equal rollout budget; directness as quality; exact empowerment deferred (booked as a
+possible B-POC-2.5).
+
+Results (seed 0, all three arms at exactly 13,205 rollouts, ~4 s total, bit-identical across
+runs): **the ES-emitter arm stores 4,317 distinct replayable elites vs. the 1,372 end-states NS-ES
+ever touched (3.15×; gate locked at 2× + a 2,000 floor); the pure-mutation arm stores 1,716.**
+100 % of stored elites re-reach exactly their bin on replay (the map is real, not an accounting
+artifact — this gate would catch any stripe-aliasing bug where stored weights ≠ the weights that
+earned the bin). Refinement is real too: 1,135 quality-improving replacements, mean settle
+57.0 → 55.3 (mutation arm: 817, 49.1 → 44.2).
+
+Two findings worth the ink:
+- **The emitter wants a step size 4× larger than NS-ES's.** The calibration sweep peaked at
+  α = 0.8 for the emitter (3,367→4,317 depending on RNG stream position) vs. the α = 0.2 that
+  B-POC-1 calibrated for NS-ES, and the asymmetry makes sense: NS-ES's product is its *centers*,
+  so it wants measured steps up the novelty landscape; the emitter's product is the *map*, so a
+  step that overshoots the novelty peak still lands somewhere — and landing somewhere NEW is the
+  whole game. Conversely the mutation arm wants σ_mut = 0.2, HALF of the ES probe σ = 0.4: a
+  mutation is a whole move (the child IS the perturbation), while an ES probe only measures a
+  direction and must flip argmax actions to register at all.
+- **Harvesting is most of the emitter's win.** The emitter arm's coverage (32,665 cells) triples
+  the NS-ES arm's despite running the identical ES skeleton — because every antithetic probe, not
+  just the center, deposits into the map. The probes were always reaching those states; B-POC-1
+  simply threw them away. This required widening the perturbation stripe to N×2×`POLICY_DIM`
+  (ns_es_run reuses one stripe for both antithetic signs; harvesting needs the exact weights that
+  earned each BC still live at insert time).
+
+Deliberately not built: map serialization (B-POC-4's seam — noted in ARCHITECTURE), curiosity-
+weighted parent selection (uniform is canonical v1; the known upgrade if arm A saturates), and
+colour in the BC/cell key (unchanged from B-POC-1 so the arms stay comparable across rungs).

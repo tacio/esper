@@ -206,6 +206,19 @@ than anything else measured) — the honest gated claim for directed search is w
 deterministic policy class, on both visitation AND distinct end-states, the repertoire currency
 B-POC-2 consumes.
 
+**Addendum (2026-07-10, B-POC-2 build).** Rung 2 landed the same day (`src/map_elites.mojo`):
+elite-per-cell over END-STATE Go-Explore cells, quality = directness (earliest settle tick). The
+measured mutation-vs-emitter comparison — the rung's informative by-product — went to the
+**ES-emitter** (4,317 stored replayable elites vs. 1,716 for pure mutation vs. 1,372 end-states
+the NS-ES baseline ever touched, all at 13,205 rollouts): CMA-ME's insight that emitters beat
+undirected mutation reproduces here derivative-free, but the dominant mechanism is *harvesting* —
+every antithetic probe deposits into the map, so states the ES was already visiting stop being
+thrown away. Calibration surfaced a clean asymmetry: the emitter's best step size is 4× NS-ES's
+(α 0.8 vs 0.2) while the mutation arm's best σ is HALF the ES probe σ — products differ (map vs.
+centers; a mutation is a move, a probe only measures). **Exact empowerment (Blahut–Arimoto) was
+deferred** to a possible B-POC-2.5: the archive-vs-population claim stood alone. The repertoire is
+deliberately in-memory; serialization is B-POC-4's seam.
+
 ---
 
 ## 2026-07-08 — Content-addressed construction (the deep-floor negative)
