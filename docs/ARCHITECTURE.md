@@ -234,10 +234,11 @@ the ES meta-learns only the small slow vector.
   sigmoid-threshold read, whole 2-level rule inferred in-context), `GridCountMapSelfModMemory`
   (arbitrary count→colour maps: meta-learned scoring salience + soft count-bin value table).
 
-## Vision B sandbox — `src/sandbox.mojo`, `src/novelty_es.mojo`, `src/map_elites.mojo`
+## Vision B sandbox — `src/sandbox.mojo`, `src/novelty_es.mojo`, `src/map_elites.mojo`, `src/empowerment.mojo`
 
 The B-POC-1 pair (open-ended rung 1): a reward-free world + the NS-ES intrinsic-fitness driver;
-plus the B-POC-2 repertoire (rung 2): the persistent elite-per-cell skill library.
+plus the B-POC-2 repertoire (rung 2): the persistent elite-per-cell skill library; plus the
+B-POC-2.5 second intrinsic signal (exact empowerment).
 
 - `sandbox.mojo` — a deterministic 16×16 gridworld with **no reward channel**: an avatar with 6
   actions (move×4 / paint / cycle-brush) under ONE parameterizable dynamics rule (gravity;
@@ -267,6 +268,14 @@ plus the B-POC-2 repertoire (rung 2): the persistent elite-per-cell skill librar
   harvesting needs both antithetic weight vectors live at insert time). Budgets are compared in
   rollouts — one insert attempt per rollout in every arm. The map is in-memory by design;
   serialization is B-POC-4's seam.
+- `empowerment.mojo` — **exact empowerment** (B-POC-2.5): the sandbox is deterministic, so
+  Blahut–Arimoto collapses and n-step empowerment = log₂(#distinct states reachable in n steps) —
+  `empowerment` is an iterative DFS over all 6ⁿ action sequences (per-depth grid copy +
+  `sandbox_step`, full-state FNV hash into a re-entrant per-sample seen-set), no learned parts, no
+  archive, stationary. `emp_es_run` is `me_emitter_run` with the scalar swapped (empowerment of
+  the candidate rollout's final state via `sandbox_rollout_state`, which also hands back final
+  avatar r/c/brush); it counts its enumeration ticks for the uncharged-cost caveat (budgets stay
+  denominated in rollouts).
 
 ## Drivers — `src/main.mojo`, `src/arc_solve.mojo`
 
@@ -359,7 +368,10 @@ fast/full tiers).
   `seed(0)`); `test_repertoire` (**B-POC-2**: the best MAP-Elites arm stores ≥2× as many distinct
   replayable skills as the NS-ES baseline ever touched end-states at the same budget, with a 100 %
   elite replay gate and a refinement gate — replacements happened and lowered the mean settle
-  tick; fully deterministic under `seed(0)`).
+  tick; fully deterministic under `seed(0)`); `test_empowerment` (**B-POC-2.5**: exact-empowerment
+  sanity — corner < open field, within n·log₂6 — and an empowerment-only emitter builds ≥2× the
+  equal-budget random-policy repertoire, 100 % replay; the empowerment-vs-novelty head-to-head is
+  printed ungated; fully deterministic under `seed(0)`).
 
 Phase-A expressible subset = {identity, flip_h, flip_v, transpose, recolor}; `shift` deferred (the
 affine zero-fills, synth `_shift` wraps).

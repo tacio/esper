@@ -2255,3 +2255,42 @@ Two findings worth the ink:
 Deliberately not built: map serialization (B-POC-4's seam — noted in ARCHITECTURE), curiosity-
 weighted parent selection (uniform is canonical v1; the known upgrade if arm A saturates), and
 colour in the BC/cell key (unchanged from B-POC-1 so the arms stay comparable across rungs).
+
+**2026-07-10 14:28 — B-POC-2.5: exact empowerment, the archive-free second signal (`src/empowerment.mojo`, `test_empowerment`).**
+The deferred half of rung 2. The pleasant design collapse: the sandbox is fully deterministic, so
+the Blahut–Arimoto iteration the notes anticipated is unnecessary — a deterministic channel's
+capacity is exactly log₂ of its distinct-output count, so **exact n-step empowerment = log₂(#states
+reachable in n steps)**, computed by an iterative DFS over all 6ⁿ action sequences with a
+full-state FNV hash into a per-sample seen-set. No learned parts, no approximation, and — in
+deliberate contrast to novelty — no archive: the signal is stateless and stationary. Horizon
+locked at n = 4 (0.7 ms/eval; 6⁵ leaves would overflow the seen-set's 50 % load). One additive
+sandbox change: `sandbox_rollout_state` exposes the final avatar r/c/brush (the final grid was
+already in the caller's scratch); `sandbox_rollout` now delegates to it, behaviour-identical.
+
+User-locked design: budget stays denominated in ROLLOUTS with the enumeration ticks printed as an
+uncharged caveat (19.9 M hidden ticks vs 845 k charged — ~24×); gate = beat the equal-budget
+random-policy repertoire; the novelty head-to-head is reported ungated whichever way it goes.
+
+Results (seed 0, 13,205 rollouts/arm, ~6 s, bit-identical double-run): **empowerment emitter
+1,513 elites vs random 447 = 3.38× (gate 2×), 100 % replay.** The findings the rung existed to
+surface, all booked ungated:
+- **Empowerment concentrates; restarts make it explore.** At B-POC-2's reseed interval (25) the
+  emitter parks in one high-optionality region and stores 382 elites — BELOW random's 448. The
+  calibration lever was reseed = 5 + σ = 0.8: frequent uniform-elite restarts with wide probes
+  turn a concentrating signal into an exploration engine (382 → 1,513). Novelty never needed
+  this because its objective moves away from wherever it has been by construction.
+- **At this RNG stream the two signals tie** (1,513 vs 1,607) — and that exposed real variance in
+  the novelty emitter itself: the same constants drew 4,317 in `test_repertoire`'s stream
+  position. The emitter family's repertoire is high-variance across streams; per-stream gates
+  hold because each test is deterministic, but cross-rung comparisons should quote the spread,
+  not a single draw.
+- **The paint action flattens the optionality landscape.** Mean elite empowerment is ≈ equal
+  across the empowerment, novelty, and random maps (7.94 / 7.98 / 7.94 bits at n = 4): painting
+  gives every state combinatorial options, so seeking optionality buys almost nothing here. In a
+  world with genuinely constraining states (traps, walls that close) the signal should
+  differentiate — worth revisiting when B-POC-5 mutates the world rules.
+
+Signal sanity is gated directly with no search: corner empowerment (7.62 bits) < open-field
+(8.27) < n·log₂6 (10.34). Wall-clock note: n = 4 enumeration is 0.7 ms/eval and the whole
+three-arm test runs in ~6 s — exhaustive exact empowerment is entirely affordable at this world
+size, vindicating the "small symbolic world on commodity hardware" bet (value #5).

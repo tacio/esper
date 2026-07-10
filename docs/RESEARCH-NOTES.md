@@ -219,6 +219,22 @@ centers; a mutation is a move, a probe only measures). **Exact empowerment (Blah
 deferred** to a possible B-POC-2.5: the archive-vs-population claim stood alone. The repertoire is
 deliberately in-memory; serialization is B-POC-4's seam.
 
+**Addendum (2026-07-10, B-POC-2.5 build).** Exact empowerment measured (`src/empowerment.mojo`).
+Theory note first: in a deterministic world **Blahut–Arimoto collapses** — channel capacity =
+log₂(#distinct reachable states), so "exact empowerment" is exhaustive 6ⁿ enumeration + distinct-
+state counting (n = 4 costs 0.7 ms; entirely affordable at this world size). Measured verdict, all
+at 13,205 rollouts: an empowerment-only emitter stores 1,513 elites vs 447 random (3.4×, the gated
+claim) but only **ties the novelty emitter at this RNG stream (1,513 vs 1,607)** — and the tie
+exposed that the emitter family's repertoire is high-variance across streams (novelty drew 4,317
+in `test_repertoire`'s position); cross-signal comparisons should quote spreads, not single draws.
+Two qualitative findings: (1) **empowerment concentrates** — at reseed 25 it parks below random
+(382 elites); frequent elite-restarts (reseed 5) are what convert an optionality-seeker into an
+explorer, whereas novelty self-disperses by construction; (2) **the paint action flattens the
+optionality landscape** (mean elite empowerment ≈ 7.9 bits in ALL arms), so empowerment buys no
+concentration advantage in THIS world — revisit when B-POC-5 mutates the rules toward worlds with
+genuinely constraining states. Cost honesty: the budget stayed rollout-denominated by design
+choice; the enumeration spent ~24× the charged ticks (printed in-test as the uncharged caveat).
+
 ---
 
 ## 2026-07-08 — Content-addressed construction (the deep-floor negative)

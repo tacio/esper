@@ -49,7 +49,7 @@ learns both *what* to think and, eventually, *how* to learn.
   the M8 operator ceiling 5/1000). See "Next — the path to full ARC-AGI 2" below for the
   measurable rungs. Still hands the engine *goals* (a task's demonstration pairs are
   compressed supervision) even though it never hands it a DSL.
-- **Vision B — open-ended mastery (active — B-POC-1 & B-POC-2 done 2026-07-10).** Inspired by
+- **Vision B — open-ended mastery (active — B-POC-1, B-POC-2 & B-POC-2.5 done 2026-07-10).** Inspired by
   Random Network Distillation, open-endedness, and unsupervised RL: an agent that masters its
   environment with **zero hand-coded goals** — intrinsic motivation (self-generated novelty) replaces
   the demonstration pairs entirely. This is a stricter reading of the mission than Vision A (it drops
@@ -74,7 +74,18 @@ learns both *what* to think and, eventually, *how* to learn.
   ever touched (**3.1×**; pure-mutation arm 1,716; 100 % of stored elites re-reach their bin on
   replay; 1,135 quality-improving replacements). Informative by-product: the emitter wants a step
   size **4× larger** than NS-ES's (α = 0.8 vs 0.2) — overshooting the novelty peak still lands
-  somewhere new, and the map keeps it. Exact empowerment deferred (possible B-POC-2.5).
+  somewhere new, and the map keeps it.
+  **B-POC-2.5 landed 2026-07-10** (`src/empowerment.mojo`, `test_empowerment`): the deferred
+  second intrinsic signal. The sandbox is deterministic, so Blahut–Arimoto collapses — exact
+  n-step empowerment = log₂(#states reachable in n steps), by exhaustive 6ⁿ enumeration (no
+  learned parts, no archive, stationary). Gated result: an empowerment-only emitter stores
+  **1,513 elites vs 447 random = 3.4×** at equal rollout budget (100 % replay). Reported findings:
+  empowerment is a CONCENTRATING signal — it needs frequent elite-restarts (reseed 5) or it parks
+  below random (382); at this stream it ties novelty (1,513 vs 1,607 — the novelty emitter is
+  high-variance across RNG streams: 4,317 in `test_repertoire`'s position); and the paint action
+  flattens the optionality landscape (mean elite empowerment ≈ equal across all arms, ~7.9 bits),
+  so empowerment buys no concentration advantage here. Caveat: enumeration spends ~24× the charged
+  rollout ticks (printed, uncharged by the locked design choice).
   Next rung: B-POC-3 (world model + learning progress).
 - **Convergence hypothesis.** The two visions are expected to meet: primitives discovered by
   open-ended exploration (Vision B) become the reusable vocabulary that few-shot composition

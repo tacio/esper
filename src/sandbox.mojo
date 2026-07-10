@@ -311,10 +311,44 @@ def sandbox_rollout(
     cells: UnsafePointer[Int64, MutAnyOrigin],
     record_cells: Bool,
 ):
+    var r = 0
+    var c = 0
+    var brush = 0
+    sandbox_rollout_state(
+        weights,
+        task,
+        scratch_grid,
+        obs,
+        logits,
+        bc_out,
+        cells,
+        record_cells,
+        r,
+        c,
+        brush,
+    )
+
+
+# Same rollout, additionally handing back the final avatar state (the final
+# grid is already in the caller's scratch): consumers that score the terminal
+# STATE rather than the BC — e.g. the empowerment signal — need r/c/brush too.
+def sandbox_rollout_state(
+    weights: UnsafePointer[Float32, MutAnyOrigin],
+    task: SandboxTask,
+    scratch_grid: UnsafePointer[Float32, MutAnyOrigin],
+    obs: UnsafePointer[Float32, MutAnyOrigin],
+    logits: UnsafePointer[Float32, MutAnyOrigin],
+    bc_out: UnsafePointer[Float32, MutAnyOrigin],
+    cells: UnsafePointer[Int64, MutAnyOrigin],
+    record_cells: Bool,
+    mut r: Int,
+    mut c: Int,
+    mut brush: Int,
+):
     memcpy(dest=scratch_grid, src=task.grid, count=SB_CELLS)
-    var r = task.start_r
-    var c = task.start_c
-    var brush = task.start_brush
+    r = task.start_r
+    c = task.start_c
+    brush = task.start_brush
     for t in range(SB_T):
         sandbox_obs(scratch_grid, r, c, brush, t, obs)
         policy_forward(weights, obs, logits)
