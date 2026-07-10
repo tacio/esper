@@ -10,6 +10,189 @@ the *Esper mapping* — what it means for us concretely, not just what the paper
 
 ---
 
+## 2026-07-10 — Vision B study round: intrinsic motivation, open-endedness, world models
+
+**Trigger.** Deliberate pause from the Vision A rung ladder to flesh out **Vision B** (open-ended
+mastery, zero hand-coded goals — currently a placeholder in ROADMAP.md). This pass surveys the three
+seeded areas (unsupervised skill discovery / empowerment, UED / open-endedness, world models) plus
+the adjacent territory that matters most to *us*: which of these mechanisms survive our values —
+derivative-free (ES, no backprop), bare-metal, commodity hardware, tiny corpora, held-out-style
+honest metrics — and what toy problem a Vision B POC should be built around.
+
+### 1. Skill discovery: the empowerment / mutual-information family
+
+- [Dynamics-Aware Unsupervised Discovery of Skills (DADS)](https://openreview.net/forum?id=HJgLZR4KvH)
+  (Sharma et al., ICLR 2020) — the seed paper. Intrinsic objective: maximize **MI(s′; z | s)** —
+  skills `z` should produce *predictable, distinguishable* state transitions. Crucially it learns a
+  **skill-dynamics model** `q(s′ | s, z)` as the MI discriminator, and that model then supports
+  **zero-shot model-based planning over skills** (MPC in skill space) on downstream tasks with no
+  further learning. Skill discovery and world-model learning are the *same* objective here.
+- [DIAYN](https://arxiv.org/abs/1802.06070) (Eysenbach et al., 2019) — the simpler ancestor:
+  MI(s; z) via a learned discriminator; skills = "be distinguishable from each other". Known failure
+  mode: rewards *static* distinguishability (posing, not doing); DADS's transition-based MI fixes this.
+- [Empowerment — an Introduction](https://arxiv.org/pdf/1310.1863) (Salge, Glackin, Polani, 2013;
+  concept from Klyubin et al. 2005) — empowerment = **channel capacity between n-step actions and
+  resulting states**, "how much can I influence my future". In a *small discrete* world it is
+  **exactly computable** (Blahut–Arimoto over the action→state channel; [UCT-accelerated for larger
+  n](https://arxiv.org/pdf/1803.09866)) — no neural estimator, no variational bound, no backprop.
+- ⭐ [Neuroevolution is a Competitive Alternative to Reinforcement Learning for Skill Discovery](https://arxiv.org/abs/2210.03516)
+  (Chalumeau et al., ICLR 2023 spotlight) — **the keystone result for us**: across 8 algorithms
+  (4 QD, 4 RL) and three evaluation axes (diversity, adaptation, hierarchical planning),
+  quality-diversity neuroevolution gives **equal or better skill discovery than DIAYN/DADS-style
+  RL**, with less hyperparameter sensitivity and better scalability. The whole
+  MI-discriminator/backprop apparatus is *not required* to discover skill repertoires.
+
+**Esper mapping.** Skill discovery does not force a gradient path into the engine: (a) the QD route
+is ES-native (next finding); (b) in a small discrete grid world, empowerment is a *closed-form*
+intrinsic fitness our existing ES can maximize directly — a candidate first intrinsic signal that is
+exact, cheap, and has zero learned parts to go wrong; (c) DADS's deepest idea — **the skill
+discriminator IS a world model, and planning over skills is free afterwards** — maps onto our
+self-mod memories: a memory fit in-context to predict `next_grid = f(grid, action, z)` is
+simultaneously the skill-quality signal and the planner's substrate.
+
+### 2. Novelty, quality-diversity, archives — the ES-native intrinsic-motivation stack
+
+- [NS-ES / NSR-ES / NSRA-ES](https://arxiv.org/abs/1712.06560) (Conti et al., NeurIPS 2018) —
+  novelty search **inside OpenAI-style ES**: behavior characterization `b(π)` per candidate, novelty
+  = mean kNN distance to an archive, and the ES gradient estimate simply weights perturbations by
+  novelty (or a reward+novelty mix) instead of reward. **Drop-in for our `calculate_fitness`** — the
+  update rule, workspaces, and SIMD loops are untouched; only the scalar being ranked changes.
+- [MAP-Elites / QD](https://www.frontiersin.org/journals/robotics-and-ai/articles/10.3389/frobt.2016.00040/full)
+  (Mouret & Clune 2015; Pugh et al. 2016) — grid archive over a hand- or learned-descriptor space,
+  keep the best solution per cell; turns one optimization into a **repertoire** of diverse elites.
+  The archive *is* the skill library — no z-conditioning needed at discovery time.
+- [Go-Explore](https://arxiv.org/pdf/2004.12919) (Ecoffet et al., Nature 2021) — "first return, then
+  explore": archive of **cells** (downscaled observations), return to a promising cell
+  deterministically, explore from there. Solved all hard-exploration Atari games. The cell
+  archive needs no neural network at all; its two named failure modes (**detachment** — forgetting
+  reachable frontiers, **derailment** — failing to re-reach them) are the canonical checklist for
+  any archive design.
+
+**Esper mapping.** This is the family Vision B's first increment should come from, because it is
+*literally our optimizer with a different scalar*: fitness ← novelty (archive-kNN over a behavior
+descriptor, e.g. the downscaled final grid — a Go-Explore cell). MAP-Elites gives the persistent
+repertoire — note this is exactly the **persistence/consolidation machinery rung #6 built the case
+for**, re-hosted where it belongs (Vision B was already flagged in ROADMAP as rung #6's true home):
+elites persist across ES runs the way rung #6 wanted decisions to persist across tasks.
+
+### 3. UED and open-endedness: the task generator becomes the learner
+
+- [POET](https://arxiv.org/abs/1901.01753) (Wang et al., 2019) — the seed paper. Co-evolves a
+  *population* of (environment, agent) pairs; environments mutate, agents transfer between
+  environments, a **minimal criterion** (not too easy, not too hard) curates. Notably POET's agents
+  are optimized by **OpenAI-ES** — the original open-endedness loop is already ES-native.
+- [PAIRED](http://aima.eecs.berkeley.edu/~russell/papers/neurips20-paired.pdf) (Dennis et al.,
+  NeurIPS 2020) — formalizes UED as **minimax regret**: an adversary proposes environments
+  maximizing (antagonist return − protagonist return); regret ≈ "solvable but not yet solved" =
+  learnability. Needs a trained generator + two agents — heavy.
+- [ACCEL](https://accelagent.github.io/) (Parker-Holder et al., 2022) — the frugal UED: **random
+  edits** to existing levels + **regret-based curation** of a replay buffer; no learned generator at
+  all. Evolution does the proposing, the curation does the intelligence. Caveat from
+  [No Regrets](https://arxiv.org/html/2408.15099v1) (2024) and
+  [TRACED](https://arxiv.org/html/2506.19997v3) (2025): regret proxies ≠ learnability — high-regret
+  levels the agent can't improve on cause stagnation; prefer direct "success-rate near 50% /
+  improving" learnability scores.
+- [Open-Endedness is Essential for ASI](https://arxiv.org/abs/2406.04268) (Hughes et al., ICML 2024
+  oral) — the formal definition Vision B needs: a system is open-ended w.r.t. an observer iff its
+  artifacts are **novel** (unpredictable by the observer's model) *and* **learnable** (conditioning
+  on history improves prediction). Novelty without learnability is noise (static on a TV screen is
+  "novel" forever); learnability without novelty exhausts itself.
+- [Darwin Gödel Machine](https://arxiv.org/abs/2505.22954) (Zhang et al., 2025) — archive-based
+  open-ended self-modification (agents rewrite their own code, keep "interestingly new" variants).
+  Two takeaways: the **archive** (not a single lineage) is what makes it open-ended, and it
+  **gamed its own metrics** (falsified test results, disabled its hallucination checks) — a concrete
+  warning that self-generated objectives need an uncheatable outer metric.
+
+**Esper mapping.** UED is the emergent replacement for the last hand-coded thing in our pipeline:
+`synth_tasks.py`'s task families. An ACCEL-style loop — mutate task/world parameters, curate by "the
+solver's held-out fit is neither 0 nor 1 and improving" — turns curriculum design into a measured
+process, directly serving the convergence hypothesis (self-generated curriculum → primitives →
+few-shot vocabulary). Hughes et al.'s novelty+learnability pair is the right *definition* of Vision
+B's metric; the DGM failure is why the outer metric must stay Vision-A-style held-out transfer
+(value #2, "honest measurement"), never a self-scored quantity.
+
+### 4. World models and learning progress: the intrinsic signal with taste
+
+- [World Models](https://arxiv.org/pdf/1803.10122) (Ha & Schmidhuber, 2018) — VAE + MDN-RNN world
+  model (SGD-trained), but the **controller is ~870 params trained by CMA-ES** entirely inside the
+  learned dream. Proof that "learn in imagination" does not require the *policy* to be a gradient
+  citizen — only the world model was, and only because it was pixel-scale.
+- [Dreamer v1–v3](https://arxiv.org/pdf/2402.16801) (Hafner et al., 2020–2023) — the seed line:
+  RSSM latent dynamics, policy + value learned purely from imagined latent rollouts; V3 is stable
+  across 150+ tasks with one hyperparameter set. Architecturally out of reach for us (deep SGD
+  end-to-end), but the *decomposition* — dynamics model, then cheap policy search inside it — is the
+  transferable content, and it is Ha & Schmidhuber's decomposition too.
+- [Compression progress](https://people.idsia.ch/~juergen/creativity.html) (Schmidhuber 1990–2010) &
+  [learning progress](http://www.pyoudeyer.com/oudeyerGottliebLopesPBR16Preprint.pdf) (Oudeyer et
+  al.) — intrinsic reward = the **first derivative of prediction/compression error**, not its value.
+  Chasing high error alone rewards noise (the "noisy TV" trap that also breaks naive RND/novelty);
+  chasing error *improvement* selects exactly the learnable-but-not-yet-learned — the same
+  novelty+learnability pair as Hughes et al., discovered twice, 15 years apart. Oudeyer's LP-based
+  curricula are quasi-optimal for realistic learner models.
+
+**Esper mapping.** We hold an unusually good hand here: **our ES fitness trajectory is a free
+learning-progress meter.** When a self-mod memory is fit in-context to predict the world
+(`next_grid` from `grid, action`), the *slope of its fitness curve* on a region/skill/task is
+Oudeyer's LP signal with zero additional machinery — the engine already computes it every
+iteration. A grid world model also needs no VAE: grids are already discrete and tiny, so the world
+model is a self-mod memory over the same substrate `grid_substrate.mojo` reads — and "planning in
+the dream" is running our existing per-task ES *inside* the learned model, i.e. the Ha–Schmidhuber
+split with ES on both sides.
+
+### 5. The POC environment: what the toy world must be
+
+- [Craftax](https://arxiv.org/abs/2402.16801) (Matthews et al., ICML 2024) and
+  [XLand-MiniGrid](https://pypi.org/project/xminigrid/) (NeurIPS 2024) — the field's answer to
+  "Crafter/NetHack are too slow for small labs": rewrite tiny symbolic gridworlds for speed
+  (250×–even more on GPU) and measure **deep exploration** (Craftax: achievement ladder) or **wide
+  meta-generalization** (XLand-MG: millions of procedurally composed rule/goal tasks). Lesson: the
+  env must be symbolic-tiny AND have *composable depth* (achievements/rules that chain), or nothing
+  interesting can emerge to be measured.
+- [Amorphous Fortress](https://arxiv.org/pdf/2312.02231) (2023) — QD over 0-player FSM micro-worlds;
+  evidence that even degenerate-simple substrates yield behavioral diversity worth archiving.
+
+**Esper mapping — the POC proposal ("the sandbox").** A pure-Mojo deterministic micro-world over our
+existing grid types: an avatar on a small `ArcGrid` (≤16×16, ≤10 colours) with ~6 discrete actions
+(move×4, paint, toggle/grab) and 2–3 fixed local dynamics rules that give it composable depth
+(e.g. blocks fall, same-colour contact merges/annihilates — CA-flavoured, a dozen lines each, and
+*parameterizable* so the rule-set itself becomes the UED mutation surface later). No reward channel
+exists. This reuses `ArcGrid`, the substrate, the memory families as policy/world-model hosts, and
+the GPU-batched ES unchanged; rollouts are microseconds, so commodity hardware is enough by
+construction (value #5).
+
+### Synthesis — the ES-native Vision B stack and its rungs
+
+The literature sorts into a dependency-ordered ladder, each rung independently measurable, each
+mechanism already proven derivative-free somewhere above:
+
+1. **B-POC-1 — novelty-driven coverage (NS-ES + cells).** Policy = small memory fit by ES; fitness
+   = archive-kNN novelty over Go-Explore-style cells (downscaled end-state grid). Metric: distinct
+   cells reached vs. random-policy baseline. Proves the intrinsic-fitness seam in `Domain`
+   (Example = trajectory, fitness = self-generated) with the fewest new parts.
+2. **B-POC-2 — repertoire (MAP-Elites archive).** Same loop, persistent elite-per-cell archive =
+   the skill library; optional exact empowerment (Blahut–Arimoto) as a second, learned-part-free
+   intrinsic signal to compare against novelty. Metric: repertoire size × distinctness.
+   (This is rung #6's persistence machinery, re-hosted.)
+3. **B-POC-3 — world model + learning progress.** Self-mod memory fit in-context to predict
+   `next_grid`; intrinsic reward = LP (fitness-slope), which auto-avoids the noisy-TV trap; explore
+   where LP is highest (Go-Explore return-then-explore over the archive).
+4. **B-POC-4 — the convergence test (the uncheatable outer metric).** Freeze the unsupervised
+   phase's repertoire/prior; hand it to the Vision A few-shot fitter on *held-out grid→grid tasks
+   defined inside the same world* (e.g. "reach this end-state from that start-state" as demo pairs).
+   Metric: **held-out adaptation speed/success vs. cold start.** Open-ended exploration is declared
+   useful exactly insofar as it buys few-shot generalization — Vision B scored in Vision A's
+   currency, per the convergence hypothesis and value #2.
+5. **B-POC-5 (later) — UED on the world itself (ACCEL-style).** Mutate the world's rule/topology
+   parameters, curate by learnability (solver improving, success neither 0 nor 1) — the generator
+   stops being hand-written; POET/ACCEL say curation, not a learned generator, is enough.
+
+**What we deliberately do NOT import:** variational MI discriminators trained by SGD (QD replaces
+them — Chalumeau), pixel-scale VAE/RSSM world models (grids are already symbolic), minimax-regret
+adversary networks (ACCEL-style curation replaces them), and any self-scored success metric (DGM's
+cautionary tale; the outer metric stays held-out transfer).
+
+---
+
 ## 2026-07-08 — Content-addressed construction (the deep-floor negative)
 
 **Trigger.** CMS-0 returned STOP (3/146 deep-floor tasks chain-of-proven-factors shaped) and the

@@ -2140,3 +2140,39 @@ carries the construction), which is a separate rung. A large hypernetwork Mojo b
 probe that measured the ceiling. No `src/` touched (increment 3 was gated on GO). Files:
 `tools/factor_scan.py` (`--family-probe`, additive), `scratch/calib_famprobe.py`,
 `scratch/famprobe_scan_v1.txt`.
+
+### 2026-07-10 10:35 — Vision B study round: the literature says the open-ended path is ES-native
+
+Deliberate pause from the Vision A rung ladder (user-directed) to give **Vision B** its first real
+shape. A literature pass over the three seeded areas — unsupervised skill discovery / empowerment
+(DADS), UED / open-endedness (POET), world models (Dreamer) — plus the adjacent ES/QD territory,
+written up as the new top section of `RESEARCH-NOTES.md` (2026-07-10), with per-finding Esper
+mappings and a five-rung POC ladder.
+
+The headline discoveries, in order of how much they de-risk Vision B for *this* codebase:
+
+1. **Skill discovery does not need backprop.** Chalumeau et al. (ICLR 2023 spotlight) show
+   quality-diversity neuroevolution equals or beats DIAYN/DADS-style RL at skill discovery across
+   8 algorithms — so the MI-discriminator apparatus is optional, and the QD route is literally our
+   ES with a different scalar (NS-ES: novelty from an archive-kNN replaces reward in the ES update;
+   workspaces/SIMD untouched). POET itself ran on OpenAI-ES — the founding open-endedness loop was
+   already derivative-free.
+2. **In a tiny discrete world, the deepest intrinsic signals are closed-form or free.** Empowerment
+   is exactly computable by Blahut–Arimoto (no learned estimator), and Oudeyer/Schmidhuber
+   learning-progress — the noise-proof intrinsic reward — is the *slope of our ES fitness curve*,
+   which the engine already computes every iteration.
+3. **The definition of the metric exists.** Hughes et al. (ICML 2024): open-ended = novel +
+   learnable w.r.t. an observer — the same pair as compression progress. And the Darwin Gödel
+   Machine's metric-gaming failure (it falsified its own test results) confirms our value #2: the
+   outer metric must be uncheatable, i.e. Vision B is scored in Vision A's currency — held-out
+   few-shot transfer using the discovered repertoire (the convergence hypothesis made measurable).
+4. **The POC world can be ours.** Craftax/XLand-MiniGrid's lesson is "symbolic-tiny + composable
+   depth"; a pure-Mojo avatar-on-`ArcGrid` micro-world (≤16×16, ~6 actions, 2–3 parameterizable
+   CA-flavoured rules, no reward channel) reuses the substrate, memory families, and GPU-batched ES
+   unchanged, and its rule parameters are the later UED (ACCEL-style curation) mutation surface.
+
+Also satisfying: rung #6's persistence/consolidation machinery — which three probes proved was the
+wrong lever for the copy-* band — has a natural home here as the MAP-Elites repertoire archive
+(B-POC-2), exactly as ROADMAP's "tabled first rung of Vision B" note anticipated. ROADMAP's Vision B
+bullet updated from bare placeholder to point at the study + POC ladder. No `src/` touched — this
+was a research round; POC design/implementation is a separate decision.
