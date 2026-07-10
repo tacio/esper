@@ -234,11 +234,12 @@ the ES meta-learns only the small slow vector.
   sigmoid-threshold read, whole 2-level rule inferred in-context), `GridCountMapSelfModMemory`
   (arbitrary count→colour maps: meta-learned scoring salience + soft count-bin value table).
 
-## Vision B sandbox — `src/sandbox.mojo`, `src/novelty_es.mojo`, `src/map_elites.mojo`, `src/empowerment.mojo`
+## Vision B sandbox — `src/sandbox.mojo`, `src/novelty_es.mojo`, `src/map_elites.mojo`, `src/empowerment.mojo`, `src/world_model.mojo`
 
 The B-POC-1 pair (open-ended rung 1): a reward-free world + the NS-ES intrinsic-fitness driver;
 plus the B-POC-2 repertoire (rung 2): the persistent elite-per-cell skill library; plus the
-B-POC-2.5 second intrinsic signal (exact empowerment).
+B-POC-2.5 second intrinsic signal (exact empowerment); plus the B-POC-3 world model + learning
+progress (rung 3).
 
 - `sandbox.mojo` — a deterministic 16×16 gridworld with **no reward channel**: an avatar with 6
   actions (move×4 / paint / cycle-brush) under ONE parameterizable dynamics rule (gravity;
@@ -276,6 +277,18 @@ B-POC-2.5 second intrinsic signal (exact empowerment).
   the candidate rollout's final state via `sandbox_rollout_state`, which also hands back final
   avatar r/c/brush); it counts its enumeration ticks for the uncharged-cost caveat (budgets stay
   denominated in rollouts).
+- `world_model.mojo` — the **world model + learning progress** (B-POC-3). `SandboxState` /
+  `TransitionDomain`: a transition is an `ExamplePair[SandboxState]`, so the UNCHANGED generic ES
+  core fits the model — no new learning machinery. `WorldModelMemory` is a per-cell local
+  predictor with a learned **softmax-selector head** over value sources {9 patch cells, brush,
+  empty} (dynamics are selections; a tanh value head provably cannot emit graded colour copies —
+  see the module comments for the measured head comparison and the seed-saddle fix).
+  `lp_probe` = instantaneous LP as the ES fitness slope (clone, fixed constant-α/σ stage,
+  delta). `train_uniform` / `train_lp_guided` = the equal-budget collection arms over regions =
+  dynamics contexts (gravity directions + a TV-static region); the guided allocator uses the
+  windowed **changed-cell score slope** on held-out per-region validation batches (MSE-slope and
+  clone-probe LP both fail as allocators — documented in-code), with per-round training on a
+  bounded subsample of the cumulative pool.
 
 ## Drivers — `src/main.mojo`, `src/arc_solve.mojo`
 
@@ -371,7 +384,11 @@ fast/full tiers).
   tick; fully deterministic under `seed(0)`); `test_empowerment` (**B-POC-2.5**: exact-empowerment
   sanity — corner < open field, within n·log₂6 — and an empowerment-only emitter builds ≥2× the
   equal-budget random-policy repertoire, 100 % replay; the empowerment-vs-novelty head-to-head is
-  printed ungated; fully deterministic under `seed(0)`).
+  printed ungated; fully deterministic under `seed(0)`); `test_world_model` (**B-POC-3**,
+  suite-tier full ~4 min: the world model reaches ≥0.4 held-out changed-cell accuracy where
+  identity scores 0; LP separates novel ≥10× from mastered AND contradiction-scrambled while the
+  scrambled region keeps ≥1.5× the mastered raw error; LP-guided collection beats uniform by
+  ≥0.08 held-out changed-cell at equal transition budget; fully deterministic under `seed(0)`).
 
 Phase-A expressible subset = {identity, flip_h, flip_v, transpose, recolor}; `shift` deferred (the
 affine zero-fills, synth `_shift` wraps).

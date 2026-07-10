@@ -2294,3 +2294,58 @@ Signal sanity is gated directly with no search: corner empowerment (7.62 bits) <
 (8.27) < n·log₂6 (10.34). Wall-clock note: n = 4 enumeration is 0.7 ms/eval and the whole
 three-arm test runs in ~6 s — exhaustive exact empowerment is entirely affordable at this world
 size, vindicating the "small symbolic world on commodity hardware" bet (value #5).
+
+**2026-07-10 20:16 — B-POC-3: a world model + learning progress, and three wrong LP allocators (`src/world_model.mojo`, `test_world_model`).**
+Vision B rung 3, the densest calibration story so far. The seam worked exactly as designed: a
+transition is an `ExamplePair[SandboxState]` of a new `TransitionDomain`, so the UNCHANGED generic
+ES core (`fitness`/`fit_operator`/`ESWorkspace`) fits the world model with zero new learning
+machinery — the strongest reuse proof yet for the Domain/Memory abstraction.
+
+**The architecture had to be found by measurement.** Three heads, each diagnosed by a per-event
+breakdown (departure / arrival / paint) of held-out changed-cell accuracy:
+- Squash head (MLPMemory-style): plateaus at 0.46 changed — and identically from a zero seed or a
+  colour-LUT basis seed, so colour separation was NOT the wall.
+- Residual head (out = centre + bounded delta): identity exact at zero weights; learns DEPARTURES
+  perfectly (113/113 — a saturating gate) but arrivals 0/115: a tanh value head cannot emit an
+  exact graded COPY of a neighbour's colour. This is the Rung CF expressivity lesson reproduced in
+  a 400-parameter miniature.
+- **Selector head (landed): softmax over value sources** {9 patch cells, brush, empty} — the
+  dynamics are selections ("take the colour from above"), and selection is ES-learnable where
+  graded synthesis is not: 0.625 held-out changed-cell (identity = 0, chance ≈ 0.1), overall 0.991.
+  Two landscape traps en route: the all-zero seed is a TOTAL saddle for a two-layer selector (hid
+  = 0 kills W2's first-order signal AND W1 routes through W2 = 0 — the ES measurably never moved;
+  fixed by a deterministic pseudo-random W1/b1 seed), and WM_HID = 16 froze outright where 12
+  climbs (bigger ≠ better for ES landscapes). Honest residual: the PAINT event (rare agent-writes,
+  ~17 instances/batch) is never learned; paint-biased collection made everything WORSE (busier
+  grids harden the gravity patches faster than they soften paint) — booked as a limitation, the
+  fix is curriculum not data flooding. Also booked: the fit is schedule-sensitive (a narrow
+  0.1-anneal never learns events; wide 0.3 → fine staging is load-bearing), and avatar-position
+  INDICATOR features (at-cell / directly-above) were needed — exact-position conditions cannot be
+  carved from graded offset ramps.
+
+**Gate 2 (LP separation) needed two redesigns to be honest.** A cyclic-shift target scramble turned
+out LEARNABLE (a shift-by-one target is the state two gravity ticks ahead — the model made real
+progress on it). The landed construction is symmetric and airtight: mastered = a copy of the batch
+the model was just trained on; unlearnable = another copy of the SAME batch made CONTRADICTORY
+(distant pairs share an identical input with two different targets — no function fits both, at any
+model state, immune to memorization). Measured: LP(novel gravity) = 22× the max of the other two,
+unlearnable raw error 8.7× mastered with LP ≈ 0 — the noisy-TV immunity, gated at 10×/1.5×.
+
+**Gate 3 (LP-guided > uniform) burned through two allocators before the honest one:**
+1. Clone-probe LP (fit a clone on a 16-transition probe batch) measures batch MEMORIZABILITY —
+   rel-LP ≈ 1.0 forever on any real region.
+2. MSE-slope LP on validation batches chased the NOISE: the TV-static region's error floor (~−18)
+   is 100× the real regions', so learning the noise's mean is a huge one-off absolute delta — the
+   allocator handed every round to static (and, absurdly, still "won" once — a pass for the wrong
+   mechanism is a fail).
+3. **Windowed CHANGED-CELL SCORE slope (landed):** the discrete exact-match currency is scale-free
+   and mean-learning never moves it — static reads ≈ 0 from round one (one rounding blip in round
+   2, self-extinguished by round 3: 0.101 → 0.007 → 0.002, visible in the test's printed trace).
+   Result: **LP-guided 0.362 vs uniform 0.153 (2.4×)** at an equal 600-transition budget, gate
+   locked at +0.08 (measured delta 0.209). Also load-bearing: per-round training samples a bounded
+   slice of the CUMULATIVE pool (per-round-only pools gave catastrophic churn — the last round's
+   focus overwrote everything).
+
+Test is `# suite-tier: full` (4m04s, bit-deterministic across a double-run). The rung's one-line
+moral for RESEARCH-NOTES: *LP is the right signal, but only in the right currency — the ES fitness
+slope diagnoses learnability; allocation must use the uncheatable discrete score's slope.*

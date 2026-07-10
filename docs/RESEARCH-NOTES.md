@@ -235,6 +235,30 @@ concentration advantage in THIS world — revisit when B-POC-5 mutates the rules
 genuinely constraining states. Cost honesty: the budget stayed rollout-denominated by design
 choice; the enumeration spent ~24× the charged ticks (printed in-test as the uncharged caveat).
 
+**Addendum (2026-07-10, B-POC-3 build).** Rung 3 landed (`src/world_model.mojo`): the world model
+is fit through the UNCHANGED generic ES core (transitions = `ExamplePair`s of a `TransitionDomain`
+— §4's "grid world model needs no VAE" confirmed in practice), and "our ES fitness trajectory is a
+free LP meter" survived contact with three amendments:
+1. **LP is currency-sensitive.** The fitness (MSE) slope correctly *diagnoses* learnability
+   (novel = 22× mastered/unlearnable — gated), but as an *allocator* it chases the noisy TV: error
+   scales differ 100× across regions and learning the noise's MEAN is a huge one-off MSE delta.
+   Clone-probe LP fails differently (measures batch memorizability). The allocator that works is
+   the windowed **discrete-score slope** (held-out changed-cell accuracy per region) — scale-free,
+   and mean-learning never moves it. LP-guided beat uniform 0.362 vs 0.153 at equal budget.
+2. **The deterministic noisy TV must be constructed carefully**: target-shuffling is LEARNABLE
+   (shift-by-one = two gravity ticks ahead); the airtight device is CONTRADICTION (duplicate
+   inputs, different targets — unfittable by any function, immune to memorization) for the static
+   diagnostic, and pseudo-random targets (TV static) for the collection loop.
+3. **The dynamics are selections, not values**: a tanh value head learns saturating gates
+   (departures 113/113) but cannot emit a graded copy of a neighbour's colour (arrivals 0/115);
+   the landed head is a learned softmax SELECTOR over {patch cells, brush, empty} — the AttnGather
+   / Rung CF content-fetch expressivity lesson reproduced at 400-parameter scale, and a hint that
+   selection should be the default read primitive across the engine.
+"Return-then-explore over the archive" was realized as regions = DYNAMICS CONTEXTS (the gravity
+directions — the UED surface); spatial return-then-explore over stored elites folds into
+B-POC-4/5. Honest residual: rare agent-write events (paint) stay unlearned; paint-heavy data made
+things worse — the fix is curriculum, which is what B-POC-5's UED is for.
+
 ---
 
 ## 2026-07-08 — Content-addressed construction (the deep-floor negative)

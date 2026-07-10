@@ -49,7 +49,7 @@ learns both *what* to think and, eventually, *how* to learn.
   the M8 operator ceiling 5/1000). See "Next — the path to full ARC-AGI 2" below for the
   measurable rungs. Still hands the engine *goals* (a task's demonstration pairs are
   compressed supervision) even though it never hands it a DSL.
-- **Vision B — open-ended mastery (active — B-POC-1, B-POC-2 & B-POC-2.5 done 2026-07-10).** Inspired by
+- **Vision B — open-ended mastery (active — B-POC-1 through B-POC-3 done 2026-07-10).** Inspired by
   Random Network Distillation, open-endedness, and unsupervised RL: an agent that masters its
   environment with **zero hand-coded goals** — intrinsic motivation (self-generated novelty) replaces
   the demonstration pairs entirely. This is a stricter reading of the mission than Vision A (it drops
@@ -86,7 +86,22 @@ learns both *what* to think and, eventually, *how* to learn.
   flattens the optionality landscape (mean elite empowerment ≈ equal across all arms, ~7.9 bits),
   so empowerment buys no concentration advantage here. Caveat: enumeration spends ~24× the charged
   rollout ticks (printed, uncharged by the locked design choice).
-  Next rung: B-POC-3 (world model + learning progress).
+  **B-POC-3 landed 2026-07-10** (`src/world_model.mojo`, `test_world_model`, suite-tier full ~4 min):
+  the first **world model** — transitions are just `ExamplePair`s of a new `TransitionDomain`, so
+  the *unchanged* generic ES core fits a per-cell selector-head predictor (softmax over
+  {9 patch cells, brush, empty}: gravity = "take the colour from above", learned, never written
+  down) to **0.63 held-out changed-cell accuracy** (identity predictor = 0 there). **Learning
+  progress** = the ES fitness slope: LP(novel gravity) = 22× max(LP(mastered), LP(contradiction-
+  scrambled)) while the scrambled region keeps 8.7× the mastered raw error — the noisy-TV immunity,
+  gated. And **LP-guided collection beats uniform 0.362 vs 0.153** (2.4×) at an equal 600-transition
+  budget over {2 gravity contexts + TV static}: the allocator that works is the *windowed
+  changed-cell SCORE slope* on held-out validation batches — MSE-slope LP measurably chased the
+  noise (learning the noise's mean is a huge one-off MSE gain), clone-probe LP measured batch
+  memorizability; the discrete score is immune to both. Honest residuals booked in JOURNAL: the
+  paint event (rare agent-writes) stays unlearned at this data scale, and the value-vs-selector
+  head comparison (a tanh value head learns gates but cannot emit graded colour copies) is the
+  Rung-CF expressivity lesson reproduced in miniature.
+  Next rung: B-POC-4 (the convergence test — repertoire → held-out few-shot transfer).
 - **Convergence hypothesis.** The two visions are expected to meet: primitives discovered by
   open-ended exploration (Vision B) become the reusable vocabulary that few-shot composition
   (Vision A) draws on to solve a task fast from a handful of examples — unsupervised "pretraining"
