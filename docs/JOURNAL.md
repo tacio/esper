@@ -2349,3 +2349,69 @@ unlearnable raw error 8.7× mastered with LP ≈ 0 — the noisy-TV immunity, ga
 Test is `# suite-tier: full` (4m04s, bit-deterministic across a double-run). The rung's one-line
 moral for RESEARCH-NOTES: *LP is the right signal, but only in the right currency — the ES fitness
 slope diagnoses learnability; allocation must use the uncheatable discrete score's slope.*
+
+---
+
+## 2026-07-11 13:15 — B-POC-4: the convergence test (repertoire → held-out few-shot transfer)
+
+The fourth Vision-B rung makes the convergence hypothesis *measurable*: skills discovered by
+unsupervised exploration become the vocabulary few-shot fitting draws on, scored in Vision A's
+uncheatable currency (held-out generalization), through the **unchanged** ES core. Landed as
+`src/transfer.mojo` + `tests/test_transfer.mojo` (suite-tier full, ~21 s, bit-deterministic across
+a double-run); the only additions to `src/map_elites.mojo` are the retrieval/serialization seams
+B-POC-2 explicitly deferred.
+
+**The seam turned out to already exist.** Two facts about the core made this rung almost entirely
+plumbing, no new learning machinery: (1) `fit_operator` takes a **caller-prefilled** `fast_weights`
+buffer as the ES seed — it never calls `M.seed` — so warm-starting from a retrieved skill is a
+`memcpy` before the fit; (2) `evolve_fast_weights` applies the `fill_scale` preconditioner
+symmetrically to both the perturbation *and* the update, so `scale[j]=0` **fully freezes** param
+`j`. That second fact is the whole composition mechanism: `ComposeMemory`'s fitted vector is
+`[K schedule logits (scale 1) ; K×POLICY_DIM frozen primitive weights (scale 0)]`, so composition
+is fit by the *same* `fit_operator` — no bespoke loop, exactly the ShapeMemory/GeomColor freeze
+trick reused. Verified the freeze empirically before building on it.
+
+**Retrieval (the primary, gated claim) is decisive.** A goal is a target end-state BC whose
+Go-Explore cell key is *not* a repertoire bin (so retrieval can never return the exact answer — the
+few-shot fit must close a real gap). At equal few-shot budget (same N/iters ⇒ same rollouts; only
+the seed differs, `reg_lambda=0` so no prior confounds), over 24 held-out Family-S goals: nearest-
+elite warm-start reaches **7.3× closer (MSE) than cold-start and 29.6× closer than a random-elite
+seed**. The random-elite control is the honest lever-isolation (à la B-POC-1's random-action
+caveat): a *generic* good init doesn't help — in fact it hurts (0.0506 vs cold 0.0125) — it is
+*indexed* retrieval that transfers.
+
+**Composition: a real but modest win that took a calibration fight.** The first cut (naïve schedule
+head, softmax over 4 logits init 0 ⇒ four equal 16-tick segments) was a *negative*: compose landed
+at 0.0095 (Family S) and 0.0141 (Family C) — on the compositional family it lost even to cold
+(0.0122). Diagnosis: the composite's ceiling is "all schedule weight on segment 0" = the nearest
+primitive run for the full horizon, but a 30-iter fit over 4 params can't push a softmax hard enough
+to concentrate there, so the schedule *dilutes* the best primitive across three worse ones. The fix
+is a **slot-0 schedule bias** (`SCHED_BIAS=4.0`): seed the head concentrated on the nearest
+primitive so the composite *starts* as ~nearest and the fit explores mixing others *from* that
+floor. With it, compose is a proper superset of nearest and reaches **1.12× closer than nearest on
+the compositional Family C** (two-phase A→B end-states), while never underperforming it. A density
+sweep (build budget 800/3000/13205 → 132/750/3367 skills) showed the composition margin is bounded
+by repertoire density: a dense vocabulary means nearest already saturates (goals ~0.001–0.002 away),
+leaving composition little gap to close — the compositional signal is clearest at full density.
+Exact cell-key hits stay ≈0 throughout: the goals are genuinely off-bin, so the graded BC-MSE is the
+right metric and the discrete hit is a (mostly-zero) reported secondary.
+
+**Serialization made the two-phase split physical.** `EliteMap.save`/`load_elite_map` are a raw
+`.rep` round-trip (header `[count, POLICY_DIM, BC_DIM]` then per-elite `key/settle/weights/bc`),
+mirroring `arc_io`'s single-`read_bytes` readers in reverse — the one new I/O surface (`open(…,"w")`
++ `write_bytes(Span[UInt8])`, verified empirically first since the repo only had a read path). The
+build phase saves; the few-shot phase reloads and runs against the *reloaded* map. Reload re-inserts
+each elite through the normal fill path, so the map is bit-identical (gate: 0 mismatches elite-for-
+elite, 0 replay failures across the save/load boundary — the `test_repertoire` honesty check now
+spanning disk).
+
+Gates (all headroom below the seed-0 measurement): retrieval ≥3× closer than cold AND random
+(measured 7.3× / 29.6×); composition ≥1.05× closer than nearest on Family C and beats cold
+(measured 1.12×); serialization bit-identical + 100% replay; held-out discipline (0 goal keys in the
+repertoire). Orchestration lives in the test (like every prior B-POC proof) rather than a
+`run_transfer` in the module — `transfer.mojo` stays a library of the building blocks.
+
+The rung's one-line moral: *the convergence hypothesis's retrieval half is strongly confirmed and
+essentially free through the existing core; composition is a real extension but its value is gated
+by repertoire density, and a naïve schedule must be biased toward the best primitive or it dilutes
+what retrieval already found.*

@@ -234,7 +234,7 @@ the ES meta-learns only the small slow vector.
   sigmoid-threshold read, whole 2-level rule inferred in-context), `GridCountMapSelfModMemory`
   (arbitrary count→colour maps: meta-learned scoring salience + soft count-bin value table).
 
-## Vision B sandbox — `src/sandbox.mojo`, `src/novelty_es.mojo`, `src/map_elites.mojo`, `src/empowerment.mojo`, `src/world_model.mojo`
+## Vision B sandbox — `src/sandbox.mojo`, `src/novelty_es.mojo`, `src/map_elites.mojo`, `src/empowerment.mojo`, `src/world_model.mojo`, `src/transfer.mojo`
 
 The B-POC-1 pair (open-ended rung 1): a reward-free world + the NS-ES intrinsic-fitness driver;
 plus the B-POC-2 repertoire (rung 2): the persistent elite-per-cell skill library; plus the
@@ -267,8 +267,10 @@ progress (rung 3).
   novelty-ES emitter on the `ns_es_run` skeleton, re-seeded from a uniform elite every E
   iterations, EVERY rollout harvested into the map; its pert stripe is N×2×`POLICY_DIM` because
   harvesting needs both antithetic weight vectors live at insert time). Budgets are compared in
-  rollouts — one insert attempt per rollout in every arm. The map is in-memory by design;
-  serialization is B-POC-4's seam.
+  rollouts — one insert attempt per rollout in every arm. B-POC-4 added the retrieval + `.rep`
+  serialization seams: `nearest`/`nearest_k` (SIMD BC kernel → hash slot(s)), `contains`/`find`
+  (membership/lookup), and `save`/`load_elite_map` (raw binary round-trip — every elite re-inserts
+  through the normal fill path, so a reload is bit-identical and still passes the replay check).
 - `empowerment.mojo` — **exact empowerment** (B-POC-2.5): the sandbox is deterministic, so
   Blahut–Arimoto collapses and n-step empowerment = log₂(#distinct states reachable in n steps) —
   `empowerment` is an iterative DFS over all 6ⁿ action sequences (per-depth grid copy +
@@ -289,6 +291,16 @@ progress (rung 3).
   windowed **changed-cell score slope** on held-out per-region validation batches (MSE-slope and
   clone-probe LP both fail as allocators — documented in-code), with per-round training on a
   bounded subsample of the cumulative pool.
+- `transfer.mojo` — the **convergence test** (B-POC-4): repertoire → held-out few-shot transfer,
+  scored through the UNCHANGED ES core. A goal is a target end-state BC; fitting toward it is
+  `fit_operator[SandboxPolicyMemory]` over one demo whose Domain target is that BC. Four arms at
+  equal few-shot budget: `cold` (zero seed), `random`-elite (generic warm-init control), `nearest`-
+  elite (retrieval, the `memcpy`-a-seed transfer), and `compose` — `ComposeMemory`, a temporal
+  SCHEDULE head over the K nearest primitives which ride along FROZEN in the fitted vector's tail
+  via `fill_scale=0` (the ShapeMemory freeze trick; the schedule is seeded biased to slot 0 so the
+  composite is a proper superset of nearest). Two goal families: `gen_family_s` (single random
+  policies) and `gen_family_c` (two-phase A→B rollouts that reward sequencing); both hold out any
+  goal whose cell key is a repertoire bin (`contains`), so retrieval can never look up the answer.
 
 ## Drivers — `src/main.mojo`, `src/arc_solve.mojo`
 
@@ -388,7 +400,12 @@ fast/full tiers).
   suite-tier full ~4 min: the world model reaches ≥0.4 held-out changed-cell accuracy where
   identity scores 0; LP separates novel ≥10× from mastered AND contradiction-scrambled while the
   scrambled region keeps ≥1.5× the mastered raw error; LP-guided collection beats uniform by
-  ≥0.08 held-out changed-cell at equal transition budget; fully deterministic under `seed(0)`).
+  ≥0.08 held-out changed-cell at equal transition budget; fully deterministic under `seed(0)`);
+  `test_transfer` (**B-POC-4**, suite-tier full ~21 s: an unsupervised repertoire, saved to a
+  `.rep` file and reloaded bit-identically, transfers few-shot to held-out goals — nearest-elite
+  warm-start is ≥3× closer (MSE) than both cold-start and the random-elite control on Family S, and
+  `ComposeMemory` is ≥1.05× closer than nearest on the compositional Family C; every reloaded elite
+  replays to its bin and no goal is a repertoire bin; fully deterministic under `seed(0)`).
 
 Phase-A expressible subset = {identity, flip_h, flip_v, transpose, recolor}; `shift` deferred (the
 affine zero-fills, synth `_shift` wraps).

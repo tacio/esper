@@ -208,6 +208,141 @@ struct EliteMap(Movable):
             return 0.0
         return total / Float32(pairs)
 
+    # --- B-POC-4 seams: membership, retrieval, serialization ---------------
+    # These are read-only over the stored elites (retrieval/membership) or a
+    # single serial dump/reload; none run in a hot loop, so they favour clarity.
+
+    # Is `key` a filled bin? (Same Fibonacci-hash/linear-probe walk as insert.)
+    # The held-out-goal filter uses this so retrieval can never return the exact
+    # answer.
+    def contains(self, key: Int64) -> Bool:
+        var h = Int((key * 0x9E3779B97F4A7C15) & Int64(ELITE_MASK))
+        while True:
+            if self.keys[h] == key:
+                return True
+            if self.keys[h] == ELITE_EMPTY:
+                return False
+            h = (h + 1) & ELITE_MASK
+
+    # Hash slot holding `key`, or -1 if absent (for the serialization-fidelity
+    # check: look an original elite up by its reloaded key).
+    def find(self, key: Int64) -> Int:
+        var h = Int((key * 0x9E3779B97F4A7C15) & Int64(ELITE_MASK))
+        while True:
+            if self.keys[h] == key:
+                return h
+            if self.keys[h] == ELITE_EMPTY:
+                return -1
+            h = (h + 1) & ELITE_MASK
+
+    # Squared Euclidean BC distance from a stored elite (hash slot `slot`) to a
+    # target BC — the mean_pairwise_bc SIMD/FMA kernel, one operand external.
+    def bc_dist2(
+        self, slot: Int, target: UnsafePointer[Float32, MutAnyOrigin]
+    ) -> Float32:
+        comptime remainder = BC_DIM % nelts
+        comptime rem_start = BC_DIM - remainder
+        var a = self.bc + slot * BC_DIM
+        var acc = SIMD[DType.float32, nelts](0.0)
+        for k in range(0, BC_DIM - nelts + 1, nelts):
+            var diff = a.load[width=nelts](k) - target.load[width=nelts](k)
+            acc = fma(diff, diff, acc)
+        var d2 = acc.reduce_add()
+        if remainder > 0:
+            for k in range(rem_start, BC_DIM):
+                var diff = a[k] - target[k]
+                d2 = fma(diff, diff, d2)
+        return d2
+
+    # Nearest elite to a target BC. Returns the hash SLOT index (as `filled`
+    # holds), so the caller reads `self.weights + slot * POLICY_DIM` exactly like
+    # the replay path; -1 when the map is empty.
+    def nearest(self, target: UnsafePointer[Float32, MutAnyOrigin]) -> Int:
+        if self.count == 0:
+            return -1
+        var best_slot = self.filled[0]
+        var best_d2 = self.bc_dist2(best_slot, target)
+        for i in range(1, self.count):
+            var slot = self.filled[i]
+            var d2 = self.bc_dist2(slot, target)
+            if d2 < best_d2:
+                best_d2 = d2
+                best_slot = slot
+        return best_slot
+
+    # The k nearest elites (ascending distance) into out_slots[0..k). k is tiny
+    # (the compose fan-in), so k successive min-scans excluding already-picked is
+    # cheap. If the map holds fewer than k DISTINCT elites, the tail repeats the
+    # last pick so the compose primitive slots are always fully populated.
+    def nearest_k(
+        self,
+        target: UnsafePointer[Float32, MutAnyOrigin],
+        out_slots: UnsafePointer[Int, MutAnyOrigin],
+        k: Int,
+    ):
+        var chosen = 0
+        while chosen < k:
+            var best_slot = -1
+            var best_d2 = Float32(1.0e30)
+            for i in range(self.count):
+                var slot = self.filled[i]
+                var skip = False
+                for p in range(chosen):
+                    if out_slots[p] == slot:
+                        skip = True
+                        break
+                if skip:
+                    continue
+                var d2 = self.bc_dist2(slot, target)
+                if d2 < best_d2:
+                    best_d2 = d2
+                    best_slot = slot
+            if best_slot < 0:
+                out_slots[chosen] = out_slots[chosen - 1] if chosen > 0 else (
+                    self.filled[0] if self.count > 0 else 0
+                )
+            else:
+                out_slots[chosen] = best_slot
+            chosen += 1
+
+    # Serialize the filled elites to a raw `.rep` binary (the deferred B-POC-2
+    # seam that physically decouples the unsupervised build phase from the
+    # few-shot phase). Layout: header [count, POLICY_DIM, BC_DIM] as int64, then
+    # per elite [key:int64, settle:int64, weights:POLICY_DIM f32, bc:BC_DIM f32].
+    # One buffer, one write — mirrors arc_io's single-read readers in reverse.
+    def save(self, path: String) raises:
+        var n = self.count
+        var rec = 16 + (POLICY_DIM + BC_DIM) * 4
+        var total = 24 + n * rec
+        var buf = alloc[UInt8](total)
+        var hp = buf.bitcast[Int64]()
+        hp[0] = Int64(n)
+        hp[1] = Int64(POLICY_DIM)
+        hp[2] = Int64(BC_DIM)
+        var off = 24
+        for i in range(n):
+            var slot = self.filled[i]
+            var ip = (buf + off).bitcast[Int64]()
+            ip[0] = self.keys[slot]
+            ip[1] = Int64(self.settle[slot])
+            off += 16
+            memcpy(
+                dest=(buf + off).bitcast[Float32](),
+                src=self.weights + slot * POLICY_DIM,
+                count=POLICY_DIM,
+            )
+            off += POLICY_DIM * 4
+            memcpy(
+                dest=(buf + off).bitcast[Float32](),
+                src=self.bc + slot * BC_DIM,
+                count=BC_DIM,
+            )
+            off += BC_DIM * 4
+        var f = open(path, "w")
+        f.write_bytes(Span[UInt8, MutAnyOrigin](ptr=buf, length=total))
+        f.close()
+        buf.free()
+
 
 # ==========================================
 # Arm A — canonical mutation MAP-Elites
@@ -547,3 +682,38 @@ def me_emitter_run(
     bc_all.free()
     cells_all.free()
     return rollouts
+
+
+# ==========================================
+# Repertoire reload (B-POC-4 seam)
+# ==========================================
+# Read a `.rep` binary written by EliteMap.save back into a fresh EliteMap by
+# re-inserting each stored elite through the normal hash/fill path (so the
+# reloaded map is bit-identical to the saved one, and the replay-fidelity check
+# still holds). Single read + parse, mirroring arc_io.load_arc_task.
+def load_elite_map(path: String) raises -> EliteMap:
+    var f = open(path, "r")
+    var data = f.read_bytes()
+    f.close()
+    if len(data) < 24:
+        raise Error("elite map file too small for its header")
+    var ptr = data.unsafe_ptr()
+    var hp = ptr.bitcast[Int64]()
+    var n = Int(hp[0])
+    var pdim = Int(hp[1])
+    var bdim = Int(hp[2])
+    if pdim != POLICY_DIM or bdim != BC_DIM:
+        raise Error("elite map serialization dim mismatch")
+    var emap = EliteMap()
+    var off = 24
+    for _ in range(n):
+        var ip = (ptr + off).bitcast[Int64]()
+        var key = ip[0]
+        var settle_t = Int(ip[1])
+        off += 16
+        var wf = (ptr + off).bitcast[Float32]()
+        off += POLICY_DIM * 4
+        var bf = (ptr + off).bitcast[Float32]()
+        off += BC_DIM * 4
+        _ = emap.insert(key, settle_t, wf, bf)
+    return emap^

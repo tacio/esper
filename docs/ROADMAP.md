@@ -49,7 +49,7 @@ learns both *what* to think and, eventually, *how* to learn.
   the M8 operator ceiling 5/1000). See "Next — the path to full ARC-AGI 2" below for the
   measurable rungs. Still hands the engine *goals* (a task's demonstration pairs are
   compressed supervision) even though it never hands it a DSL.
-- **Vision B — open-ended mastery (active — B-POC-1 through B-POC-3 done 2026-07-10).** Inspired by
+- **Vision B — open-ended mastery (active — B-POC-1 through B-POC-4 done; 1–3 on 2026-07-10, 4 on 2026-07-11).** Inspired by
   Random Network Distillation, open-endedness, and unsupervised RL: an agent that masters its
   environment with **zero hand-coded goals** — intrinsic motivation (self-generated novelty) replaces
   the demonstration pairs entirely. This is a stricter reading of the mission than Vision A (it drops
@@ -101,7 +101,23 @@ learns both *what* to think and, eventually, *how* to learn.
   paint event (rare agent-writes) stays unlearned at this data scale, and the value-vs-selector
   head comparison (a tanh value head learns gates but cannot emit graded colour copies) is the
   Rung-CF expressivity lesson reproduced in miniature.
-  Next rung: B-POC-4 (the convergence test — repertoire → held-out few-shot transfer).
+  **B-POC-4 landed 2026-07-11** (`src/transfer.mojo`, `test_transfer`, suite-tier full ~21 s):
+  the **convergence test** — an unsupervised B-POC-2 repertoire (3,367 skills), saved to a `.rep`
+  file and **reloaded bit-identically**, transfers few-shot to **held-out** goals (target end-state
+  BCs whose cell key is *not* a repertoire bin, so retrieval cannot look up the answer), scored
+  through the UNCHANGED ES core (`fit_operator[SandboxPolicyMemory]` toward the goal BC). At equal
+  few-shot budget, **retrieving the BC-nearest skill as the ES seed reaches the goal 7.3× closer
+  (MSE) than cold-start and 29.6× closer than a random-elite seed** — indexed retrieval, not
+  generic warm-init, is the lever (the convergence hypothesis's retrieval half, gated). And
+  **composition** (`ComposeMemory` — a tiny SCHEDULE head fit over the K nearest primitives, which
+  ride along FROZEN via the `fill_scale=0` ShapeMemory trick, so composition too is fit by the
+  unchanged `fit_operator`) **reaches 1.12× closer than single retrieval on compositional goals**
+  (two-phase A→B end-states). Honest residuals booked in JOURNAL: the composition margin is real
+  but modest and needed a slot-0 schedule bias to make the composite a proper superset of nearest
+  (without it the naïve schedule DILUTES the best primitive and loses even to cold); exact cell-key
+  hits stay ≈0 (the graded BC-MSE is the metric); the win is bounded by the repertoire's density
+  (dense vocabulary ⇒ retrieval already saturates, leaving composition little gap to close).
+  Next rung: B-POC-5 (ACCEL-style UED — mutate the sandbox's `grav_dir`/`grav_rate` rules).
 - **Convergence hypothesis.** The two visions are expected to meet: primitives discovered by
   open-ended exploration (Vision B) become the reusable vocabulary that few-shot composition
   (Vision A) draws on to solve a task fast from a handful of examples — unsupervised "pretraining"
