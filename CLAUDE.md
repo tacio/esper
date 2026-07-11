@@ -95,6 +95,7 @@ The engine is a small set of flat `-I src` Mojo modules. **The detailed per-modu
 - `src/memory_composed.mojo` — the **emergent composed memories** (geometry × colour × count × shape; the shape-seam pair plus its Rung C colour, Rung A local-write, and Rung CF content-fetch layers).
 - `src/grid_substrate.mojo` — the **content substrate** (components, registers, rays, nearest-BFS) the Rung CF fetch views read; representations, never transforms.
 - `src/memory_selfmod.mojo`, `src/memory_selfmod_grid.mojo` — the **self-write memory families** (fast adaptation is the memory's own write rule over the demos; the ES meta-learns only the small slow vector).
+- `src/sandbox.mojo`, `src/novelty_es.mojo`, `src/map_elites.mojo`, `src/empowerment.mojo`, `src/world_model.mojo`, `src/transfer.mojo`, `src/ued.mojo` — the **Vision B open-endedness ladder** (reward-free sandbox → NS-ES novelty coverage → MAP-Elites repertoire → exact empowerment → world model + learning progress → repertoire→few-shot transfer → ACCEL-style emergent curriculum), all reward-free and through the *unchanged* ES core.
 - `src/main.mojo`, `src/arc_solve.mojo` — the end-to-end driver + the **held-out generalization driver** (`eval_parallel.sh` shards it across processes).
 - `tools/arc_compiler.py`, `tools/synth_tasks.py` — the offline corpus compiler + the ground-truth synth generator (the only sanctioned Python; never on the runtime path).
 - `tests/` — one `test_*.mojo` per milestone / memory, each a held-out generalization proof; `raise Error` on failure.

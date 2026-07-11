@@ -481,7 +481,7 @@ def lp_probe(
 # transitions consumed.
 
 
-def _train_round(
+def train_round(
     w: UnsafePointer[Float32, MutAnyOrigin],
     mut ws: ESWorkspace[WorldModelMemory],
     demos: List[ExamplePair[SandboxState]],
@@ -547,7 +547,7 @@ def _collect_region(
 comptime WM_TRAIN_SLICE = 200
 
 
-def _sample_pool(
+def sample_pool(
     all_data: List[ExamplePair[SandboxState]],
     round_idx: Int,
 ) -> List[ExamplePair[SandboxState]]:
@@ -596,8 +596,8 @@ def train_uniform(
                 n = round_budget - per * (regions - 1)
             _collect_region(region, n_real, n, ep_len, all_data)
             consumed += n
-        var pool = _sample_pool(all_data, rnd)
-        _train_round(w, ws, pool, train_iters, N)
+        var pool = sample_pool(all_data, rnd)
+        train_round(w, ws, pool, train_iters, N)
     return consumed
 
 
@@ -688,8 +688,8 @@ def train_lp_guided(
         for region in range(regions):
             held_out_score(w, vals[region], o, ch)
             f_before[region] = ch
-        var pool = _sample_pool(all_data, rnd)
-        _train_round(w, ws, pool, train_iters, N)
+        var pool = sample_pool(all_data, rnd)
+        train_round(w, ws, pool, train_iters, N)
         for region in range(regions):
             held_out_score(w, vals[region], o, ch)
             f_prev[region] = ch - f_before[region]

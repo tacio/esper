@@ -259,6 +259,25 @@ directions — the UED surface); spatial return-then-explore over stored elites 
 B-POC-4/5. Honest residual: rare agent-write events (paint) stay unlearned; paint-heavy data made
 things worse — the fix is curriculum, which is what B-POC-5's UED is for.
 
+**Addendum (2026-07-11, B-POC-5 build).** The final rung landed (`src/ued.mojo`): ACCEL as B-POC-3's
+`train_lp_guided` with its **fixed context set replaced by a grown, mutation-fed, learnability-curated
+replay buffer** — the generator is now emergent. Curation is the direct changed-cell-slope
+learnability score (the No-Regrets caveat honoured). Result at equal budget: the curriculum trains a
+world model to **0.154 held-out changed-cell vs 0.0 for domain randomization** (additive gate, à la
+B-POC-3 — a ratio is degenerate at DR≈0). Two findings reshaped the plan: (1) **the density→
+learnability relation inverts intuition** — moderate initial-grid density (0.08) is the learnable band
+(0.44 changed in 400 focused iters), sparse (0.05) teaches ~nothing in-budget, so DR's wasteful tail
+is the *sparse* end, not a dense one; (2) **DR churns to zero** because a fresh uniform-density level
+each round, under `train_round`'s wide→fine anneal *restart*, lets a sparse round undo a moderate one
+— curriculum consistency, not just allocation, is what ACCEL buys (the intrinsic-motivation lesson
+once more: a learnable-band-held difficulty lets an incremental learner accumulate). Honest scope
+booked: gravity (dir and rate) is held fixed — learning multiple gravity functions exceeds the
+per-arm budget, and the world model has no grav_rate feature — so the config axis is effectively ~1-D
+(gravity-event density) for a local-receptive model. **This is the wall the paint/optionality
+residuals kept pointing at: the sandbox's single dynamics rule is the ceiling on curriculum richness;
+the deferred next lever is constraining topology (walls) — new dynamics, not a new curator.** The
+five-rung ES-native ladder is complete.
+
 ---
 
 ## 2026-07-08 — Content-addressed construction (the deep-floor negative)

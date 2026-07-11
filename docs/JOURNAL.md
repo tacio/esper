@@ -2415,3 +2415,71 @@ The rung's one-line moral: *the convergence hypothesis's retrieval half is stron
 essentially free through the existing core; composition is a real extension but its value is gated
 by repertoire density, and a naïve schedule must be biased toward the best primitive or it dilutes
 what retrieval already found.*
+
+## 2026-07-11 18:40 — B-POC-5: ACCEL-style UED (the emergent curriculum) — the Vision-B ladder is complete
+
+The fifth and final Vision-B rung replaces the last hand-coded thing in the pipeline: the fixed,
+human-chosen set of training worlds. Landed as `src/ued.mojo` + `tests/test_ued.mojo` (suite-tier
+full, ~4m43s, bit-deterministic across a double-run), plus a two-line promotion in
+`src/world_model.mojo` (`_train_round`→`train_round`, `_sample_pool`→`sample_pool`) so the new module
+reuses B-POC-3's per-round training/sampling verbatim. No new learning machinery: ACCEL
+(Parker-Holder et al. 2022) is random edits to existing levels + curation of a replay buffer by
+*learnability* — evolution proposes, curation is the intelligence — and **B-POC-3's `train_lp_guided`
+was already a fixed-set ACCEL precursor** (it allocated a transition budget across an *enumerated*
+context set, steered by the round-over-round held-out changed-cell-accuracy delta). B-POC-5 just
+grows that fixed set into a mutation-fed, curated buffer. The curation score is the No-Regrets/TRACED
+*direct* learnability measure ("success neither 0 nor 1 and improving"), which is exactly B-POC-3's
+scale-free, mean-learning-immune windowed changed-cell slope — never a regret proxy. The outer metric
+stays uncheatable held-out transfer (changed-cell accuracy on a disjoint level set), never
+self-scored.
+
+**The calibration fight was the whole story, and it inverted my prior.** The first cut — dense random
+initial-grid configs (density 0.15) over 10–12 rounds — was a *double* negative: BOTH arms learned
+*nothing* (held-out changed-cell exactly 0.0, the identity-seed baseline), so there was no
+learnability signal to curate on at all. Two causes, one expected and one surprising:
+1. **Too many rounds churn the incremental learner.** Each round runs `train_round`'s wide→fine anneal
+   *restart* (σ 0.3→0.05); B-POC-3 did this 4 times and refined, but 10–12 restarts repeatedly kick a
+   converged model off its solution. Fewer rounds (back to ~6) was necessary.
+2. **The density→learnability relation is the OPPOSITE of intuition** (the load-bearing discovery). A
+   focused diagnostic (single fit, 400 iters, grav-down): moderate density 0.08 → **0.44** held-out
+   changed-cell; sparse density 0.05 → **0.0**. Sparse configs have too few gravity events per
+   transition to learn from in-budget; the learnable band is *moderate* density. So the wasteful tail
+   domain randomization spends on is the **sparse** end, not (as I first assumed) a too-dense chaotic
+   end. The whole difficulty-gradient framing flipped.
+
+**Gravity is held fixed (down), a documented deviation from the planned "grav_dir + config" surface.**
+Same compute reason: learning even one gravity function to a measurable changed-cell level costs
+hundreds of ES iters, so spreading a bounded per-arm budget across four direction-functions leaves
+none learned (and grav_rate has no WorldModelMemory input feature — mutating it manufactures
+contradictions). The operative UED axis is therefore the config's gravity-event **density**. Honest
+consequence: for a world model that only sees local neighbourhoods, the config axis is effectively
+~1-D (density), so this rung is really B-POC-3's LP-allocation *lifted onto a grown, curated buffer*
+rather than a fundamentally richer space — the sandbox's single dynamics rule is the ceiling until a
+future rung adds constraining topology (walls; deferred).
+
+**Result (seed 0, byte-identical 792-transition budget per arm).** The emergent curriculum —
+moderate-density seeds, mutate a learnability-weighted parent, keep the buffer's most-learnable levels
+— trains a world model to **0.154 held-out changed-cell (0.108 on the paint sub-metric — partly
+cracking B-POC-3's unlearned-paint residual)**, while domain randomization reaches **0.0**: DR's fresh
+uniform-density level each round swings across the difficulty gradient, and under the per-round anneal
+restart a sparse round undoes a moderate one, so DR never accumulates (all 6 DR rounds wasted, mean
+learnability −0.008). ACCEL's curation *holds* the learnable band (mean learnability +0.072, 3 buffer
+evictions), so every round reinforces. The curriculum's value is made stark: consistency + curation
+beats undirected randomization not by a margin but categorically here.
+
+**The headline is an ADDITIVE margin, not a ratio** — B-POC-3's arm-delta precedent. Changed-cell
+accuracies live near zero and DR ≈ 0, so `changed_accel / changed_dr` is a meaningless 153,773× (an
+artefact of dividing by the 1e-6 guard); the honest quantity is `delta = changed_accel − changed_dr =
+0.154`, gated at `MIN_DELTA = 0.08` with an absolute floor `MIN_CHANGED = 0.09`. Gates (all headroom
+below the seed-0 measurement): equal budget; held-out leak 0 (level signatures disjoint from the
+buffer); buffer churned (evictions > 0); ACCEL concentrates on more-learnable levels than DR (mean-L
+0.072 ≥ −0.008); ACCEL clears the floor and beats DR by ≥ 0.08. Orchestration lives in the test, like
+every prior B-POC proof; `ued.mojo` stays a library of building blocks.
+
+The rung's one-line moral: *turning the curriculum designer emergent works, but its value here is the
+one intrinsic-motivation lesson repeated — a consistent, learnability-curated difficulty band lets an
+incremental learner accumulate, while undirected domain randomization's difficulty swings churn it to
+zero; and the sandbox's single gravity rule is the real ceiling on how rich that curriculum can get.*
+The five-rung Vision-B ladder (novelty coverage → repertoire → world model + LP → convergence transfer
+→ emergent curriculum) is now complete, each rung ES-native and through the unchanged two-timescale
+core.

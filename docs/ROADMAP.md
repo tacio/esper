@@ -49,7 +49,7 @@ learns both *what* to think and, eventually, *how* to learn.
   the M8 operator ceiling 5/1000). See "Next — the path to full ARC-AGI 2" below for the
   measurable rungs. Still hands the engine *goals* (a task's demonstration pairs are
   compressed supervision) even though it never hands it a DSL.
-- **Vision B — open-ended mastery (active — B-POC-1 through B-POC-4 done; 1–3 on 2026-07-10, 4 on 2026-07-11).** Inspired by
+- **Vision B — open-ended mastery (the five-rung POC ladder complete — B-POC-1 through B-POC-5 done; 1–3 on 2026-07-10, 4–5 on 2026-07-11).** Inspired by
   Random Network Distillation, open-endedness, and unsupervised RL: an agent that masters its
   environment with **zero hand-coded goals** — intrinsic motivation (self-generated novelty) replaces
   the demonstration pairs entirely. This is a stricter reading of the mission than Vision A (it drops
@@ -117,7 +117,21 @@ learns both *what* to think and, eventually, *how* to learn.
   (without it the naïve schedule DILUTES the best primitive and loses even to cold); exact cell-key
   hits stay ≈0 (the graded BC-MSE is the metric); the win is bounded by the repertoire's density
   (dense vocabulary ⇒ retrieval already saturates, leaving composition little gap to close).
-  Next rung: B-POC-5 (ACCEL-style UED — mutate the sandbox's `grav_dir`/`grav_rate` rules).
+  **B-POC-5 landed 2026-07-11** (`src/ued.mojo`, `test_ued`, suite-tier full ~4m43s): the
+  **emergent curriculum** — the last hand-coded thing (the fixed set of training worlds) becomes an
+  **ACCEL** loop: mutate a level's initial-grid config, curate a replay buffer by *learnability*
+  (B-POC-3's mean-learning-immune held-out changed-cell slope), no learned generator. It generalizes
+  B-POC-3's fixed-context LP-allocation onto a **grown, mutation-fed buffer**, all through the
+  **unchanged** ES core / world model. At byte-identical budget the curated curriculum trains a world
+  model to **0.154 held-out changed-cell (0.108 on the paint sub-metric — partly cracking B-POC-3's
+  unlearned-paint residual) vs. 0.0 for domain randomization**: DR's fresh uniform-density level each
+  round swings across the difficulty gradient and, under the per-round anneal restart, never
+  accumulates (all 6 rounds wasted); ACCEL's curation *holds* the learnable moderate-density band
+  (mean learnability +0.072 vs −0.008, 3 buffer evictions), so every round reinforces. Gated on an
+  **additive** margin (B-POC-3 precedent — a ratio is degenerate when DR ≈ 0). Honest scope: gravity
+  (dir and rate) is held fixed and the config axis is effectively ~1-D density for a local-receptive
+  world model, so the sandbox's single dynamics rule is the real ceiling — a richer curriculum needs
+  constraining topology (walls), deferred. The five-rung Vision-B ladder is complete.
 - **Convergence hypothesis.** The two visions are expected to meet: primitives discovered by
   open-ended exploration (Vision B) become the reusable vocabulary that few-shot composition
   (Vision A) draws on to solve a task fast from a handful of examples — unsupervised "pretraining"

@@ -234,12 +234,13 @@ the ES meta-learns only the small slow vector.
   sigmoid-threshold read, whole 2-level rule inferred in-context), `GridCountMapSelfModMemory`
   (arbitrary count→colour maps: meta-learned scoring salience + soft count-bin value table).
 
-## Vision B sandbox — `src/sandbox.mojo`, `src/novelty_es.mojo`, `src/map_elites.mojo`, `src/empowerment.mojo`, `src/world_model.mojo`, `src/transfer.mojo`
+## Vision B sandbox — `src/sandbox.mojo`, `src/novelty_es.mojo`, `src/map_elites.mojo`, `src/empowerment.mojo`, `src/world_model.mojo`, `src/transfer.mojo`, `src/ued.mojo`
 
 The B-POC-1 pair (open-ended rung 1): a reward-free world + the NS-ES intrinsic-fitness driver;
 plus the B-POC-2 repertoire (rung 2): the persistent elite-per-cell skill library; plus the
 B-POC-2.5 second intrinsic signal (exact empowerment); plus the B-POC-3 world model + learning
-progress (rung 3).
+progress (rung 3); plus the B-POC-4 convergence test (rung 4: repertoire → held-out transfer); plus
+the B-POC-5 emergent curriculum (rung 5: ACCEL-style UED) — the complete five-rung ladder.
 
 - `sandbox.mojo` — a deterministic 16×16 gridworld with **no reward channel**: an avatar with 6
   actions (move×4 / paint / cycle-brush) under ONE parameterizable dynamics rule (gravity;
@@ -301,6 +302,17 @@ progress (rung 3).
   composite is a proper superset of nearest). Two goal families: `gen_family_s` (single random
   policies) and `gen_family_c` (two-phase A→B rollouts that reward sequencing); both hold out any
   goal whose cell key is a repertoire bin (`contains`), so retrieval can never look up the answer.
+- `ued.mojo` — the **emergent curriculum** (B-POC-5): ACCEL-style UED that retires the last
+  hand-coded thing (the fixed set of training worlds). A "level" is a `SandboxTask`; `random_level`/
+  `seed_level`/`held_level`/`mutate_level` span the mutation surface (the initial-grid config's
+  gravity-event *density* — gravity dir and rate are held fixed, the operative axis being density).
+  `accel_run` grows a fixed-capacity replay buffer: each round mutates a learnability-weighted parent,
+  measures every buffer level's fresh learnability as the round-over-round held-out changed-cell delta
+  (reusing `world_model.train_round`/`sample_pool`/`held_out_score` through the UNCHANGED ES core),
+  then curates to the most-learnable `BUF_CAP`. `dr_run` is the domain-randomization baseline (fresh
+  uniform-density level per round, no buffer) at byte-identical budget; the only difference is level
+  selection. `paint_score` isolates B-POC-3's agent-write residual; `level_sig` backs the held-out
+  leak check. Generalizes `world_model.train_lp_guided`'s fixed context set onto a grown buffer.
 
 ## Drivers — `src/main.mojo`, `src/arc_solve.mojo`
 
@@ -405,7 +417,13 @@ fast/full tiers).
   `.rep` file and reloaded bit-identically, transfers few-shot to held-out goals — nearest-elite
   warm-start is ≥3× closer (MSE) than both cold-start and the random-elite control on Family S, and
   `ComposeMemory` is ≥1.05× closer than nearest on the compositional Family C; every reloaded elite
-  replays to its bin and no goal is a repertoire bin; fully deterministic under `seed(0)`).
+  replays to its bin and no goal is a repertoire bin; fully deterministic under `seed(0)`);
+  `test_ued` (**B-POC-5**, suite-tier full ~4m43s: an emergent ACCEL curriculum — mutate a level's
+  initial-grid config, curate a replay buffer by learnability — trains a world model to ≥0.09 held-out
+  changed-cell and beats domain randomization by an additive ≥0.08 margin at byte-identical budget
+  [measured 0.154 vs 0.0]; the buffer churns (evictions > 0), ACCEL concentrates on more-learnable
+  levels than DR (mean-L ≥ DR's), and no held-out level leaks into the buffer; fully deterministic
+  under `seed(0)`).
 
 Phase-A expressible subset = {identity, flip_h, flip_v, transpose, recolor}; `shift` deferred (the
 affine zero-fills, synth `_shift` wraps).
