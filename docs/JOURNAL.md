@@ -2512,3 +2512,22 @@ in the established style.
 
 **No `src/` changes** — verified the seven modules touched since v4 are all Vision-B additions
 off the arc_solve path, which is what makes the v5 re-measure below a pure regression gate.
+
+### 2026-07-12 22:09 — Corpus v5 re-measure: bit-identical to v4 — the Vision-B week left Vision A untouched
+
+The measurement half of the consolidation checkpoint. Both splits re-run at the documented corpus
+budget (64/1500, GPU backend, `eval_parallel.sh`, 2 workers), boards at
+`scratch/arc2_{train,eval}_v5.txt`:
+
+- **Train: 41/1000 solved, mean held-out 0.628** — every one of the 1000 per-task lines
+  byte-identical to v4 (`diff` of the sorted boards is empty except the wall-clock footer,
+  1894s vs v4's 2116s).
+- **Eval: 0/120, mean held-out 0.543** — likewise byte-identical modulo the footer (420s vs 344s).
+
+Verdict as predicted: the seven `src/` modules added since v4 (sandbox, novelty_es, map_elites,
+empowerment, world_model, transfer, ued) are all off the arc_solve path, and the determinism
+claim holds end-to-end — same seeds, same budget, same 1120 per-task scores. **v5 = v4,
+regression-free**; the ROADMAP's v4 numbers stand unchanged, so no version bump is booked (v5 was
+a gate, not a new measure). `./esper fast` green on the CPU reference path
+(`scratch/v5_fast_suite.log`). The next session starts from the three candidate levers named at
+the end of ROADMAP's "Next" section.
