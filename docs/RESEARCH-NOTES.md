@@ -259,6 +259,26 @@ directions — the UED surface); spatial return-then-explore over stored elites 
 B-POC-4/5. Honest residual: rare agent-write events (paint) stay unlearned; paint-heavy data made
 things worse — the fix is curriculum, which is what B-POC-5's UED is for.
 
+**Addendum (2026-07-11, B-POC-4 build).** The convergence test landed (`src/transfer.mojo`) almost
+entirely as plumbing — two existing core facts made it free: `fit_operator` takes a caller-prefilled
+seed buffer (warm-start = a `memcpy`), and `fill_scale=0` fully freezes a parameter, so
+`ComposeMemory` fits a schedule head over K FROZEN primitives through the unchanged `fit_operator`
+(the ShapeMemory/GeomColor trick re-hosted). Measured verdicts, in Vision A's held-out currency:
+1. **Retrieval is the lever, and it must be INDEXED.** The BC-nearest elite as ES seed reaches
+   held-out goals **7.3× closer than cold-start**, while a random-elite seed is *worse* than cold
+   (retrieval beats it 29.6×): a generic good init does not transfer — the index does. The
+   convergence hypothesis's retrieval half is strongly confirmed, in-sandbox.
+2. **Naïve composition DILUTES.** An unbiased schedule head loses even to cold on compositional
+   goals — spreading weight across four primitives starves the best one. The fix is a slot-0 bias
+   (start as ~nearest, explore mixing *from* that floor): 1.12× over nearest on two-phase goals,
+   never underperforming it.
+3. **Composition's margin is density-bounded.** At full repertoire density nearest already
+   saturates (goals ~0.001–0.002 away), leaving composition little gap to close — the
+   compositional signal is clearest exactly when the vocabulary is sparse.
+Held-out discipline held physically: the `.rep` serialization splits the unsupervised phase from
+the few-shot phase across disk (bit-identical reload, 100 % replay), goal cell keys are provably
+absent from the repertoire, and exact-hit stays ≈ 0 so the graded BC-MSE is the honest metric.
+
 **Addendum (2026-07-11, B-POC-5 build).** The final rung landed (`src/ued.mojo`): ACCEL as B-POC-3's
 `train_lp_guided` with its **fixed context set replaced by a grown, mutation-fed, learnability-curated
 replay buffer** — the generator is now emergent. Curation is the direct changed-cell-slope

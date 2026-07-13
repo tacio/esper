@@ -2483,3 +2483,32 @@ zero; and the sandbox's single gravity rule is the real ceiling on how rich that
 The five-rung Vision-B ladder (novelty coverage → repertoire → world model + LP → convergence transfer
 → emergent curriculum) is now complete, each rung ES-native and through the unchanged two-timescale
 core.
+
+## 2026-07-12 21:36 — Consolidation checkpoint: docs debt cleared, corpus v5 sanity re-measure
+
+Both visions just closed a chapter (Vision B's ladder complete; Vision A's rung #6 probes all
+STOP), so this session is deliberately a **consolidation, not a new rung** (user decision at the
+fork): clear the documentation debt the two-day Vision-B sprint left behind, book the missing
+research-note, and re-verify the corpus baseline before the next push.
+
+**ROADMAP restructure.** The Vision-B bullet in "Mission, Vision, Values" had grown into an
+~83-line inline narrative of all five rungs — the MVV section is supposed to be the one-minute
+view. Moved the per-rung detail into a new **"Phase C (B-POC-1–5)"** subsection under
+"Status — done" (same concise milestone style as Phases A/B, each entry keeping its gated
+number + honest caveats + JOURNAL date), and slimmed the vision bullet to the arc + pointers.
+Also fixed three stale spots: "Beyond ARC-AGI 2" still called Vision B "WIP — nothing scheduled";
+the Phase-B Rung C entry still said "corpus v4 re-measure deferred" (it landed 2026-07-09); and
+the convergence-hypothesis bullet now records B-POC-4's measured confirmation of its retrieval
+half. The "Next" section now ends with **"Where the ladder stands (2026-07-12)"** — the three
+live candidate levers named with their evidence pointers (Rung O object-level construction for
+the copy-* band; the Vision-B walls rung; the B-POC-4→ARC convergence port), none scheduled, so
+the next session starts from a decision rather than archaeology.
+
+**RESEARCH-NOTES gap.** The Vision-B section had per-build addenda for B-POC-1/2/2.5/3/5 but
+**none for B-POC-4** — the convergence test's morals (indexed retrieval is the lever and a
+generic warm-init actively hurts; naïve schedules dilute the best primitive without a slot-0
+bias; composition's margin is density-bounded) were only in JOURNAL. Added the missing addendum
+in the established style.
+
+**No `src/` changes** — verified the seven modules touched since v4 are all Vision-B additions
+off the arc_solve path, which is what makes the v5 re-measure below a pure regression gate.
