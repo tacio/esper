@@ -9,6 +9,17 @@
 # esper_evolution.mojo) fits WorldModelMemory on transition batches. No new
 # learning machinery: predicting next_grid is "just another Domain".
 #
+# Fit it through WeightedWMMemory (below), not TransitionDomain's unweighted
+# MSE: a transition moves ~0.2-0.7% of the grid, so at ~200:1 static-to-
+# changed the unweighted objective makes the IDENTITY predictor ("nothing
+# ever changes") near-optimal, and the fit lands there on a large fraction
+# of draws — measured 1/3 of restarts in world 1 and ALL of them in the
+# walls worlds (T-POC-2, JOURNAL 2026-07-15). Weighting the cells the
+# transition actually changed removes the basin outright (9/9 restarts, and
+# world 1's held-out changed 0.625 -> 0.927 on this module's own unweighted
+# ruler). Same forward, same weights, same evaluation — only the fit's
+# objective differs.
+#
 # Learning progress (Oudeyer/Schmidhuber; RESEARCH-NOTES §4) falls out for
 # free: our ES fitness trajectory IS a prediction-error curve, so LP = the
 # fitness delta across a fixed fit stage (lp_probe: clone weights, fit a fixed
@@ -29,6 +40,7 @@
 # ==========================================================================
 from std.memory import alloc, memset_zero, memcpy, UnsafePointer
 from std.math import fma, tanh, exp, round
+from std.sys import simd_width_of
 from std.random import random_float64
 from std.collections import List, InlineArray
 
@@ -432,6 +444,249 @@ def held_out_score(
     pred.free()
     overall = Float32(hits) / Float32(cells if cells > 0 else 1)
     changed = Float32(ch_hits) / Float32(ch_cells if ch_cells > 0 else 1)
+
+
+comptime nelts = simd_width_of[DType.float32]()
+
+
+# ==========================================
+# The dream step (raw-state WM forward)
+# ==========================================
+# WorldModelMemory.apply re-hosted on raw arguments: the imagined state
+# lives in caller stack scratch, and constructing a heap-owning
+# SandboxState per tick would allocate inside the ES hot loop. Same feature
+# layout, same hoisted transition-constant base, same _wm_cell math.
+def dream_wm_step(
+    weights: UnsafePointer[Float32, MutAnyOrigin],
+    grid: UnsafePointer[Float32, MutAnyOrigin],
+    r_av: Int,
+    c_av: Int,
+    brush: Int,
+    action: Int,
+    grav_dir: Int,
+    dst: UnsafePointer[Float32, MutAnyOrigin],
+):
+    var base_buf = InlineArray[Float32, WM_HID](fill=0.0)
+    var base = base_buf.unsafe_ptr()
+    var patch_buf = InlineArray[Float32, 9](fill=0.0)
+    var patch = patch_buf.unsafe_ptr()
+    var brush_x = Float32(brush) / 9.0
+    for h in range(WM_HID):
+        var w1 = weights + WM_W1_OFF + h * WM_IN
+        var a = weights[WM_B1_OFF + h]
+        a = fma(w1[9 + action], 1.0, a)
+        a = fma(w1[15 + grav_dir], 1.0, a)
+        a = fma(w1[23], brush_x, a)
+        base[h] = a
+    for r in range(SB_ROWS):
+        for c in range(SB_COLS):
+            var k = 0
+            for dr in range(-1, 2):
+                for dc in range(-1, 2):
+                    var rr = r + dr
+                    var cc = c + dc
+                    if rr < 0 or rr >= SB_ROWS or cc < 0 or cc >= SB_COLS:
+                        patch[k] = WM_OOB
+                    else:
+                        patch[k] = grid[rr * SB_COLS + cc] / 9.0
+                    k += 1
+            var dr_av = r_av - r
+            if dr_av > 2:
+                dr_av = 2
+            if dr_av < -2:
+                dr_av = -2
+            var dc_av = c_av - c
+            if dc_av > 2:
+                dc_av = 2
+            if dc_av < -2:
+                dc_av = -2
+            var at_av = Float32(1.0) if (r_av == r and c_av == c) else Float32(
+                0.0
+            )
+            var above_av = Float32(1.0) if (
+                r_av == r - 1 and c_av == c
+            ) else Float32(0.0)
+            dst[r * SB_COLS + c] = _wm_cell(
+                weights,
+                base,
+                patch,
+                brush_x,
+                Float32(dr_av) / 2.0,
+                Float32(dc_av) / 2.0,
+                at_av,
+                above_av,
+            )
+
+
+# ==========================================
+# WeightedWMMemory — the same world model, fit against the identity basin
+# ==========================================
+# The B-POC-3 grid model reliably collapses to the IDENTITY predictor
+# ("nothing ever changes") in the walls worlds: measured 0/3 restarts in
+# columns and room on two independent batches each, against 2/3 in world 1
+# at the identical schedule (JOURNAL 2026-07-15). The cause is not the ES
+# and not the data scale (4x the transitions rescued nothing — it made it
+# marginally worse, since longer collection samples more settled states).
+# It is the OBJECTIVE. TransitionDomain scores an unweighted MSE over all
+# SB_CELLS, and a transition changes only ~0.2-0.7% of them — measured
+# density 0.0075 world 1, 0.0053 columns, 0.0027 room, the walls worlds
+# being signal-poor for a physical reason (walls make blocks settle sooner,
+# so there is less falling left to predict). At ~200:1 static-to-changed,
+# predicting "keep" everywhere is a near-optimal solution, and the deeper
+# the world's identity bias the harder the true dynamics are to hear.
+#
+# So the fit's objective weights the cells the transition actually CHANGED.
+# This is loss shaping, not a DSL: it says only that changed cells matter
+# more, never WHICH cells change or HOW — the mask is read from the demo
+# pair's own pre/post, and every rule is still grown by the ES. Critically
+# the EVALUATION is untouched: held_out_score is B-POC-3's, unweighted, so
+# every `changed`/`overall` number stays directly comparable to its 0.4 bar.
+#
+# The forward is dream_wm_step's — i.e. _wm_cell's, byte-for-byte — and
+# param_dim/seed are WorldModelMemory's, so a vector fitted here IS a WM
+# vector and drops into the dream tail unchanged.
+comptime WM_CH_WEIGHT = Float32(60.0)
+
+
+# One transition, carrying BOTH sides: `apply` reads the pre state, and the
+# weighted distance needs pre-vs-post to know which cells moved. ExamplePair
+# gives both slots the same type, so the case holds the pair. The per-cell
+# weights are precomputed once here — never in the ES hot loop.
+struct WMCase(Movable):
+    var pre: UnsafePointer[Float32, MutAnyOrigin]
+    var post: UnsafePointer[Float32, MutAnyOrigin]
+    var wts: UnsafePointer[Float32, MutAnyOrigin]
+    var wsum: Float32
+    var r: Int
+    var c: Int
+    var brush: Int
+    var action: Int
+    var grav_dir: Int
+
+    def __init__(out self):
+        self.pre = alloc[Float32](SB_CELLS)
+        self.post = alloc[Float32](SB_CELLS)
+        self.wts = alloc[Float32](SB_CELLS)
+        memset_zero(self.pre, SB_CELLS)
+        memset_zero(self.post, SB_CELLS)
+        memset_zero(self.wts, SB_CELLS)
+        self.wsum = 0.0
+        self.r = 0
+        self.c = 0
+        self.brush = 0
+        self.action = 0
+        self.grav_dir = 0
+
+    def __del__(deinit self):
+        self.pre.free()
+        self.post.free()
+        self.wts.free()
+
+
+def make_wm_case(pre: SandboxState, post: SandboxState) -> WMCase:
+    var wc = WMCase()
+    memcpy(dest=wc.pre, src=pre.grid, count=SB_CELLS)
+    memcpy(dest=wc.post, src=post.grid, count=SB_CELLS)
+    var s = Float32(0.0)
+    for i in range(SB_CELLS):
+        var w = WM_CH_WEIGHT if round(pre.grid[i]) != round(
+            post.grid[i]
+        ) else Float32(1.0)
+        wc.wts[i] = w
+        s += w
+    wc.wsum = s
+    wc.r = pre.r
+    wc.c = pre.c
+    wc.brush = pre.brush
+    wc.action = pre.action
+    wc.grav_dir = pre.grav_dir
+    return wc^
+
+
+# Both slots carry the pair (the input side is read by apply, the output
+# side by distance) — one deep copy each, built offline, never in a loop.
+def wm_cases(
+    demos: List[ExamplePair[SandboxState]],
+) -> List[ExamplePair[WMCase]]:
+    var out = List[ExamplePair[WMCase]]()
+    for d in range(len(demos)):
+        var a = make_wm_case(demos[d].input_grid, demos[d].output_grid)
+        var b = make_wm_case(demos[d].input_grid, demos[d].output_grid)
+        out.append(ExamplePair[WMCase](a^, b^))
+    return out^
+
+
+struct WeightedWMDomain(Domain):
+    comptime Example = WMCase
+
+    @staticmethod
+    def distance(
+        pred: UnsafePointer[Float32, MutAnyOrigin],
+        target: WMCase,
+        n: Int,
+    ) -> Float32:
+        # Negative weighted MSE (higher = fitter, calculate_fitness's
+        # convention); weights precomputed, so this is the same three-part
+        # SIMD shape as every other metric kernel.
+        var acc = Float32(0.0)
+        for i in range(0, n - nelts + 1, nelts):
+            var d = pred.load[width=nelts](i) - target.post.load[width=nelts](i)
+            acc += (target.wts.load[width=nelts](i) * d * d).reduce_add()
+        var rem = n % nelts
+        for i in range(n - rem, n):
+            var d = pred[i] - target.post[i]
+            acc += target.wts[i] * d * d
+        return -acc / target.wsum
+
+    @staticmethod
+    def score(
+        pred: UnsafePointer[Float32, MutAnyOrigin],
+        target: WMCase,
+        n: Int,
+    ) -> Float32:
+        var hits = 0
+        for i in range(n):
+            if round(pred[i]) == round(target.post[i]):
+                hits += 1
+        return Float32(hits) / Float32(n if n > 0 else 1)
+
+    @staticmethod
+    def capacity(ex: WMCase) -> Int:
+        return SB_CELLS
+
+
+struct WeightedWMMemory(Memory):
+    comptime Dom = WeightedWMDomain
+
+    @staticmethod
+    def param_dim() -> Int:
+        return WM_DIM
+
+    @staticmethod
+    def seed(weights: UnsafePointer[Float32, MutAnyOrigin]):
+        WorldModelMemory.seed(weights)
+
+    @staticmethod
+    def fill_scale(scale: UnsafePointer[Float32, MutAnyOrigin], n: Int):
+        for i in range(n):
+            scale[i] = 1.0
+
+    @staticmethod
+    def apply(
+        weights: UnsafePointer[Float32, MutAnyOrigin],
+        inp: WMCase,
+        dst: UnsafePointer[Float32, MutAnyOrigin],
+    ):
+        dream_wm_step(
+            weights,
+            inp.pre,
+            inp.r,
+            inp.c,
+            inp.brush,
+            inp.action,
+            inp.grav_dir,
+            dst,
+        )
 
 
 # ==========================================

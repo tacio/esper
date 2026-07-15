@@ -10,6 +10,8 @@ from sandbox import SB_CELLS
 from world_model import (
     SandboxState,
     WorldModelMemory,
+    WeightedWMMemory,
+    wm_cases,
     WM_DIM,
     make_task,
     collect_transitions,
@@ -68,6 +70,12 @@ comptime HOLD_PER_REGION = 32
 # arm scores 0.362 (LP-guided) vs 0.153 (uniform). Locked with headroom.)
 comptime MIN_OVERALL = Float32(0.985)
 comptime MIN_CHANGED = Float32(0.4)
+# Gate 4 (the weighted-objective A/B, appended 2026-07-15): measured 0.927 on
+# the SAME held-out batch the unweighted fit scores 0.625 on. Pinned with
+# headroom; MIN_WEIGHTED_GAIN demands the weighted fit strictly beat the
+# unweighted one rather than merely clear a bar.
+comptime MIN_CHANGED_WEIGHTED = Float32(0.75)
+comptime MIN_WEIGHTED_GAIN = Float32(1.2)
 comptime LP_SEP_K = Float32(10.0)
 comptime ERR_RATIO = Float32(1.5)
 comptime MIN_ARM_DELTA = Float32(0.08)
@@ -254,14 +262,105 @@ def main() raises:
             + ")."
         )
 
+    # ---------- Gate 4: the changed-cell-weighted objective (T-POC-2 backport)
+    # A controlled A/B against gate 1: the SAME train batch, the SAME held-out
+    # batch, the SAME schedule and the SAME unweighted judge (held_out_score) —
+    # only the fit's OBJECTIVE differs. Gate 1's unweighted fit scores ~0.625
+    # here; weighting the cells the transition actually CHANGED scores ~0.927.
+    #
+    # Why this sits at the END of main and not inside gate 1: fitting consumes
+    # ~20k RNG draws, and every number in gates 1-3 is calibrated at its own
+    # position in this seed(0) stream. Splicing a fit in earlier shifts that
+    # stream and the arms measurably land in the identity basin (gate 3 read
+    # 0.0106 vs 0.0106 — BOTH arms dead — when this was tried inline). Appended
+    # here it perturbs nothing above it.
+    #
+    # That fragility is the point of this gate. The unweighted fit is a
+    # LOTTERY: at ~200:1 static-to-changed cells the unweighted MSE makes the
+    # identity predictor near-optimal, so ~1/3 of world-1 draws collapse to
+    # changed 0.0 (and ALL walls-world draws do — T-POC-2, JOURNAL 2026-07-15).
+    # Gates 1-3 are not flaky in CI (seed(0) is deterministic) but they are
+    # FRAGILE: they pass because this stream position happens to land in the
+    # events basin. The weighted objective removes the basin (9/9 restarts).
+    # Migrating gates 1-3 onto it is a recalibration job in its own right (the
+    # LP apparatus is denominated in raw unweighted MSE — a weighted model's
+    # raw error on the mastered batch rises 0.033 -> 0.198 and collapses gate
+    # 2's scrambled-vs-mastered ratio 8.7x -> 1.44x, a currency mismatch rather
+    # than an LP regression). Until then this gate holds the win as a measured,
+    # non-invasive claim.
+    var w_wt = alloc[Float32](WM_DIM)
+    var cases = wm_cases(train)
+    var wws = ESWorkspace[WeightedWMMemory](SB_CELLS, WM_N)
+    WeightedWMMemory.seed(w_wt)
+    fit_operator[WeightedWMMemory](
+        w_wt,
+        wws,
+        slow,
+        cases,
+        WM_N,
+        Float32(0.3),
+        Float32(0.1),
+        Float32(0.3),
+        Float32(0.1),
+        750,
+        0.0,
+    )
+    fit_operator[WeightedWMMemory](
+        w_wt,
+        wws,
+        slow,
+        cases,
+        WM_N,
+        Float32(0.08),
+        Float32(0.02),
+        Float32(0.08),
+        Float32(0.02),
+        500,
+        0.0,
+    )
+    var wt_overall = Float32(0.0)
+    var wt_changed = Float32(0.0)
+    held_out_score(w_wt, hold, wt_overall, wt_changed)
+    print(
+        "  weighted-objective fit: overall",
+        wt_overall,
+        " changed",
+        wt_changed,
+        " (vs unweighted changed",
+        changed,
+        "— same batches, same judge)",
+    )
+    if wt_changed < MIN_CHANGED_WEIGHTED:
+        raise Error(
+            "ERROR: weighted-objective fit below gate (changed "
+            + String(wt_changed)
+            + ", need "
+            + String(MIN_CHANGED_WEIGHTED)
+            + ")."
+        )
+    if wt_changed < changed * MIN_WEIGHTED_GAIN:
+        raise Error(
+            "ERROR: the weighted objective did not beat the unweighted fit on"
+            " the same held-out batch (weighted "
+            + String(wt_changed)
+            + " vs unweighted "
+            + String(changed)
+            + ", need "
+            + String(MIN_WEIGHTED_GAIN)
+            + "x)."
+        )
+
     w.free()
     w_uni.free()
     w_lp.free()
+    w_wt.free()
     slow.free()
     scratch.free()
     print(
         "World-model test passed: the engine learns its world's dynamics"
         " through the unchanged ES core, learning progress separates"
-        " learnable-novel from mastered AND unlearnable experience, and"
-        " LP-guided collection beats uniform at equal budget (B-POC-3)."
+        " learnable-novel from mastered AND unlearnable experience,"
+        " LP-guided collection beats uniform at equal budget, and the"
+        " changed-cell-weighted objective beats the unweighted fit on the"
+        " same held-out batch (B-POC-3 + T-POC-2 backport)."
     )

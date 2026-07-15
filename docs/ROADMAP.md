@@ -85,7 +85,10 @@ learns both *what* to think and, eventually, *how* to learn.
   Vision A's ARC number kept as one domain's scoreboard rather than the sole north star. Emergent
   meta-learning all the way; the discipline (cold-fit bar, held-out metrics, pre-registered gates)
   and the training-wheels ethos (simplified worlds first, removable priors) unchanged. First
-  scheduled rung: **T-POC-1** (end of "Next").
+  scheduled rung: **T-POC-1** — done 2026-07-14 (the index carries, the basin does not). **T-POC-2**
+  (adaptation in a learned dream) followed and **STOPped** at its gate on 2026-07-15: the dream
+  orders but cannot pick, localized to an objective mismatch rather than a capacity limit. Currently
+  scheduled: **Route A** — rollout-level dream fidelity (end of "Next").
 
 **Values.**
 
@@ -123,6 +126,33 @@ sessions:
 - **Sharpness belongs to the solver, not the module.** When composed modules need *different* softness
   (block 5: geometry wants a soft gather, colour wants sharp bins), no single shared temperature works;
   compose additively (e.g. summed energies) and put the soft→hard **annealing on the inference loop**.
+- **A margin must survive a different draw.** *Determinism is not robustness.* `seed(0)` makes a
+  result REPEATABLE, not ROBUST — and a bar pinned from one run is pinned to one lucky draw. Pin
+  every gated number from **≥ 2–3 independent draws** (different seeds, and where it is cheap a
+  different stream position), then let CI keep running the single deterministic seed: the obligation
+  is at **calibration time**, so it costs authoring effort, not suite minutes. If a margin cannot
+  survive a different draw, it is not a margin — it is a coincidence. Measured cost of skipping this
+  (T-POC-2, 2026-07-15): B-POC-3's gates are fragile, not flaky — inserting one extra fit shifted the
+  seed(0) stream ~20k draws and gate 3's arms BOTH collapsed to identity (0.0106 vs 0.0106 against a
+  calibrated 0.362 vs 0.153), so two of its three gates had been sitting on lucky draws since 2026-07-10.
+  Corollaries: for a fit that can collapse, the in-band version is **best-of-K restarts** and the
+  honest report is the **collapse RATE across draws**, not "it worked once"; for heavy-tailed metrics
+  (any mean of RATIOS) report **medians** — T-POC-2's regret read "68×" off one tiny denominator.
+  Note what this buys: multi-draw pinning would not have FIXED B-POC-3 (the fix was the objective) —
+  it would have REVEALED it. Detection is the point.
+- **Match the metric to its CONSUMER.** Ask what actually reads the number downstream, and gate on
+  that. T-POC-2 STOPped on exactly this gap: its dream ORDERS candidates acceptably (Kendall tau
+  ~0.4–0.7) but `fit_dream_policy` never consumes the ordering — the ES follows the **argmax**, and
+  top-1 regret was broken. A metric that looks adjacent to the one your consumer uses can be
+  decoupled from it, and optimizing the wrong one is invisible until the arm fails. Same lesson one
+  level down: one-step prediction accuracy rose 0.0 → 0.93 while 64-tick rollout usefulness got
+  WORSE.
+- **Every claim needs a control that could refute it.** Not a control that confirms — one that would
+  read ~nothing if the claim were false, and one that could take the claim away. Both earned their
+  cost in T-POC-2: the scrambled-tail control (tau ~0.1) proved the harness had no free-ranking
+  backdoor, and the identity-grid arm **refuted the session's own leading hypothesis** (identity does
+  NOT uniformly beat the learned model — it wins on ordering in one world and loses in another),
+  which downgraded an overclaim to the honest, narrower finding.
 - **At a real wall, pause and survey.** When a mechanism fails for a *general* reason (not a tuning
   reason), stop iterating and check the literature; record the findings in `docs/RESEARCH-NOTES.md`
   mapped onto Esper's concepts, then reroute the roadmap.
@@ -393,7 +423,7 @@ below.
   effectively ~1-D density — the sandbox's single dynamics rule is the ceiling; a richer
   curriculum needs constraining topology (walls), deferred.
 
-### Phase D (T-POC-1) — the cross-world transfer ladder (begun 2026-07-14)
+### Phase D (T-POC-1, T-POC-2) — the cross-world transfer ladder (begun 2026-07-14)
 
 The first rung of the transfer axis the 2026-07-14 direction clarification made primary (see MVV):
 knowledge earned in world N, measured in world N+1.
@@ -421,6 +451,48 @@ knowledge earned in world N, measured in world N+1.
   rollouts), so the ceiling lives on the doubly-held-out subset (columns: 5.2× at seed 0, tiny-n
   noisy). Deterministic double-run; boards `scratch/tpoc1_cross_world_seed{0,1}.txt`.
   (JOURNAL 2026-07-14 21:07.)
+- **T-POC-2 — adaptation in a learned dream: STOPped at the increment-0 gate, booked
+  (2026-07-15).** The rung built the full Ha–Schmidhuber split (`src/adapt.mojo`): a learned grid
+  model + learned agent models (`PoseStepMemory`/`WriteStepMemory` — pose, brush and the agent's
+  two write cells as selector heads, blocked-move accuracy **1.0**, nothing hand-coded), composed
+  by the frozen-tail trick into `DreamPolicyMemory` so the UNCHANGED `fit_operator` adapts a policy
+  entirely in imagination. The pre-registered ranking-fidelity gate then STOPped it:
+  **the dream half-ORDERS but cannot PICK.** Kendall tau reads ~0.4–0.7 (real signal; scrambled-tail
+  control ~0.1, so no backdoor), but top-1 regret fails decisively in columns (3.9× vs a
+  pre-registered 2.0×; 5.6× even in world 1's calibration). Precisely: the GO required BOTH walls
+  worlds and **room MEETS it** (tau 0.55, regret 1.97×) — the negative is carried by columns
+  (failing both bars) plus room's absence of margin, since room straddles the regret bar across runs
+  (1.97× / 2.06× / 2.17×), sitting ON it rather than clearing it. That split is decisive because nothing consumes
+  the ordering: `fit_dream_policy` follows the dream's **argmax**, so a dream that orders well and
+  picks badly walks a policy, confidently, somewhere multiples worse. **Increment 1 never ran**
+  (`run_family_adapt` is unrun scaffolding, so marked).
+  **The cause is an objective mismatch, not model capacity:** one-step accuracy is the wrong target
+  for a 64-tick autoregressive dream — at overall ~0.99 the model misplaces ~1% of cells per tick and
+  compounds it 64×. The trend is monotonic the wrong way: as one-step `changed` rose 0.0 → 0.53 →
+  0.93, top-1 regret WORSENED 1.0× → 1.6× → 5.6×. The identity collapse the rung spent itself
+  removing was, for ranking, partly **protective** ("nothing moves" is safe to iterate 64×) — fixing
+  the fit removed the mask, it did not create the problem.
+  **The rung's durable win, now backported:** the identity basin was diagnosed as an OBJECTIVE
+  problem (a transition moves ~0.2–0.7% of cells; at ~200:1 static-to-changed the unweighted MSE
+  makes "predict keep everywhere" near-optimal). `WeightedWMMemory` (`world_model.mojo`) weights the
+  cells the demo pair's own pre/post disagree on — loss shaping, never a DSL, and the EVALUATION
+  stays B-POC-3's unweighted `held_out_score`. It removes the basin outright: **9/9 restarts across
+  three worlds**, world 1's held-out changed **0.625 → 0.927** on the same ruler, and the walls
+  worlds go from unlearnable (0/3, 0/3) to 0.88 columns / 0.63 room. Backported to B-POC-3 as a new
+  **gate 4**: a controlled A/B on the SAME train/held-out batches, schedule and unweighted judge —
+  only the objective differs — asserting weighted ≥ 0.75 AND ≥ 1.2× the unweighted fit.
+  It is APPENDED rather than spliced into gate 1, and that placement is a finding in itself:
+  **B-POC-3's gates are RNG-position-fragile.** They are not flaky (seed(0) is deterministic) — they
+  pass because that stream position happens to land in the events basin. Fitting inline shifts the
+  stream ~20k draws and gate 3's arms measurably BOTH collapse to identity (0.0106 vs 0.0106, vs the
+  calibrated 0.362 vs 0.153) — so gate 3's margin is a lucky draw too. Migrating gates 1–3 onto the
+  weighted objective is a recalibration rung of its own: the LP apparatus is denominated in raw
+  unweighted MSE, and a weighted model's raw error on the mastered batch rises 0.033 → 0.198,
+  collapsing gate 2's scrambled-vs-mastered ratio 8.7× → 1.44× (a currency mismatch, not an LP
+  regression).
+  Booked as a regression: `tests/test_dream_rank.mojo` asserts the negative and fails loudly if it
+  stops reproducing (a GOOD failure = someone fixed rollout fidelity → re-open the rung).
+  (JOURNAL 2026-07-15.)
 
 ## Next — the path to full ARC-AGI 2 (Vision A)
 
@@ -681,12 +753,57 @@ the INDEX, not the basin** — a mismatched W1 skill is 4–8× *worse* than col
 BC-nearest retrieval rescues exactly that back to cold-parity (5.78×/5.19× vs random, gated) and
 lands exact goals in the confined world (5/24 vs cold ≤ 2/24), while the hoped-for warm-basin
 advantage over cold (B-POC-4's same-world 7.3×) is eaten by the world gap (~1×, seed/world-noisy —
-the pre-registered negative-transfer reading, booked). **The evidence-backed next rung (T-POC-2,
-unscheduled): adaptation** — re-ground a retrieved skill in the new world's dynamics (plausibly
-via the B-POC-3 world model) to reclaim the basin advantage the index alone cannot carry.
-Remaining T-ladder candidates (unscheduled): world-model prior transfer (slow weights across
-worlds), a new-dynamics world (sokoban-lite pushable blocks), a non-grid domain through the
-`Domain` seam. Rung O stays a live lever on the Vision-A track.
+the pre-registered negative-transfer reading, booked). **The evidence-backed next rung was T-POC-2
+(adaptation)** — re-ground a retrieved skill in the new world's dynamics via the B-POC-3 world
+model. It ran on 2026-07-15 and **STOPped at its increment-0 gate** (Phase D above).
+
+**2026-07-15 — T-POC-2 STOPped; the axis continues as Route A (scheduled next).** The dream
+half-ORDERS candidates (tau ~0.4–0.7, clean against a ~0.1 scrambled control) but **cannot PICK**
+(top-1 regret 3.9× in columns vs a pre-registered 2.0×; room only straddles the bar). Since `fit_dream_policy` follows the
+dream's **argmax**, ordering alone cannot carry the adaptation arm. Crucially the STOP is **not** a
+capacity verdict — it localizes to an *objective mismatch*: one-step accuracy is the wrong target
+for a 64-tick autoregressive rollout, and the measured trend is monotonic the wrong way (one-step
+`changed` 0.0 → 0.53 → 0.93 ⇒ regret 1.0× → 1.6× → 5.6×). The rung's hypothesis
+("a retrieved skill can be re-grounded in imagination") is therefore **not refuted** — what is
+refuted is *one-step-fitted* imagination, a much narrower claim.
+
+- **Route A — rollout-level dream fidelity (the scheduled rung).** Fit the world model to be
+  accurate over K ticks of **its own** rollout (multi-step loss / scheduled sampling — the
+  Dreamer/PlaNet lesson), not one ground-truth step. This attacks the measured cause directly; our
+  own numbers are the argument for it. Cost: K× per fitness eval (K≈8 affordable) plus collecting
+  short episode SEQUENCES rather than single transitions (`collect_transitions` nearly does this).
+  Pre-register the same gate on the same metric — `tests/test_dream_rank.mojo` is the booked
+  negative and will FAIL when this works, which is the intended signal to re-open the rung and
+  license increment 1 (`adapt.run_family_adapt`, already built and compiling but **unrun**).
+  Honest risk: at ~0.5% event density the model may drift regardless; if rollout-fitted imagination
+  still misses the regret bar, the finding upgrades to "imagination does not pay at this scale" —
+  a strong two-rung result — and Route C becomes the graceful fallback.
+- **Route C — ITE-style real-trial selection over `nearest_k` (fallback, deliberately deferred).**
+  Drop the dream: spend a few REAL rollouts to pick among k retrieved elites, then the standard
+  few-shot fit. Cheap, stands on T-POC-1's measured ground (the index carries), budget-honest. But
+  it is *selection*, not re-grounding — it sidesteps the mission's actual question, which is why it
+  is not scheduled first despite being the safer win.
+- **Route W — migrate B-POC-3 onto the weighted objective (unscheduled, newly evidenced).** T-POC-2
+  showed B-POC-3's gates are RNG-position-fragile: shifting the seed(0) stream by one extra fit
+  makes gate 3's arms BOTH collapse to identity (0.0106 vs 0.0106 against a calibrated 0.362 vs
+  0.153). The proof is deterministic, so it is not flaky — but its margins are lucky draws, and any
+  upstream change that moves the stream can silently flip them. The weighted objective removes the
+  basin, but migrating gates 1–3 onto it means recalibrating LP_SEP_K / ERR_RATIO / MIN_ARM_DELTA,
+  because the LP apparatus is denominated in raw unweighted MSE (a weighted model's raw mastered
+  error rises 0.033 → 0.198, compressing gate 2's ratio 8.7× → 1.44×). Worth its own rung; gate 4
+  holds the win non-invasively until then.
+- Remaining T-ladder candidates (unscheduled): world-model prior transfer (slow weights across
+  worlds), a new-dynamics world (sokoban-lite pushable blocks), a non-grid domain through the
+  `Domain` seam. Rung O stays a live lever on the Vision-A track.
+
+**Route A's pre-registration must apply the three discipline points T-POC-2 paid for** — *match the
+metric to its consumer*, *every claim needs a control that could refute it*, and *a margin must
+survive a different draw* (all now in "Working principles"). Concretely, for Route A: gate on
+**regret** (what the ES actually consumes), not tau; keep the scrambled-tail and identity-grid arms;
+pin bars from ≥ 2 seeds and report **median** regret, not the mean of ratios. And demand
+**headroom** — T-POC-2's room world technically MET the GO (tau 0.55, regret 1.97× vs a 2.0× bar)
+while straddling that bar across runs (1.97× / 2.06× / 2.17×). A pass 1.5% inside a bar, on a metric
+whose seed noise runs to tens of percent, is noise wearing a GO's clothes.
 
 ## Beyond ARC-AGI 2
 

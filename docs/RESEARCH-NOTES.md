@@ -581,3 +581,52 @@ frontier, not fighting it.
    identifiability conditions (#2); engineer `synth_tasks.py` families for compositional +
    connected support; watch memory capacity (condition 3).
 3. **Adaptive decoupling (#3)** and **latent program search (#4)** parked as reserves.
+
+---
+
+## 2026-07-15 addendum (post-measurement) — T-POC-2: the dream orders but cannot pick
+
+§4 of the 2026-07-14 addendum seeded T-POC-2 as "planning in the dream = our existing per-task ES
+inside the learned model" — the Ha–Schmidhuber split with ES on both sides. It was built in full
+and **STOPped at its pre-registered increment-0 gate**. The negative is specific, and it moves the
+literature mapping rather than closing it.
+
+**What was measured.** A dream whose every half is learned (grid model + pose/brush/write agent
+models, blocked-move accuracy 1.0, nothing hand-coded) ranks candidate policies at Kendall tau
+~0.4–0.7 against a ~0.1 scrambled-tail control — real signal — but its **top-1 pick** fails
+decisively in columns (regret 3.9× vs a pre-registered 2.0×; 5.6× even in world 1's calibration).
+Stated precisely: the GO required BOTH walls worlds and **room meets it** (tau 0.55, regret 1.97×),
+so the negative rests on columns plus room's absence of margin — room straddles the bar across runs
+(1.97×/2.06×/2.17×) rather than clearing it.
+Because `fit_dream_policy` follows the dream's **argmax**, ordering alone cannot carry adaptation.
+
+**Why this is an objective mismatch, not a capacity limit.** As the grid model's one-step
+changed-cell accuracy ROSE (0.0 → 0.53 → 0.93), the dream's top-1 regret WORSENED (1.0× → 1.6× →
+5.6×). At overall ~0.99 the model misplaces ~1% of cells per tick and compounds that over 64 ticks.
+The identity collapse we spent the rung removing was, for ranking, partly PROTECTIVE — "nothing
+moves" is safe to iterate. This is the literature's known failure and we rediscovered it from our
+own numbers: **one-step teacher-forced accuracy does not predict rollout usefulness.** It is exactly
+why the model-based RL line (PlaNet, Dreamer) trains on multi-step latent rollouts / scheduled
+sampling rather than single-step prediction. Our §4 mapping ("planning in the dream = per-task ES")
+holds — but it silently assumed a dream fit for the horizon it is planned over. It was not.
+
+**Route A (scheduled).** Fit the model over K ticks of its OWN rollout, then re-read the same gate.
+This is the field's answer to the exact defect we measured, and it is cheap in our setting (K× per
+fitness eval; the ES core is untouched — a multi-step rollout is, again, "just another Domain").
+
+**The identity basin as an objective pathology (transferable beyond this rung).** A transition moves
+~0.2–0.7% of the grid; at ~200:1 static-to-changed, unweighted MSE makes "predict keep everywhere"
+near-optimal, and the fit lands there on 1/3 of world-1 draws and ALL walls-world draws. This is the
+class-imbalance problem in regression clothing, and the fix is the standard one: weight the changed
+cells (`WeightedWMMemory`). It removes the basin outright (9/9 restarts; world 1 held-out changed
+0.625 → 0.927 on the UNCHANGED unweighted ruler) and is backported into B-POC-3's gate 1, whose 0.4
+bar rises to 0.75. Two wrong diagnoses died on the way and are worth remembering as a pattern: it
+was NOT the sigma schedule (widening it CAUSES the collapse — a deterministic attractor, bit-
+identical scores across seeds) and NOT the data scale (4× the transitions rescued nothing and
+lowered density). When an ES fit stops learning a rare event, suspect the objective's balance before
+the optimizer.
+
+**Method lesson for future gates.** Match the metric to its CONSUMER (tau vs regret was the whole
+finding); controls earn their cost (the scrambled tail proved no backdoor, the identity-grid arm
+refuted our own leading hypothesis); and one run is not a reading (tau swung 0.31–0.57 for a single
+world across runs at fixed bars; regret is a heavy-tailed mean of ratios — prefer medians).
