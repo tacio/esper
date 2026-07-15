@@ -77,6 +77,15 @@ learns both *what* to think and, eventually, *how* to learn.
   measured confirmation (in-sandbox): B-POC-4** — the retrieval half is strongly confirmed (7.3×),
   composition real but density-bounded; the port to the real ARC corpus is a named candidate lever
   (see the end of "Next").
+- **Direction clarification (2026-07-14, user decision).** Solving ARC-AGI is *less important*
+  than learning from diverse problems and worlds (sokoban, tic-tac-toe, tangram, untying knots, …)
+  and **carrying that knowledge over to the next problem or world**. The convergence axis is
+  thereby elevated from a hypothesis to the mission's measured currency — **transfer** (what
+  carries from world N to world N+1: warm-start vs cold-start at equal budget, held-out) — with
+  Vision A's ARC number kept as one domain's scoreboard rather than the sole north star. Emergent
+  meta-learning all the way; the discipline (cold-fit bar, held-out metrics, pre-registered gates)
+  and the training-wheels ethos (simplified worlds first, removable priors) unchanged. First
+  scheduled rung: **T-POC-1** (end of "Next").
 
 **Values.**
 
@@ -384,6 +393,35 @@ below.
   effectively ~1-D density — the sandbox's single dynamics rule is the ceiling; a richer
   curriculum needs constraining topology (walls), deferred.
 
+### Phase D (T-POC-1) — the cross-world transfer ladder (begun 2026-07-14)
+
+The first rung of the transfer axis the 2026-07-14 direction clarification made primary (see MVV):
+knowledge earned in world N, measured in world N+1.
+
+- **Walls — world 2 (2026-07-14).** `SB_WALL` as a reserved in-grid cell value (`< 0` wall, `== 0`
+  empty, `> 0` movable block): gravity excludes walls as sources (mid-air shelves hold blocks for
+  free — non-empty destinations already blocked), the avatar is topology-blocked, paint refuses
+  walls, BC/cell keys count **movable content only** so topology never leaks into the behaviour
+  space (the cross-world retrieval seam). Observation needed zero code (walls render −0.111,
+  distinct from OOB −0.5). Four parametric layout kinds (shelves/columns/room/scatter × variants).
+  **Strict superset gated at full strength: all six Vision-B proofs byte-identical.**
+  `test_walls` (fast tier, RNG-free): B-POC-2.5's paint-flattened field survives at the MEAN
+  (~8.0–8.2 bits) but topology creates **categorical local structure: a sealed pocket collapses
+  exact 4-step empowerment to 3.907 bits vs open 8.267** (= log2(15), movement dead); columns dig
+  0.43 below the open minimum, spread 1.95 vs 1.40. (JOURNAL 2026-07-14 20:00.)
+- **T-POC-1 — cross-world transfer measured (2026-07-14).** `make_demos`/`run_family` generalized
+  to fit in the goal's own world (byte-identical on B-POC-4 — gated), then the B-POC-4 experiment
+  run with the goal phase in walls worlds (columns + room, 24 held-out goals each; native
+  equal-budget repertoires as the ceiling reference). **The index carries, the basin does not:**
+  random W1 elite = 4–8× worse than cold (strong negative transfer); BC-nearest retrieval rescues
+  to cold-parity — **5.78×/5.19× closer than random (seed 0; 7.61×/2.24× seed 1), gated ≥ 2×** —
+  and hits exact goal keys 5/24 in the room world (cold ≤ 2/24, both seeds); nearest-vs-cold ~1×
+  noisy (0.75–1.71×), the booked negative. Discovery en route: **an equal-budget native build
+  SATURATES a confined world** (room: zero goals outside its 1,465 bins at 60k reference
+  rollouts), so the ceiling lives on the doubly-held-out subset (columns: 5.2× at seed 0, tiny-n
+  noisy). Deterministic double-run; boards `scratch/tpoc1_cross_world_seed{0,1}.txt`.
+  (JOURNAL 2026-07-14 21:07.)
+
 ## Next — the path to full ARC-AGI 2 (Vision A)
 
 Each is its own block, held to the **cold-fit bar** (a scaffolded pass is a negative result). The
@@ -630,6 +668,25 @@ than archaeology:
   an unsupervised library of grid operators whose BC-nearest member seeds each ARC task's ES fit
   — the convergence hypothesis run on the real corpus. Biggest lift; needs a grid-operator BC
   space design first.
+
+**2026-07-14 — the fork resolved: T-POC-1 (cross-world transfer) — DONE, same day.** Per the
+direction clarification in "Mission, Vision, Values", the chosen rung fused the second and third
+levers into the smallest step that makes "carry knowledge to the next world" a gated number: the
+**walls world** (constraining topology — the B-POC-5 ceiling lever) became **world 2**, and
+**B-POC-4's repertoire→retrieval→warm-start machinery** measured what a repertoire earned
+unsupervised in world 1 carries into it (the two worlds share grid/actions/`POLICY_DIM`/BC by
+construction, so cross-world retrieval needed zero core changes — no grid-operator BC-space
+design, the ARC port's blocker). **Result (Phase D below for the full numbers): what carries is
+the INDEX, not the basin** — a mismatched W1 skill is 4–8× *worse* than cold under new topology,
+BC-nearest retrieval rescues exactly that back to cold-parity (5.78×/5.19× vs random, gated) and
+lands exact goals in the confined world (5/24 vs cold ≤ 2/24), while the hoped-for warm-basin
+advantage over cold (B-POC-4's same-world 7.3×) is eaten by the world gap (~1×, seed/world-noisy —
+the pre-registered negative-transfer reading, booked). **The evidence-backed next rung (T-POC-2,
+unscheduled): adaptation** — re-ground a retrieved skill in the new world's dynamics (plausibly
+via the B-POC-3 world model) to reclaim the basin advantage the index alone cannot carry.
+Remaining T-ladder candidates (unscheduled): world-model prior transfer (slow weights across
+worlds), a new-dynamics world (sokoban-lite pushable blocks), a non-grid domain through the
+`Domain` seam. Rung O stays a live lever on the Vision-A track.
 
 ## Beyond ARC-AGI 2
 

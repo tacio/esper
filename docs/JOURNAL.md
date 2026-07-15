@@ -2531,3 +2531,102 @@ regression-free**; the ROADMAP's v4 numbers stand unchanged, so no version bump 
 a gate, not a new measure). `./esper fast` green on the CPU reference path
 (`scratch/v5_fast_suite.log`). The next session starts from the three candidate levers named at
 the end of ROADMAP's "Next" section.
+
+## 2026-07-14 19:22 — The fork resolved: mission recentered on cross-world transfer; T-POC-1 scheduled
+
+The session opened on the three levers the consolidation left (Rung O / walls / convergence port),
+and the user resolved it with a **mission-level clarification** before picking: solving ARC-AGI is
+*less important* than learning from diverse problems and worlds — sokoban, tic-tac-toe, tangram,
+untying knots were the mindset-expanding examples — and **carrying that knowledge over to the next
+problem or world**. Emergent meta-learning all the way, discipline unchanged, training wheels /
+simplified worlds to move to bigger things. Booked in ROADMAP's MVV as the 2026-07-14 direction
+clarification: **transfer is the mission's measured currency** (warm vs cold at equal budget on a
+new world, held-out); Vision A's corpus number stays as one domain's scoreboard, not the sole
+north star.
+
+The chosen rung, **T-POC-1 (cross-world transfer POC)**, fuses the walls lever and the convergence
+port into the smallest step that makes "carry knowledge to the next world" a gated number: walls
+(a reserved in-grid cell value, strict-superset) turn the sandbox into **world 2**, and B-POC-4's
+repertoire→retrieval→warm-start machinery measures what a world-1 repertoire carries into it. The
+design insight that makes this the *right first* transfer rung rather than the ARC port: both
+worlds share the grid, action space, `POLICY_DIM`, and BC definition **by construction**, so
+cross-world retrieval is well-defined with zero core changes — the grid-operator BC-space design
+(the ARC port's named blocker) is simply not needed yet. Plan: walls mechanics + byte-identity
+regression gate on all six Vision-B tests → exact-empowerment differentiation control (walls must
+genuinely change the world, not re-skin it) → four equal-budget arms on held-out world-2 goals
+(cold / world-1 BC-nearest / random-elite / world-2-native ceiling), gates pre-registered in form,
+seed-0, double-run. Negative transfer, if that is what the measurement says, gets booked as the
+honest result.
+
+## 2026-07-14 20:00 — Walls land: strict superset (six proofs byte-identical) + the trap exhibit
+
+Walls are in (`src/sandbox.mojo`), designed so the world grows without the code around it knowing:
+`SB_WALL = -1.0` is a **reserved in-grid cell value** — cell semantics become `< 0` wall, `== 0`
+empty, `> 0` movable block — so `SandboxTask`, the Domain/Memory conformances, `POLICY_DIM`, and
+the `.rep` serialization are all untouched (walls travel inside the grid they always carried). Four
+guards implement the physics: gravity excludes walls as *sources* (they never fall; as non-empty
+*destinations* they already block — mid-air shelves hold falling blocks for free), the avatar is
+blocked by wall cells (it still coexists with blocks — only topology is solid), paint refuses wall
+cells, and the BC/cell keys count **movable content only** (`> 0`), so static topology never leaks
+into the behaviour space — that last choice is what keeps goal BCs comparable across worlds, the
+seam T-POC-1's retrieval rides on. Observation needed *zero* code: walls render through the
+existing `colour/9` formula as −0.111 — outside the valid [0,1] block span, distinct from the −0.5
+OOB sentinel, so a policy can tell interior topology from the board edge. Four parametric layout
+kinds (`shelves`/`columns`/`room`/`scatter` × integer variants) give a real topology axis a later
+UED rung can mutate.
+
+**The strict-superset gate passed at full strength: all six Vision-B proofs are byte-identical**
+(novelty, repertoire, empowerment, world model, transfer, UED) — baselines captured from a clean
+HEAD worktree, re-run in the walls tree, `diff` empty on every log. In wall-free worlds no negative
+cell exists, so every guard is vacuously the old comparison — the proof the design aimed for.
+
+`tests/test_walls.mojo` (fast tier — seconds, RNG-free, exact numbers) gates the new physics and
+the world-2 validation control. The interesting result is the empowerment landscape: **B-POC-2.5's
+"paint flattens everything to ~7.9 bits" moral survives walls at the field level** (means: open
+8.171 vs walls worlds 7.97–8.13 — barely moved), but topology creates **categorical local
+structure the open world provably lacks: a sealed 1-cell pocket collapses exact 4-step empowerment
+to 3.907 bits vs the open field's 8.267** (movement dies; only paint/brush sequences distinguish
+states — log2(15) exactly), and the columns world digs 0.43 bits below the open world's minimum
+with a 1.95-vs-1.40 spread. Gated with headroom: pocket ≤ 4.5 and ≤ open_min − 2.0; columns
+min ≤ open_min − 0.3, spread ≥ open + 0.3. Empowerment differentiates in a walled world — exactly
+the deferred B-POC-2.5 revisit condition, now measured.
+
+## 2026-07-14 21:07 — T-POC-1 measured: the INDEX carries across worlds; the warm basin does not
+
+The cross-world transfer proof (`tests/test_cross_world.mojo`, suite-tier full) is in, and the
+result is sharper — and more honest — than the rung's hoped-for headline.
+
+**One seam change made the experiment possible:** `transfer.mojo`'s `make_demos` (and so
+`run_family`) now builds each goal's demo from the **given task's world** (grid + pose + dynamics)
+instead of a default-constructed world-1 task — the few-shot ES fit rolls out in the world the goal
+lives in. In B-POC-4's setting the given task IS the default world, so the generalization is a
+pure widening: `test_transfer` re-ran **byte-identical** to its pre-change baseline.
+
+**The first measurement failed usefully — twice.** (1) Goal starvation: requiring goals outside
+BOTH repertoires (W1's and the native ceiling's) left 8/24 goals in the columns world and **0/24 in
+the room world** — and the pre-filter counts proved the W1-held-out goals existed (24/24); it is
+the *native* map that eats them. That is a finding, not a bug: **an equal-budget native build
+SATURATES a confined world's reachable end-state space** (room: 1,465 bins cover every goal 60k
+reference rollouts can reach). The redesign follows the discipline: the rung's claim is gated on
+the W1-held-out families (the arm under test never sees the native map), and the ceiling is
+computed on the doubly-held-out *subset*, whose size is itself reported (columns 8, room 0).
+(2) The pre-registered warm-basin hope — nearest(W1) beats cold on world-2 goals — came back
+**0.75× on columns** (negative!) and 1.71× on room at seed 0; a seed-1 direction check flipped
+both (1.12× / 0.96×). Verdict: **~1× cold-parity, world- and seed-dependent noise** — the
+same-world 7.3× warm-start advantage B-POC-4 measured is eaten by the world gap.
+
+**What survived every cut is the index.** A *mismatched* W1 skill is **4–8× worse than cold**
+under the new topology (random-elite arm: 0.0292/0.0130 vs cold 0.0038/0.0043) — cross-world
+negative transfer is real and strong. BC-nearest retrieval reliably rescues exactly that:
+**5.78×/5.19× closer than random at seed 0 (7.61×/2.24× at seed 1)**, back to cold-parity. And in
+the confined room world retrieval **lands exact goal keys 5/24 times vs cold's ≤ 2/24 at both
+seeds** — reused knowledge reaching precise states, the uncheatable metric agreeing with the
+graded one. Booked gates (headroom below seed 0): nearest ≥ 2.0× vs random on both families +
+a benign floor vs cold (≥ 0.5×); held-out leaks 0; `.rep` round-trip bit-identical, 100% replay;
+double-run bit-identical. Boards: `scratch/tpoc1_cross_world_seed{0,1}.txt`.
+
+**The rung's one-line moral:** *what carries to a new world, at this rung, is the LIBRARY'S INDEX —
+retrieval turns strong negative transfer into safe cold-parity and exact hits — while the retrieved
+policy's basin advantage dies with the old world's dynamics; closing THAT gap is an adaptation
+problem (re-grounding a retrieved skill in the new world's dynamics, plausibly via the B-POC-3
+world model), which is the evidence-backed shape of T-POC-2.*

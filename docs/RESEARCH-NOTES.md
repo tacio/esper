@@ -298,6 +298,29 @@ residuals kept pointing at: the sandbox's single dynamics rule is the ceiling on
 the deferred next lever is constraining topology (walls) — new dynamics, not a new curator.** The
 five-rung ES-native ladder is complete.
 
+**Addendum (2026-07-14, T-POC-1 build — the first cross-world rung).** The deferred walls lever
+landed as **world 2** (a reserved in-grid cell value; strict superset, all six Vision-B proofs
+byte-identical) and B-POC-4's machinery was pointed across the world gap: W1 repertoire, few-shot
+goals in walls worlds, fits rolling out in the goal's world (`make_demos` generalized,
+byte-identical on B-POC-4). Measured verdicts, extending the B-POC-4 list:
+1. **The index survives a world change; the basin does not.** B-POC-4's "retrieval must be
+   indexed" sharpens: under new topology a *mismatched* skill is **4–8× worse than cold** (random
+   arm) — negative transfer is the default — and BC-nearest retrieval rescues exactly that back to
+   cold-parity (5.78×/5.19× vs random, seed 0), even landing exact goal keys in the confined world
+   (5/24 vs cold ≤ 2/24, both seeds). But the same-world **7.3× warm-start advantage evaporates**
+   (nearest-vs-cold ~1×, world/seed-noisy): the retrieved weights' fine structure encodes the OLD
+   world's dynamics; only the index's relevance mapping generalizes.
+2. **Native builds saturate confined worlds.** An equal-budget repertoire built in the room world
+   covers its entire reachable goal space (zero doubly-held-out goals at 60k reference rollouts) —
+   coverage-per-budget rises as topology shrinks the reachable set. Consequence: ceiling
+   comparisons need doubly-held-out subsets, and "held-out" itself gets scarce in small worlds.
+3. **Topology creates the optionality structure paint erased.** The B-POC-2.5 flat-landscape
+   residual breaks locally: a sealed pocket collapses exact empowerment to log2(15) ≈ 3.9 bits vs
+   the open ~8.3 — walls give empowerment (and any curiosity signal over it) something to see.
+The next lever this prescribes is **adaptation, not retrieval**: re-grounding a retrieved skill in
+the new world's dynamics (the B-POC-3 world model is the obvious mediator) to reclaim the basin
+advantage across the gap — T-POC-2's shape, unscheduled.
+
 ---
 
 ## 2026-07-08 — Content-addressed construction (the deep-floor negative)

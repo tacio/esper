@@ -233,12 +233,21 @@ def two_phase_rollout(
 # Goal container + demo builder
 # ==========================================
 # Goals are stored flat: NUM x BC_DIM target BCs + NUM cell keys. A demo for the
-# ES is one ExamplePair whose input is the shared start state and whose output
-# carries the goal BC (Domain.distance scores a rollout BC against it).
+# ES is one ExamplePair whose input is the GIVEN TASK'S WORLD (grid + pose +
+# dynamics — so the few-shot fit rolls out in the world the goal lives in;
+# T-POC-1 fits in a walls world this way) and whose output carries the goal BC
+# (Domain.distance scores a rollout BC against it).
 def make_demos(
+    task: SandboxTask,
     target: UnsafePointer[Float32, MutAnyOrigin],
 ) -> List[ExamplePair[SandboxTask]]:
     var a = SandboxTask()
+    memcpy(dest=a.grid, src=task.grid, count=SB_CELLS)
+    a.start_r = task.start_r
+    a.start_c = task.start_c
+    a.start_brush = task.start_brush
+    a.grav_dir = task.grav_dir
+    a.grav_rate = task.grav_rate
     memcpy(dest=a.target_bc, src=target, count=BC_DIM)
     var b = SandboxTask()
     memcpy(dest=b.target_bc, src=target, count=BC_DIM)
@@ -318,7 +327,8 @@ struct ArmStats(Copyable, Movable):
 # The transfer driver
 # ==========================================
 # One family of goals through all four arms at equal few-shot budget. Reuses the
-# two pre-built workspaces and slow/fast buffers; builds fresh demos per goal.
+# two pre-built workspaces and slow/fast buffers; builds fresh demos per goal in
+# the given task's world (fit and score in the same world the goals live in).
 def run_family(
     mut emap: EliteMap,
     task: SandboxTask,
@@ -346,7 +356,7 @@ def run_family(
     for g in range(num):
         var tgt = goal_bc + g * BC_DIM
         var key = goal_key[g]
-        var demos = make_demos(tgt)
+        var demos = make_demos(task, tgt)
 
         # --- cold: zero seed.
         memset_zero(pol_fast, POLICY_DIM)
