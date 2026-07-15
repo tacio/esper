@@ -29,6 +29,13 @@ comptime SB_CELLS = SB_ROWS * SB_COLS
 # Colour 0 = empty; 1..9 are paintable block colours (paint never writes empty,
 # so painting is not trivially reversible — part of the world's composable depth).
 comptime SB_COLORS = 10
+# Walls (world 2 — T-POC-1): the ONLY negative cell value. Static topology —
+# never falls, blocks the avatar, refuses paint, and blocks falling blocks
+# (any non-empty destination already does). Cell semantics: < 0 wall, == 0
+# empty, > 0 movable block. Wall-free worlds are a strict superset case: with
+# no negative cells present every wall guard below reduces to the old
+# behaviour (gated byte-identical on the six Vision-B proofs).
+comptime SB_WALL = Float32(-1.0)
 # Actions: 0 up, 1 down, 2 left, 3 right, 4 paint, 5 cycle-brush.
 comptime SB_ACTIONS = 6
 # Rollout length: 16 ticks cross the board, so 64 allows ~4 traverse-and-paint
@@ -44,8 +51,11 @@ comptime SB_GRAV_RIGHT = 3
 
 # --- Policy (observation -> action logits) ---
 # Egocentric 5x5 colour patch + 4 compass scalars. The patch is colours/9 with
-# an out-of-bounds sentinel OUTSIDE the valid [0,1] span so walls are
-# perceivable under clamped movement. The compass carries normalized avatar
+# an out-of-bounds sentinel OUTSIDE the valid [0,1] span so board edges are
+# perceivable under clamped movement. Wall cells need no special casing: they
+# render through the same formula as SB_WALL/9 ≈ −0.111 — negative like the
+# OOB sentinel (impassable reads as "outside the block span") yet distinct
+# from it, so a policy can tell interior topology from the board edge. The compass carries normalized avatar
 # row/col, brush, and t/SB_T — the time feature lets a FIXED weight vector
 # express time-extended programs ("walk right until t~0.5, then paint") and
 # breaks the short limit cycles a deterministic argmax policy otherwise enters
@@ -115,46 +125,135 @@ struct SandboxTask(Movable):
 
 
 # ==========================================
+# Wall layouts (world 2 — T-POC-1)
+# ==========================================
+# Deterministic topology builders: write SB_WALL cells into a task's START
+# grid (walls live in the grid itself, so SandboxTask/Domain/policy and the
+# .rep serialization are all untouched). The avatar's start cell is always
+# skipped, so a task can never begin inside a wall — set start_r/start_c
+# BEFORE laying walls. Parametric on (kind, variant) so a later UED rung
+# inherits a genuine topology axis; this rung uses them as a fixed family.
+
+
+# Fill the inclusive rect [r0..r1] x [c0..c1] with walls, clamped to the
+# board, skipping the task's avatar start cell.
+def add_wall_rect(task: SandboxTask, r0: Int, c0: Int, r1: Int, c1: Int):
+    var ra = r0
+    var rb = r1
+    var ca = c0
+    var cb = c1
+    if ra < 0:
+        ra = 0
+    if ca < 0:
+        ca = 0
+    if rb > SB_ROWS - 1:
+        rb = SB_ROWS - 1
+    if cb > SB_COLS - 1:
+        cb = SB_COLS - 1
+    for r in range(ra, rb + 1):
+        for c in range(ca, cb + 1):
+            if r == task.start_r and c == task.start_c:
+                continue
+            task.grid[r * SB_COLS + c] = SB_WALL
+
+
+# Wall-layout kinds (gen_walls_layout).
+comptime SB_WALLS_SHELVES = 0
+comptime SB_WALLS_COLUMNS = 1
+comptime SB_WALLS_ROOM = 2
+comptime SB_WALLS_SCATTER = 3
+comptime SB_WALLS_KINDS = 4
+
+
+# Lay one of the named topologies into the task's start grid. `variant`
+# deterministically shifts gap/wall positions so each (kind, variant) pair is
+# a distinct world of the same family. Layouts deliberately create what the
+# open world lacks: mid-air support (shelves), corridors (columns), a
+# closable region (room), and irregular obstacles (scatter).
+def gen_walls_layout(task: SandboxTask, kind: Int, variant: Int):
+    if kind == SB_WALLS_SHELVES:
+        # Two horizontal shelves with gaps on alternating sides: blocks
+        # settle mid-air, the avatar zigzags between levels.
+        var gap_a = 2 + (variant % 5)
+        var gap_b = 9 + (variant * 3 % 5)
+        add_wall_rect(task, 5, 0, 5, gap_a - 1)
+        add_wall_rect(task, 5, gap_a + 2, 5, SB_COLS - 1)
+        add_wall_rect(task, 10, 0, 10, gap_b - 1)
+        add_wall_rect(task, 10, gap_b + 2, 10, SB_COLS - 1)
+    elif kind == SB_WALLS_COLUMNS:
+        # Three vertical dividers with door gaps at variant-shifted rows:
+        # corridors that force detours.
+        for k in range(3):
+            var col = 3 + 5 * k + (variant % 2)
+            var door = 2 + (variant + 4 * k) % 11
+            add_wall_rect(task, 0, col, door - 1, col)
+            add_wall_rect(task, door + 2, col, SB_ROWS - 1, col)
+    elif kind == SB_WALLS_ROOM:
+        # A closed rectangle around the avatar start with ONE door: a
+        # closable region — the empowerment differentiator.
+        var door = 4 + (variant % 8)
+        add_wall_rect(task, 4, 4, 4, 11)
+        add_wall_rect(task, 12, 4, 12, 11)
+        add_wall_rect(task, 4, 4, 12, 4)
+        add_wall_rect(task, 4, 11, door - 1, 11)
+        add_wall_rect(task, door + 2, 11, 12, 11)
+    else:  # SB_WALLS_SCATTER
+        # ~14 single wall cells from a tiny LCG stream seeded by variant:
+        # irregular moderate-density obstacles.
+        var s = Int64(variant * 2 + 1)
+        for _ in range(14):
+            s = s * 6364136223846793005 + 1442695040888963407
+            var h = Int((s >> 33) & 255)
+            var r = h % SB_ROWS
+            var c = (h // SB_ROWS) % SB_COLS
+            add_wall_rect(task, r, c, r, c)
+
+
+# ==========================================
 # World dynamics
 # ==========================================
-# One gravity pass: every non-zero cell whose neighbour in the gravity
-# direction is empty AND in-bounds moves one cell that way. The scan runs in
-# dependency order (destination side first), so a whole unsupported column
-# shifts exactly one cell per pass — blocks visibly "fall" one cell per tick
-# at grav_rate=1. The avatar is not a block: gravity never moves it.
+# One gravity pass: every movable block (cell > 0) whose neighbour in the
+# gravity direction is empty AND in-bounds moves one cell that way. The scan
+# runs in dependency order (destination side first), so a whole unsupported
+# column shifts exactly one cell per pass — blocks visibly "fall" one cell per
+# tick at grav_rate=1. The avatar is not a block: gravity never moves it.
+# Walls (< 0) are excluded as sources so they never fall; as destinations they
+# are non-empty, so blocks settle ON them — mid-air shelves hold.
 def _gravity_pass(grid: UnsafePointer[Float32, MutAnyOrigin], grav_dir: Int):
     if grav_dir == SB_GRAV_DOWN:
         for r in range(SB_ROWS - 2, -1, -1):
             for c in range(SB_COLS):
                 var i = r * SB_COLS + c
-                if grid[i] != 0.0 and grid[i + SB_COLS] == 0.0:
+                if grid[i] > 0.0 and grid[i + SB_COLS] == 0.0:
                     grid[i + SB_COLS] = grid[i]
                     grid[i] = 0.0
     elif grav_dir == SB_GRAV_UP:
         for r in range(1, SB_ROWS):
             for c in range(SB_COLS):
                 var i = r * SB_COLS + c
-                if grid[i] != 0.0 and grid[i - SB_COLS] == 0.0:
+                if grid[i] > 0.0 and grid[i - SB_COLS] == 0.0:
                     grid[i - SB_COLS] = grid[i]
                     grid[i] = 0.0
     elif grav_dir == SB_GRAV_LEFT:
         for c in range(1, SB_COLS):
             for r in range(SB_ROWS):
                 var i = r * SB_COLS + c
-                if grid[i] != 0.0 and grid[i - 1] == 0.0:
+                if grid[i] > 0.0 and grid[i - 1] == 0.0:
                     grid[i - 1] = grid[i]
                     grid[i] = 0.0
     else:  # SB_GRAV_RIGHT
         for c in range(SB_COLS - 2, -1, -1):
             for r in range(SB_ROWS):
                 var i = r * SB_COLS + c
-                if grid[i] != 0.0 and grid[i + 1] == 0.0:
+                if grid[i] > 0.0 and grid[i + 1] == 0.0:
                     grid[i + 1] = grid[i]
                     grid[i] = 0.0
 
 
-# One world tick: agent phase (move clamped at walls / paint / cycle brush),
-# then the dynamics phase (grav_rate gravity passes). Fully deterministic.
+# One world tick: agent phase (move clamped at board edges and blocked by
+# wall cells / paint, refused on wall cells / cycle brush), then the dynamics
+# phase (grav_rate gravity passes). Fully deterministic. The avatar coexists
+# with blocks (it can stand on and paint over them); only walls are solid.
 def sandbox_step(
     grid: UnsafePointer[Float32, MutAnyOrigin],
     mut r: Int,
@@ -165,19 +264,20 @@ def sandbox_step(
     action: Int,
 ):
     if action == 0:
-        if r > 0:
+        if r > 0 and grid[(r - 1) * SB_COLS + c] >= 0.0:
             r -= 1
     elif action == 1:
-        if r < SB_ROWS - 1:
+        if r < SB_ROWS - 1 and grid[(r + 1) * SB_COLS + c] >= 0.0:
             r += 1
     elif action == 2:
-        if c > 0:
+        if c > 0 and grid[r * SB_COLS + (c - 1)] >= 0.0:
             c -= 1
     elif action == 3:
-        if c < SB_COLS - 1:
+        if c < SB_COLS - 1 and grid[r * SB_COLS + (c + 1)] >= 0.0:
             c += 1
     elif action == 4:
-        grid[r * SB_COLS + c] = Float32(brush)
+        if grid[r * SB_COLS + c] >= 0.0:
+            grid[r * SB_COLS + c] = Float32(brush)
     else:  # cycle brush over 1..9 (never paints "empty")
         brush = brush % 9 + 1
 
@@ -248,6 +348,9 @@ def policy_argmax(logits: UnsafePointer[Float32, MutAnyOrigin]) -> Int:
 # ==========================================
 # Behaviour characterization + coverage cells
 # ==========================================
+# Occupancy counts only movable/painted content (> 0), never walls: the BC
+# measures what the agent's world DID, not its static topology — which keeps
+# goal BCs comparable across worlds (the T-POC-1 cross-world retrieval seam).
 def sandbox_bc(
     grid: UnsafePointer[Float32, MutAnyOrigin],
     r: Int,
@@ -259,7 +362,7 @@ def sandbox_bc(
             var count = 0
             for rr in range(br * BC_BLOCK, (br + 1) * BC_BLOCK):
                 for cc in range(bcol * BC_BLOCK, (bcol + 1) * BC_BLOCK):
-                    if grid[rr * SB_COLS + cc] != 0.0:
+                    if grid[rr * SB_COLS + cc] > 0.0:
                         count += 1
             bc[br * (SB_COLS // BC_BLOCK) + bcol] = Float32(count) / Float32(
                 BC_BLOCK * BC_BLOCK
@@ -270,6 +373,7 @@ def sandbox_bc(
 
 # Go-Explore-style cell key for one world state: 16 blocks x 2-bit clamped
 # occupancy level in the low 32 bits, avatar quadrant in bits 32..35.
+# Counts movable content only (> 0), like sandbox_bc — same rationale.
 def sandbox_cell_key(
     grid: UnsafePointer[Float32, MutAnyOrigin], r: Int, c: Int
 ) -> Int64:
@@ -280,7 +384,7 @@ def sandbox_cell_key(
             var count = 0
             for rr in range(br * BC_BLOCK, (br + 1) * BC_BLOCK):
                 for cc in range(bcol * BC_BLOCK, (bcol + 1) * BC_BLOCK):
-                    if grid[rr * SB_COLS + cc] != 0.0:
+                    if grid[rr * SB_COLS + cc] > 0.0:
                         count += 1
             var level = count
             if level > 3:
