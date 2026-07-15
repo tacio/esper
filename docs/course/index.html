@@ -1,0 +1,1659 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="description" content="An undergraduate-level course on Esper's theory, architecture, and open-ended learning ladder, with original diagrams throughout." />
+<title>Understanding Esper — a course</title>
+<style>
+  :root {
+    --bg: #F1F4F5;
+    --surface: #FFFFFF;
+    --surface-2: #E9EDEE;
+    --ink: #171B1D;
+    --muted: #56636A;
+    --faint: #8A969B;
+    --line: #CBD3D6;
+    --line-strong: #A9B4B8;
+    --slow: #2E5A87;
+    --slow-soft: #DCE6EE;
+    --slow-ink: #1E3E5F;
+    --fast: #B4711F;
+    --fast-soft: #F1E3CE;
+    --fast-ink: #7A4A10;
+    --accent-neg: #8C3B32;
+    --accent-neg-soft: #F1DFDB;
+    --radius: 3px;
+    --font-display: "Iowan Old Style", "Palatino Linotype", Palatino, "URW Palladio L", Georgia, serif;
+    --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    --content-w: 42rem;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14181A;
+      --surface: #1B2023;
+      --surface-2: #20272A;
+      --ink: #E7ECED;
+      --muted: #9AA6AB;
+      --faint: #6C787D;
+      --line: #313A3E;
+      --line-strong: #414D51;
+      --slow: #7FAAD4;
+      --slow-soft: #223546;
+      --slow-ink: #BFDAF2;
+      --fast: #E3A24E;
+      --fast-soft: #3B2F1C;
+      --fast-ink: #F2D6A6;
+      --accent-neg: #D98E85;
+      --accent-neg-soft: #3A2320;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #14181A; --surface: #1B2023; --surface-2: #20272A; --ink: #E7ECED;
+    --muted: #9AA6AB; --faint: #6C787D; --line: #313A3E; --line-strong: #414D51;
+    --slow: #7FAAD4; --slow-soft: #223546; --slow-ink: #BFDAF2;
+    --fast: #E3A24E; --fast-soft: #3B2F1C; --fast-ink: #F2D6A6;
+    --accent-neg: #D98E85; --accent-neg-soft: #3A2320;
+  }
+  :root[data-theme="light"] {
+    --bg: #F1F4F5; --surface: #FFFFFF; --surface-2: #E9EDEE; --ink: #171B1D;
+    --muted: #56636A; --faint: #8A969B; --line: #CBD3D6; --line-strong: #A9B4B8;
+    --slow: #2E5A87; --slow-soft: #DCE6EE; --slow-ink: #1E3E5F;
+    --fast: #B4711F; --fast-soft: #F1E3CE; --fast-ink: #7A4A10;
+    --accent-neg: #8C3B32; --accent-neg-soft: #F1DFDB;
+  }
+
+  * { box-sizing: border-box; }
+  html { color-scheme: light dark; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-body);
+    font-size: 1rem;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection { background: var(--fast-soft); color: var(--ink); }
+
+  a { color: var(--slow-ink); text-decoration-color: var(--line-strong); text-underline-offset: 2px; }
+  a:hover { text-decoration-color: currentColor; }
+  a:focus-visible, button:focus-visible, summary:focus-visible {
+    outline: 2px solid var(--fast); outline-offset: 2px;
+  }
+
+  h1, h2, h3, h4 { font-family: var(--font-display); font-weight: 600; text-wrap: balance; margin: 0; }
+  p { margin: 0 0 1rem; max-width: 68ch; }
+  p:last-child { margin-bottom: 0; }
+
+  code, .mono { font-family: var(--font-mono); }
+  code {
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 0.05em 0.35em;
+    font-size: 0.88em;
+    word-break: break-word;
+  }
+
+  /* ---------- layout shell ---------- */
+  .shell { display: grid; grid-template-columns: 272px 1fr; min-height: 100vh; }
+
+  .sidebar {
+    position: sticky; top: 0; height: 100vh; overflow-y: auto;
+    border-right: 1px solid var(--line);
+    background: var(--surface);
+    padding: 1.5rem 1.1rem 3rem;
+  }
+  .sidebar-title {
+    font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.09em;
+    text-transform: uppercase; color: var(--faint); margin-bottom: 1.1rem;
+  }
+  .sidebar-title strong { color: var(--ink); font-weight: 600; }
+  .toc-module { margin-bottom: 1.15rem; }
+  .toc-module-link {
+    display: block; font-family: var(--font-mono); font-size: 0.78rem; font-weight: 600;
+    letter-spacing: 0.03em; color: var(--ink); text-decoration: none; padding: 0.15rem 0;
+    border-left: 2px solid transparent; padding-left: 0.6rem; margin-left: -0.62rem;
+  }
+  .toc-module-link:hover { color: var(--slow-ink); }
+  .toc-module-link.active { border-left-color: var(--fast); color: var(--fast-ink); }
+  .toc-lessons { list-style: none; margin: 0.35rem 0 0; padding: 0 0 0 0.62rem; border-left: 1px solid var(--line); }
+  .toc-lessons li { margin: 0.05rem 0; }
+  .toc-lessons a {
+    display: block; font-size: 0.82rem; color: var(--muted); text-decoration: none;
+    padding: 0.2rem 0 0.2rem 0.55rem;
+  }
+  .toc-lessons a:hover { color: var(--ink); }
+  .toc-lessons a .loc { font-family: var(--font-mono); color: var(--faint); margin-right: 0.4em; font-size: 0.85em; }
+
+  .main { min-width: 0; }
+  .content { max-width: var(--content-w); margin: 0 auto; padding: 3.2rem 1.5rem 6rem; }
+
+  /* ---------- hero / module 0 ---------- */
+  .hero { padding-bottom: 2.5rem; margin-bottom: 2.5rem; border-bottom: 1px solid var(--line); }
+  .hero-eyebrow {
+    font-family: var(--font-mono); font-size: 0.75rem; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--fast-ink); display: flex; align-items: center; gap: 0.55rem; margin-bottom: 0.9rem;
+  }
+  .hero h1 { font-size: clamp(2.1rem, 5vw, 2.85rem); line-height: 1.08; margin-bottom: 0.85rem; }
+  .hero .dek { font-size: 1.15rem; color: var(--muted); max-width: 46ch; margin-bottom: 1.4rem; }
+  .hero-icon { flex-shrink: 0; }
+
+  /* ---------- module bands ---------- */
+  .module { margin-bottom: 3.4rem; }
+  .module-band { display: flex; align-items: baseline; gap: 0.85rem; margin-bottom: 0.5rem; }
+  .module-num {
+    font-family: var(--font-mono); font-size: 0.95rem; color: var(--faint);
+    border: 1px solid var(--line-strong); border-radius: var(--radius);
+    padding: 0.08rem 0.45rem;
+  }
+  .module h2 { font-size: 1.7rem; }
+  .module-dek { color: var(--muted); font-size: 1.02rem; margin: 0.5rem 0 2rem; max-width: 58ch; }
+  .module-rule { height: 1px; background: linear-gradient(to right, var(--line-strong), transparent 70%); margin-bottom: 2rem; }
+
+  /* ---------- lessons ---------- */
+  .lesson { padding: 1.7rem 0; border-top: 1px solid var(--line); }
+  .module > .lesson:first-of-type { border-top: none; padding-top: 0; }
+  .lesson-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0.6rem 0.7rem; margin-bottom: 0.7rem; }
+  .lesson-loc { font-family: var(--font-mono); font-size: 0.85rem; color: var(--faint); }
+  .lesson h3 { font-size: 1.22rem; display: inline; }
+  .tags { display: flex; gap: 0.4rem; margin-left: auto; flex-wrap: wrap; }
+
+  .tag {
+    font-family: var(--font-mono); font-size: 0.66rem; letter-spacing: 0.06em; text-transform: uppercase;
+    padding: 0.12rem 0.42rem; border-radius: var(--radius); white-space: nowrap; font-weight: 600;
+  }
+  .tag-slow { background: var(--slow-soft); color: var(--slow-ink); }
+  .tag-fast { background: var(--fast-soft); color: var(--fast-ink); }
+  .tag-neutral { background: var(--surface-2); color: var(--muted); border: 1px solid var(--line); }
+
+  .lesson-body :is(ul, ol) { margin: 0 0 1rem; padding-left: 1.3rem; max-width: 66ch; }
+  .lesson-body li { margin-bottom: 0.4rem; }
+  dfn { font-style: normal; font-weight: 600; color: var(--ink); border-bottom: 1px dotted var(--faint); }
+
+  /* ---------- callouts ---------- */
+  .callout {
+    border: 1px solid var(--line); border-left: 3px solid var(--line-strong);
+    border-radius: var(--radius); background: var(--surface); padding: 0.95rem 1.1rem;
+    margin: 1.1rem 0; max-width: 66ch;
+  }
+  .callout-label {
+    font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.1em; text-transform: uppercase;
+    font-weight: 700; display: block; margin-bottom: 0.45rem;
+  }
+  .callout p { margin-bottom: 0.4rem; font-size: 0.95rem; }
+  .callout p:last-child { margin-bottom: 0; }
+  .callout-def { border-left-color: var(--slow); }
+  .callout-def .callout-label { color: var(--slow-ink); }
+  .callout-measured { border-left-color: var(--fast); }
+  .callout-measured .callout-label { color: var(--fast-ink); }
+  .callout-neg { border-left-color: var(--accent-neg); background: var(--accent-neg-soft); }
+  .callout-neg .callout-label { color: var(--accent-neg); }
+
+  .stat-row { display: flex; gap: 1.6rem; flex-wrap: wrap; margin-top: 0.3rem; }
+  .stat { font-family: var(--font-mono); }
+  .stat .n { font-size: 1.3rem; font-weight: 700; font-variant-numeric: tabular-nums; display: block; }
+  .stat .l { font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+
+  /* ---------- diagram frames ---------- */
+  .diagram {
+    margin: 1.3rem 0 0.6rem; border: 1px solid var(--line); border-radius: var(--radius);
+    background-color: var(--surface);
+    background-image:
+      linear-gradient(var(--line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--line) 1px, transparent 1px);
+    background-size: 22px 22px;
+    background-position: -1px -1px;
+    background-blend-mode: normal;
+    padding: 1.1rem 1rem 0.9rem;
+    overflow-x: auto;
+  }
+  .diagram-inner { min-width: 260px; }
+  .diagram svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+  .diagram pre.mermaid { margin: 0; background: transparent; }
+  .fig-caption {
+    font-family: var(--font-mono); font-size: 0.72rem; color: var(--muted);
+    text-align: center; margin-top: 0.55rem; letter-spacing: 0.01em;
+  }
+
+  /* ---------- tables ---------- */
+  .table-wrap { overflow-x: auto; margin: 1.1rem 0; }
+  table { border-collapse: collapse; width: 100%; min-width: 480px; font-size: 0.92rem; }
+  th, td { text-align: left; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  thead th {
+    font-family: var(--font-mono); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--muted); border-bottom: 1px solid var(--line-strong);
+  }
+  tbody tr:hover { background: var(--surface-2); }
+
+  /* ---------- glossary ---------- */
+  .glossary dt { font-family: var(--font-mono); font-weight: 700; margin-top: 0.9rem; }
+  .glossary dd { margin: 0.15rem 0 0; color: var(--muted); max-width: 60ch; }
+
+  .values-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 1rem; }
+  .values-list li { display: grid; grid-template-columns: 1.6rem 1fr; gap: 0.75rem; }
+  .values-list .vn { font-family: var(--font-mono); color: var(--fast-ink); font-weight: 700; }
+
+  footer.colophon {
+    margin-top: 3.5rem; padding-top: 1.6rem; border-top: 1px solid var(--line);
+    font-size: 0.85rem; color: var(--muted);
+  }
+  footer.colophon ul { padding-left: 1.2rem; }
+  footer.colophon li { margin-bottom: 0.3rem; }
+
+  /* ---------- mobile ---------- */
+  @media (max-width: 860px) {
+    .shell { display: block; }
+    .sidebar {
+      position: sticky; top: 0; height: auto; max-height: none; overflow: visible;
+      display: flex; gap: 1rem; align-items: center; padding: 0.7rem 1rem;
+      z-index: 5; overflow-x: auto; white-space: nowrap;
+    }
+    .sidebar-title { margin: 0; flex-shrink: 0; }
+    .toc-module { margin-bottom: 0; flex-shrink: 0; }
+    .toc-lessons { display: none; }
+    .content { padding: 2.2rem 1.2rem 4rem; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    html { scroll-behavior: smooth; }
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+  <nav class="sidebar" aria-label="Course contents">
+    <div class="sidebar-title"><strong>Understanding Esper</strong> · a course</div>
+
+    <div class="toc-module">
+      <a class="toc-module-link" href="#m0" data-mod="m0">Start here</a>
+    </div>
+
+    <div class="toc-module">
+      <a class="toc-module-link" href="#m1" data-mod="m1">1 · Learning as memory</a>
+      <ul class="toc-lessons">
+        <li><a href="#l1-1"><span class="loc">1.1</span>The one atom</a></li>
+        <li><a href="#l1-2"><span class="loc">1.2</span>Nested systems</a></li>
+        <li><a href="#l1-3"><span class="loc">1.3</span>Optimizers as memory</a></li>
+        <li><a href="#l1-4"><span class="loc">1.4</span>Continuum memory</a></li>
+        <li><a href="#l1-5"><span class="loc">1.5</span>Self-modifying + HOPE</a></li>
+        <li><a href="#l1-6"><span class="loc">1.6</span>Revisited terms</a></li>
+      </ul>
+    </div>
+
+    <div class="toc-module">
+      <a class="toc-module-link" href="#m2" data-mod="m2">2 · Evolution strategies</a>
+      <ul class="toc-lessons">
+        <li><a href="#l2-1"><span class="loc">2.1</span>No backprop, by rule</a></li>
+        <li><a href="#l2-2"><span class="loc">2.2</span>Antithetic sampling</a></li>
+        <li><a href="#l2-3"><span class="loc">2.3</span>Anneal: wide then sharp</a></li>
+        <li><a href="#l2-4"><span class="loc">2.4</span>Two timescales, meta-learned</a></li>
+      </ul>
+    </div>
+
+    <div class="toc-module">
+      <a class="toc-module-link" href="#m3" data-mod="m3">3 · Core architecture</a>
+      <ul class="toc-lessons">
+        <li><a href="#l3-1"><span class="loc">3.1</span>The arena</a></li>
+        <li><a href="#l3-2"><span class="loc">3.2</span>fast / slow, mapped</a></li>
+        <li><a href="#l3-3"><span class="loc">3.3</span>Domain & Memory</a></li>
+        <li><a href="#l3-4"><span class="loc">3.4</span>The first operator</a></li>
+        <li><a href="#l3-5"><span class="loc">3.5</span>The uncheatable metric</a></li>
+      </ul>
+    </div>
+
+    <div class="toc-module">
+      <a class="toc-module-link" href="#m4" data-mod="m4">4 · The memory zoo</a>
+      <ul class="toc-lessons">
+        <li><a href="#l4-1"><span class="loc">4.1</span>MLP: first emergence</a></li>
+        <li><a href="#l4-2"><span class="loc">4.2</span>Attention gather</a></li>
+        <li><a href="#l4-3"><span class="loc">4.3</span>The composition pattern</a></li>
+        <li><a href="#l4-4"><span class="loc">4.4</span>Self-modifying memories</a></li>
+        <li><a href="#l4-5"><span class="loc">4.5</span>2-D grid self-mod</a></li>
+        <li><a href="#l4-6"><span class="loc">4.6</span>Shape as content</a></li>
+        <li><a href="#l4-7"><span class="loc">4.7</span>Content-addressed memory</a></li>
+        <li><a href="#l4-8"><span class="loc">4.8</span>Honest scorecard</a></li>
+      </ul>
+    </div>
+
+    <div class="toc-module">
+      <a class="toc-module-link" href="#m5" data-mod="m5">5 · Open-ended mastery</a>
+      <ul class="toc-lessons">
+        <li><a href="#l5-1"><span class="loc">5.1</span>The last hand-out</a></li>
+        <li><a href="#l5-2"><span class="loc">5.2</span>A reward-free world</a></li>
+        <li><a href="#l5-3"><span class="loc">5.3</span>Novelty search</a></li>
+        <li><a href="#l5-4"><span class="loc">5.4</span>MAP-Elites repertoires</a></li>
+        <li><a href="#l5-5"><span class="loc">5.5</span>Empowerment</a></li>
+        <li><a href="#l5-6"><span class="loc">5.6</span>World model + LP</a></li>
+        <li><a href="#l5-7"><span class="loc">5.7</span>Convergence, tested</a></li>
+        <li><a href="#l5-8"><span class="loc">5.8</span>ACCEL curriculum</a></li>
+      </ul>
+    </div>
+
+    <div class="toc-module">
+      <a class="toc-module-link" href="#m6" data-mod="m6">6 · Cross-world transfer</a>
+      <ul class="toc-lessons">
+        <li><a href="#l6-1"><span class="loc">6.1</span>The pivot</a></li>
+        <li><a href="#l6-2"><span class="loc">6.2</span>Walls: world 2</a></li>
+        <li><a href="#l6-3"><span class="loc">6.3</span>What carries</a></li>
+        <li><a href="#l6-4"><span class="loc">6.4</span>What's next</a></li>
+      </ul>
+    </div>
+
+    <div class="toc-module">
+      <a class="toc-module-link" href="#m7" data-mod="m7">7 · Wrap-up</a>
+      <ul class="toc-lessons">
+        <li><a href="#l7-1"><span class="loc">7.1</span>The six values</a></li>
+        <li><a href="#l7-2"><span class="loc">7.2</span>Glossary</a></li>
+        <li><a href="#l7-3"><span class="loc">7.3</span>Where to go deeper</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <main class="main">
+    <div class="content">
+
+      <!-- ============ MODULE 0 ============ -->
+      <section id="m0" class="hero">
+        <div class="hero-eyebrow">
+          <svg class="hero-icon" width="26" height="26" viewBox="0 0 26 26" fill="none" aria-hidden="true">
+            <rect x="1" y="1" width="24" height="24" rx="2" stroke="var(--fast)" stroke-width="1.4"/>
+            <rect x="5" y="5" width="16" height="16" rx="1.5" stroke="var(--slow)" stroke-width="1.4"/>
+            <rect x="9" y="9" width="8" height="8" rx="1" fill="var(--fast)"/>
+          </svg>
+          A course · undergraduate level · 7 modules
+        </div>
+        <h1>Understanding Esper</h1>
+        <p class="dek">
+          Esper is a bare-metal reasoning engine that learns the way a living system adapts:
+          no backpropagation, no hand-installed rules, two clocks running at once — one that
+          adapts in seconds to what's in front of it, one that changes slowly across everything
+          it has ever seen. This course builds that idea up from a single equation to the
+          engine's current research frontier, one short lesson at a time.
+        </p>
+        <p style="color:var(--muted); font-size:0.92rem;">
+          Each lesson is numbered <code>module.lesson</code> and assumes only what came before it —
+          skim the sidebar to jump around, or read straight through. Colored tags mark ideas that
+          belong to Esper's two timescales:
+          <span class="tag tag-slow" style="margin:0 0.3em;">slow</span>
+          persistent, meta-learned, changes rarely, and
+          <span class="tag tag-fast" style="margin:0 0.3em;">fast</span>
+          in-context, adapted per problem, changes constantly. That duality is the spine of
+          everything below.
+        </p>
+      </section>
+
+      <!-- ============ MODULE 1 ============ -->
+      <section id="m1" class="module">
+        <div class="module-band">
+          <span class="module-num">01</span>
+          <h2>Learning as memory</h2>
+        </div>
+        <p class="module-dek">
+          Esper's architecture is a direct application of a 2025 theory paper, <em>Nested
+          Learning: The Illusion of Deep Learning Architecture</em> (Behrouz, Razaviyayn, Zhong,
+          Mirrokni — Google Research). Its central claim: a deep model isn't one architecture
+          trained by one optimizer — it's a stack of optimization problems running at different
+          speeds. This module distills that theory before any of it touches code.
+        </p>
+        <div class="module-rule"></div>
+
+        <div class="lesson" id="l1-1">
+          <div class="lesson-head">
+            <span class="lesson-loc">1.1</span>
+            <h3>The one atom: associative memory</h3>
+          </div>
+          <div class="lesson-body">
+            <p>
+              Everything in this theory reduces to one operator. An <dfn>associative memory</dfn>
+              <code>M</code> maps a set of keys <code>K</code> to values <code>V</code>, found by
+              minimizing how badly it maps one onto the other:
+              <code>M* = argmin_M L̂(M(K); V)</code>. Keys and values don't have to be
+              tokens — they can be gradients, sub-sequences, error signals, anything with a
+              measurable mapping quality.
+            </p>
+            <div class="callout callout-def">
+              <span class="callout-label">Definition</span>
+              <p>"Memory is a neural update caused by an input; learning is the process of
+              acquiring effective memory." — Behrouz et al., §3.1</p>
+            </div>
+            <p>
+              <dfn>Memorization</dfn> is forming any mapping. <dfn>Learning</dfn> is forming one
+              that generalizes. That distinction — memorizing versus learning an effective
+              mapping — is the exact line Esper draws between fitting a task's examples and
+              solving the held-out one (Module 3.5).
+            </p>
+          </div>
+        </div>
+
+        <div class="lesson" id="l1-2">
+          <div class="lesson-head">
+            <span class="lesson-loc">1.2</span>
+            <h3>Nested systems</h3>
+          </div>
+          <div class="lesson-body">
+            <p>
+              A <dfn>nested system</dfn> is an ordered stack of levels, each one an optimization
+              problem minimizing its own objective over its own parameters and its own slice of
+              context. The ordering isn't depth in the usual sense — it's <strong>update
+              frequency</strong>. A higher level updates less often than the one below it.
+            </p>
+            <p>
+              When every level in the stack happens to be an associative memory (1.1), the paper
+              calls the whole thing an <dfn>NSAM</dfn> — a nested system of associative memories.
+              Its claim is that modern architectures, plus the optimizers that train them, are
+              already instances of this pattern; they just don't advertise it as one.
+            </p>
+            <div class="diagram">
+              <div class="diagram-inner">
+<pre class="mermaid">
+graph TD
+  A["Level 1 — highest frequency<br/>within-sequence attention"] --> B["Level 2<br/>momentum / optimizer state"]
+  B --> C["Level 3<br/>within-task weight updates"]
+  C --> D["Level K — lowest frequency<br/>pretraining, whole dataset as context"]
+  D -. "knowledge transfer: init · backprop · weight generation" .-> A
+</pre>
+              </div>
+              <div class="fig-caption">Fig 1.2 — a nested system, ordered by update frequency, not layer depth</div>
+            </div>
+            <p>
+              Two design choices define any one module in this frame: <strong>(1)</strong> what
+              optimization problems it runs and at what frequencies, and <strong>(2)</strong> how
+              knowledge moves between its levels — directly, by backprop, by meta-learned
+              initialization, or by generating one level's weights from another.
+            </p>
+          </div>
+        </div>
+
+        <div class="lesson" id="l1-3">
+          <div class="lesson-head">
+            <span class="lesson-loc">1.3</span>
+            <h3>Optimizers are themselves memories</h3>
+          </div>
+          <div class="lesson-body">
+            <p>
+              This is the paper's sharpest reframe. Training a network by backprop is a
+              <em>compression</em> process — each layer is an associative memory mapping its
+              input to its local error signal. And the momentum term in SGD isn't a bookkeeping
+              trick; it's an associative memory that compresses <em>past gradients</em> into its
+              own state. Gradient descent with momentum is already a 2-level nested system: the
+              inner level learns momentum, the outer level uses it. Adam, RMSProp, AdaGrad,
+              Shampoo are all instances of the same pattern with a richer inner memory.
+            </p>
+            <p>
+              Standard momentum is a weak low-pass filter — at β = 0.9, the last ~43 gradients
+              hold over 99% of the weight — which is why it forgets the gradient subspace of an
+              earlier, orthogonal task. Every mitigation for catastrophic forgetting later in
+              this course is, underneath, a fix to this same forgetting mechanism.
+            </p>
+          </div>
+        </div>
+
+        <div class="lesson" id="l1-4">
+          <div class="lesson-head">
+            <span class="lesson-loc">1.4</span>
+            <h3>The Continuum Memory System</h3>
+            <span class="tags"><span class="tag tag-neutral">north star</span></span>
+          </div>
+          <div class="lesson-body">
+            <p>
+              Drop the binary of "short-term vs. long-term memory." Replace it with a
+              <dfn>Continuum Memory System</dfn> (CMS): a chain of memory blocks, each updated at
+              its own frequency <code>C^(ℓ)</code>. High-frequency blocks behave like short-term,
+              fast adaptation; low-frequency blocks behave like persistent, slowly-won knowledge.
+              A Transformer's MLP block is just the special case of one block, one frequency.
+            </p>
+            <div class="diagram">
+              <div class="diagram-inner">
+                <svg viewBox="0 0 560 150" role="img" aria-label="frequency spectrum of CMS blocks">
+                  <defs>
+                    <linearGradient id="freqGrad" x1="0" y1="0" x2="1" y2="0">
+                      <stop offset="0%" stop-color="var(--fast)"/>
+                      <stop offset="100%" stop-color="var(--slow)"/>
+                    </linearGradient>
+                  </defs>
+                  <line x1="30" y1="120" x2="530" y2="120" stroke="var(--line-strong)" stroke-width="1.5"/>
+                  <rect x="30" y="118" width="500" height="4" fill="url(#freqGrad)" opacity="0.35"/>
+                  <text x="30" y="140" font-family="var(--font-mono)" font-size="11" fill="var(--fast-ink)">fast · high frequency</text>
+                  <text x="530" y="140" text-anchor="end" font-family="var(--font-mono)" font-size="11" fill="var(--slow-ink)">slow · low frequency</text>
+                  <g font-family="var(--font-mono)" font-size="11" fill="var(--ink)">
+                    <rect x="55" y="70" width="26" height="48" rx="2" fill="var(--fast-soft)" stroke="var(--fast)"/>
+                    <text x="68" y="65" text-anchor="middle">C¹</text>
+                    <rect x="140" y="55" width="26" height="63" rx="2" fill="var(--fast-soft)" stroke="var(--fast)" opacity="0.85"/>
+                    <text x="153" y="50" text-anchor="middle">C²</text>
+                    <rect x="260" y="40" width="26" height="78" rx="2" fill="var(--surface-2)" stroke="var(--line-strong)"/>
+                    <text x="273" y="35" text-anchor="middle">C³</text>
+                    <rect x="380" y="25" width="26" height="93" rx="2" fill="var(--slow-soft)" stroke="var(--slow)" opacity="0.85"/>
+                    <text x="393" y="20" text-anchor="middle">C⁴</text>
+                    <rect x="465" y="12" width="26" height="106" rx="2" fill="var(--slow-soft)" stroke="var(--slow)"/>
+                    <text x="478" y="7" text-anchor="middle">C⁵</text>
+                  </g>
+                </svg>
+              </div>
+              <div class="fig-caption">Fig 1.4 — CMS as a spectrum of blocks, not a two-tier cache</div>
+            </div>
+            <p>
+              The payoff is resistance to forgetting: when one block gets overwritten by new
+              context, older knowledge still lives undisturbed in the other-frequency blocks, and
+              can be recovered through cross-level transfer. Blocks only compute on their own
+              schedule, so updates stay cheap and parallelizable.
+            </p>
+          </div>
+        </div>
+
+        <div class="lesson" id="l1-5">
+          <div class="lesson-head">
+            <span class="lesson-loc">1.5</span>
+            <h3>Self-modifying memory, and HOPE</h3>
+          </div>
+          <div class="lesson-body">
+            <p>
+              A standard Transformer's key/query/value projections are fixed after training —
+              whatever contextualization happens, it's bounded by that first, frozen level. A
+              <dfn>self-modifying memory</dfn> breaks that: it generates its <em>own</em> keys,
+              values, learning rate <code>η</code>, and retention gate <code>α</code>, per input,
+              and optimizes itself against an internal objective. It is, in a real sense,
+              controlling its own learning process.
+            </p>
+            <div class="callout callout-def">
+              <span class="callout-label">HOPE</span>
+              <p>Self-modifying Titans <strong>followed by</strong> a CMS chain (1.4): a small,
+              richly-adaptive block handles fast, in-context change; a multi-frequency stack
+              behind it holds persistent knowledge. Small capacity + rich rule, feeding large
+              capacity + simple rule.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="lesson" id="l1-6">
+          <div class="lesson-head">
+            <span class="lesson-loc">1.6</span>
+            <h3>Terms this reframes</h3>
+          </div>
+          <div class="lesson-body">
+            <ul>
+              <li><strong>In-context learning</strong> isn't an emergent surprise — it's the
+              direct consequence of having multiple frequency levels at all. Any level adapting
+              to its context is doing ICL, by definition.</li>
+              <li><strong>Pre-training</strong> is just the lowest-frequency level: ICL where the
+              context happens to be the entire dataset.</li>
+              <li><strong>Test-time training</strong> is parametric in-context learning whose
+              acquired knowledge vanishes the moment the context is removed.</li>
+              <li>There is <strong>no train/test boundary</strong> inside a neural learning
+              module — only two states: receiving input, or sitting isolated.</li>
+            </ul>
+            <p>
+              One more consequence worth carrying forward: momentum state, optimizer state, RNN
+              hidden state — these are all knowledge stores too, not just the weights that
+              backprop touches. Module 3 will make the same move for Esper: its "parameters"
+              include a fast-changing part and a slow-changing part, and both are learned.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ MODULE 2 ============ -->
+      <section id="m2" class="module">
+        <div class="module-band">
+          <span class="module-num">02</span>
+          <h2>Evolution strategies</h2>
+        </div>
+        <p class="module-dek">
+          Nested Learning describes optimizers as memories in the abstract. Esper needs an actual
+          one — and it can't be backprop. This module covers the mechanism that fits every memory
+          in the rest of the course: a derivative-free Evolution Strategy (ES).
+        </p>
+        <div class="module-rule"></div>
+
+        <div class="lesson" id="l2-1">
+          <div class="lesson-head">
+            <span class="lesson-loc">2.1</span>
+            <h3>Why not backprop</h3>
+          </div>
+          <div class="lesson-body">
+            <p>
+              Esper is built under a hard constraint: zero external ML libraries, and no autodiff
+              framework in the runtime path. That's not an implementation detail, it's a
+              methodological stance — nothing about <em>how the engine learns</em> should be
+              inherited from a framework unexamined. So gradients aren't computed by
+              backpropagating through a computation graph; they're <em>estimated</em> by
+              perturbing parameters and observing how a scalar fitness responds.
+            </p>
+          </div>
+        </div>
+
+        <div class="lesson" id="l2-2">
+          <div class="lesson-head">
+            <span class="lesson-loc">2.2</span>
+            <h3>Antithetic sampling</h3>
+          </div>
+          <div class="lesson-body">
+            <p>
+              One ES step: draw real Gaussian noise <code>ε</code>, evaluate the fitness function
+              <code>F</code> at two mirrored points, <code>w + σε</code> and <code>w − σε</code>,
+              and combine the two scores into a gradient estimate. Because the pair is symmetric
+              around <code>w</code>, the noise on either side cancels in expectation and what's
+              left points toward the direction that actually improved fitness.
+            </p>
+            <div class="diagram">
+              <div class="diagram-inner">
+                <svg viewBox="0 0 560 190" role="img" aria-label="antithetic sampling on a fitness landscape">
+                  <path d="M 30 150 C 120 40, 220 170, 300 90 S 460 30, 530 110" fill="none" stroke="var(--line-strong)" stroke-width="2"/>
+                  <line x1="240" y1="0" x2="240" y2="190" stroke="var(--line)" stroke-dasharray="3 4"/>
+                  <circle cx="240" cy="127" r="4.5" fill="var(--ink)"/>
+                  <text x="248" y="122" font-family="var(--font-mono)" font-size="11" fill="var(--ink)">w</text>
+                  <line x1="175" y1="0" x2="175" y2="190" stroke="var(--fast)" stroke-dasharray="3 4" opacity="0.6"/>
+                  <circle cx="175" cy="72" r="4.5" fill="var(--fast)"/>
+                  <text x="150" y="60" font-family="var(--font-mono)" font-size="11" fill="var(--fast-ink)">w − σε</text>
+                  <line x1="305" y1="0" x2="305" y2="190" stroke="var(--slow)" stroke-dasharray="3 4" opacity="0.6"/>
+                  <circle cx="305" cy="88" r="4.5" fill="var(--slow)"/>
+                  <text x="313" y="80" font-family="var(--font-mono)" font-size="11" fill="var(--slow-ink)">w + σε</text>
+                  <text x="30" y="20" font-family="var(--font-mono)" font-size="11" fill="var(--muted)">F(w) — fitness</text>
+                </svg>
+              </div>
+              <div class="fig-caption">Fig 2.2 — a mirrored pair straddling the current parameter, on a 1-D slice of fitness</div>
+            </div>
+            <div class="diagram">
+              <div class="diagram-inner">
+<pre class="mermaid">
+graph LR
+  N["draw noise ε ~ N(0,1)"] --> P["w + σ·scale·ε"]
+  N --> Q["w − σ·scale·ε"]
+  P --> FP["F(w+σε)"]
+  Q --> FM["F(w−σε)"]
+  FP --> G["grad += (F+ − F−) · ε"]
+  FM --> G
+  G --> U["w += (α / 2Nσ) · scale · grad"]
+</pre>
+              </div>
+              <div class="fig-caption">Fig 2.2b — one antithetic ES iteration, averaged over N pairs</div>
+            </div>
+            <p>
+              <code>scale</code> is a per-parameter preconditioner — different parameter groups
+              (say, geometry versus colour) can need different step sizes, so one shared
+              <code>σ</code> gets rescaled per group rather than forcing a single compromise.
+            </p>
+          </div>
+        </div>
+
+        <div class="lesson" id="l2-3">
+          <div class="lesson-head">
+            <span class="lesson-loc">2.3</span>
+            <h3>Anneal: explore wide, then settle sharp</h3>
+          </div>
+          <div class="lesson-body">
+            <p>
+              A single fixed <code>σ</code> can't do both jobs a fit needs. Early on, the search
+              needs to be wide enough to discover a qualitatively different region of parameter
+              space (a large layout change like a transpose). Late in the fit, it needs to be
+              narrow enough to settle onto an exact value without noise pushing it back off. Esper
+              anneals both <code>σ</code> and the step size <code>α</code> across the fit — wide
+              and fast at the start, small and cautious by the end — over a few thousand
+              iterations.
+            </p>
+            <div class="diagram">
+              <div class="diagram-inner">
+                <svg viewBox="0 0 500 130" role="img" aria-label="sigma decay curve">
+                  <path d="M 40 20 C 120 40, 180 90, 460 108" fill="none" stroke="var(--fast)" stroke-width="2.5"/>
+                  <line x1="40" y1="115" x2="460" y2="115" stroke="var(--line-strong)"/>
+                  <line x1="40" y1="10" x2="40" y2="115" stroke="var(--line-strong)"/>
+                  <text x="40" y="128" font-family="var(--font-mono)" font-size="10" fill="var(--muted)">iter 0</text>
+                  <text x="460" y="128" text-anchor="end" font-family="var(--font-mono)" font-size="10" fill="var(--muted)">iter ~4000</text>
+                  <text x="10" y="24" font-family="var(--font-mono)" font-size="10" fill="var(--fast-ink)">σ=0.5</text>
+                  <text x="10" y="115" font-family="var(--font-mono)" font-size="10" fill="var(--fast-ink)">σ=0.01</text>
+                </svg>
+              </div>
+              <div class="fig-caption">Fig 2.3 — the annealed sigma schedule: explore, then settle onto exact values</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="lesson" id="l2-4">
+          <div class="lesson-head">
+            <span class="lesson-loc">2.4</span>
+            <h3>Two timescales, and the slow one is meta-learned</h3>
+            <span class="tags"><span class="tag tag-slow">slow</span><span class="tag tag-fast">fast</span></span>
+          </div>
+          <div class="lesson-body">
+            <p>
+              Here the ES core stops being single-task. An outer, low-frequency loop — a Reptile
+              meta-loop — runs across <em>many</em> tasks: for each one, it fits <code>fast</code>
+              in-context starting from the current <code>slow</code>, then nudges
+              <code>slow</code> a small step toward wherever <code>fast</code> ended up:
+              <code>slow += META_LR · (fast − slow)</code>.
+            </p>
+            <div class="diagram">
+              <div class="diagram-inner">
+<pre class="mermaid">
+graph TD
+  S["slow — the prior<br/>(persists across tasks)"] -->|"fit_operator, anchored to slow"| F["fast — per-task fit<br/>(in-context, from demos)"]
+  F -->|"reptile: slow += META_LR·(fast − slow)"| S
+</pre>
+              </div>
+              <div class="fig-caption">Fig 2.4 — the outer Reptile loop turning a fixed prior into a meta-learned one</div>
+            </div>
+            <p>
+              This is the Nested-Learning idea from 1.2, made concrete: two optimization problems
+              at two frequencies, with knowledge transferred between them by initialization —
+              exactly the MAML-style transfer the paper names. A fresh, in-family task can now be
+              fit at a narrow, cheap budget where a cold (identity) prior simply fails: warm start
+              plus a cheap local fit beats cold start plus a wide search, but only because the
+              prior has already absorbed the family's shape.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ MODULE 3 ============ -->
+      <section id="m3" class="module">
+        <div class="module-band">
+          <span class="module-num">03</span>
+          <h2>Esper's core architecture</h2>
+        </div>
+        <p class="module-dek">
+          With the theory (Module 1) and the optimizer (Module 2) in hand, this module opens the
+          engine itself: how it stores a task, what its two weight sets actually are, and the
+          seam that lets new memory types be added without touching the learning core.
+        </p>
+        <div class="module-rule"></div>
+
+        <div class="lesson" id="l3-1">
+          <div class="lesson-head">
+            <span class="lesson-loc">3.1</span>
+            <h3>The arena: memory with no allocator in the hot loop</h3>
+          </div>
+          <div class="lesson-body">
+            <p>
+              Esper is pure Mojo, bare metal, no dynamic allocation inside a hot loop. Its arena
+              (<code>HopeArena</code>) is a move-only bump-pointer allocator: a contiguous block
+              of memory where allocation is "wherever the pointer currently is," and the pointer
+              only ever moves forward. Nodes placed into it (<code>HopeNode</code>) are kept
+              strictly POD — raw pointers and integers, no owning members — specifically so they
+              can be moved into bump-allocated memory without a per-node heap allocation.
+            </p>
+            <div class="diagram">
+              <div class="diagram-inner">
+                <svg viewBox="0 0 560 120" role="img" aria-label="bump allocator arena layout">
+                  <rect x="20" y="30" width="520" height="46" fill="var(--surface-2)" stroke="var(--line-strong)" rx="2"/>
+                  <rect x="20" y="30" width="120" height="46" fill="var(--slow-soft)" stroke="var(--slow)" rx="2"/>
+                  <text x="80" y="58" text-anchor="middle" font-family="var(--font-mono)" font-size="11" fill="var(--slow-ink)">HopeNode A</text>
+                  <rect x="140" y="30" width="150" height="46" fill="var(--fast-soft)" stroke="var(--fast)" rx="2"/>
+                  <text x="215" y="58" text-anchor="middle" font-family="var(--font-mono)" font-size="11" fill="var(--fast-ink)">HopeNode B</text>
+                  <rect x="290" y="30" width="95" height="46" fill="var(--slow-soft)" stroke="var(--slow)" rx="2"/>
+                  <text x="337" y="58" text-anchor="middle" font-family="var(--font-mono)" font-size="11" fill="var(--slow-ink)">HopeNode C</text>
+                  <line x1="385" y1="20" x2="385" y2="86" stroke="var(--ink)" stroke-width="2"/>
+                  <polygon points="385,14 379,24 391,24" fill="var(--ink)"/>
+                  <text x="385" y="12" text-anchor="middle" font-family="var(--font-mono)" font-size="10" fill="var(--ink)">bump pointer</text>
+                  <text x="465" y="58" text-anchor="middle" font-family="var(--font-mono)" font-size="11" fill="var(--faint)">unused</text>
+                </svg>
+              </div>
+              <div class="fig-caption">Fig 3.1 — the arena: allocation is a pointer bump, never a free list</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="lesson" id="l3-2">
+          <div class="lesson-head">
+            <span class="lesson-loc">3.2</span>
+            <h3>fast and slow, mapped onto HOPE</h3>
+            <span class="tags"><span class="tag tag-slow">slow</span><span class="tag tag-fast">fast</span></span>
+          </div>
+          <div class="lesson-body">
+            <p>
+              Every <code>HopeNode</code> carries two weight slices: <code>slow</code> and
+              <code>fast</code>. This is Module 1's two-timescale idea, given a name in code.
+              <code>fast</code> is fit fresh in-context on one task's demonstration pairs;
+              <code>slow</code> is the meta-learned prior it's anchored to, updated only by the
+              outer Reptile loop (2.4) across many tasks.
+            </p>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Paper concept</th><th>Esper realization</th></tr></thead>
+                <tbody>
+                  <tr><td>Slow (low-frequency) level = meta-learned prior / init</td><td><code>HopeNode.slow</code> + the L2 anchor inside <code>fitness</code></td></tr>
+                  <tr><td>Fast (high-frequency) memory adapted in-context</td><td><code>HopeNode.fast</code>, fit per-task</td></tr>
+                  <tr><td>Optimizer as a derivative-free learning rule</td><td>antithetic-sampling ES (<code>evolve_fast_weights</code>)</td></tr>
+                  <tr><td>"Learning is acquiring effective memory"</td><td>the engine must learn the grid→grid transform — never be handed a DSL</td></tr>
+                  <tr><td>Continuum Memory System</td><td>north star: a multi-frequency memory stack (persistent slow weights, Module 6.4)</td></tr>
+                  <tr><td>Self-modifying memory</td><td>the fully-emergent end state once "training wheels" come off (Module 4.4)</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div class="lesson" id="l3-3">
+          <div class="lesson-head">
+            <span class="lesson-loc">3.3</span>
+            <h3>The seams: Domain and Memory</h3>
+          </div>
+          <div class="lesson-body">
+            <p>
+              Two traits keep the ES core generic. A <dfn>Domain</dfn> defines what a problem
+              looks like — an example type, a distance metric, a score — without saying anything
+              about grids specifically (a grid domain and a 1-D sequence domain both conform, with
+              zero change to the ES). A <dfn>Memory</dfn> defines what gets fit: a parameter
+              count, a seed, and an <code>apply</code> function from weights + input to output.
+            </p>
+            <div class="diagram">
+              <div class="diagram-inner">
+<pre class="mermaid">
+graph TD
+  Dom["Domain trait<br/>Example type · distance · score"] -->|associated type| Mem["Memory trait<br/>param_dim · seed · apply(weights, input) → output"]
+  Mem --> Fit["ES core: fitness / evolve_fast_weights / fit_operator"]
+  Fit --> Score["held-out score, via Domain.distance"]
+</pre>
+              </div>
+              <div class="fig-caption">Fig 3.3 — the seam the ES core reaches every problem through</div>
+            </div>
+            <p>
+              Crucially, <strong>there is no runtime memory-selector</strong> — which memory to
+              use is a compile-time choice, not a dispatch decision the engine makes at runtime.
+              A runtime selector over hand-written memories would itself be a symbolic DSL by
+              another name, which is exactly what the project's first value forbids (Module 7.1).
+              New memory types are added additively, and each is measured only on the subset of
+              problems it can express.
+            </p>
+          </div>
+        </div>
+
+        <div class="lesson" id="l3-4">
+          <div class="lesson-head">
+            <span class="lesson-loc">3.4</span>
+            <h3>Worked example: the structured operator</h3>
+          </div>
+          <div class="lesson-body">
+            <p>
+              The first working <code>Memory</code> is a hand-structured one, useful precisely
+              because it's simple enough to read end-to-end. Its 16 parameters are a 6-value
+              centered affine transform (the geometry: flips, transpose) plus a 10-entry colour
+              lookup table. It runs <strong>colour, then gather</strong>: each of the four corner
+              input cells is mapped through the colour table <em>before</em> being blended by the
+              geometry, which decouples the colour fit from the geometry's precision. The gather
+              is smooth (bilinear) so the ES always has a usable gradient signal, yet lands
+              exactly on the target at integer parameter values.
+            </p>
+            <div class="callout callout-def">
+              <span class="callout-label">Why this memory is later retired</span>
+              <p>Its 16 hand-picked parameters can only express affine geometry plus a global
+              recolor. Module 4 replaces it, piece by piece, with memories that <em>learn</em> the
+              same behavior — and more — with nothing hand-installed.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="lesson" id="l3-5">
+          <div class="lesson-head">
+            <span class="lesson-loc">3.5</span>
+            <h3>The metric that can't be cheated</h3>
+          </div>
+          <div class="lesson-body">
+            <p>
+              Every memory is fit on a task's <em>demonstration</em> pairs, then scored on an
+              <em>unseen</em> test pair from the same task. Fitting the demos well proves nothing
+              by itself — a memory with enough free parameters can memorize any finite set of
+              examples. Generalizing to the held-out pair is the only claim that a genuine
+              transformation, not a lookup table, was found.
+            </p>
+            <div class="callout callout-neg">
+              <span class="callout-label">The cold-fit bar</span>
+              <p>If a memory only clears this bar via per-task hand-staging, mid-fit parameter
+              boosts, or bespoke tuning, the project calls that <strong>"stone soup"</strong>: the
+              reasoning lived in the human who staged it, not in the model. Such results are
+              recorded as documented negative results, never as milestones.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ MODULE 4 ============ -->
+      <section id="m4" class="module">
+        <div class="module-band">
+          <span class="module-num">04</span>
+          <h2>The emergent memory zoo</h2>
+        </div>
+        <p class="module-dek">
+          This is the project's longest-running thread: replacing every hand-coded piece of the
+          structured operator (3.4) with something the engine learns for itself, one training
+          wheel at a time, each new memory measured honestly on what it can and can't express.
+        </p>
+        <div class="module-rule"></div>
+
+        <div class="diagram">
+          <div class="diagram-inner">
+<pre class="mermaid">
+graph LR
+  OP["Structured operator<br/>hand-coded affine + LUT"] --> MLP["MLPMemory<br/>emergent colour, no LUT"]
+  MLP --> ATT["AttnGather<br/>emergent geometry"]
+  ATT --> COMP["Composed memories<br/>commuting factors"]
+  COMP --> SM["Self-modifying memories<br/>write rule, not ES-searched"]
+  SM --> CF["Content-addressed memory<br/>copy · move · draw"]
+</pre>
+          </div>
+          <div class="fig-caption">Fig 4.0 — the zoo's evolution: each stage removes one hand-installed piece</div>
+        </div>
+
+        <div class="lesson" id="l4-1">
+          <div class="lesson-head">
+            <span class="lesson-loc">4.1</span>
+            <h3>First emergence: a per-cell MLP</h3>
+            <span class="tags"><span class="tag tag-fast">fast</span></span>
+          </div>
+          <div class="lesson-body">
+            <p>
+              The first training wheel to come off is the colour lookup table. <code>MLPMemory</code>
+              is a tiny per-cell <code>1→H→1</code> tanh network, fit the same way as everything
+              else — by ES, on the demos. It learns to recolor a grid to held-out 1.0 with no
+              lookup table hand-installed: the mapping itself is discovered, not looked up.
+            </p>
+          </div>
+        </div>
+
+        <div class="lesson" id="l4-2">
+          <div class="lesson-head">
+            <span class="lesson-loc">4.2</span>
+            <h3>Emergent geometry: attention as a gather</h3>
+          </div>
+          <div class="lesson-body">
+            <p>
+              <code>AttnGatherMemory</code> replaces the hand-coded affine transform with a
+              7-parameter learned position-attention gather: a 2×2 coordinate projection plus a
+              temperature, softmax-weighted over a small window. With integer-valued projections
+              it reproduces flip/flip/transpose exactly — but nothing about "flip" or "transpose"
+              was ever named in the code. Geometry became a special case of attention, learned
+              from scratch, first try.
+            </p>
+          </div>
+        </div>
+
+        <div class="lesson" id="l4-3">
+          <div class="lesson-head">
+            <span class="lesson-loc">4.3</span>
+            <h3>The composition pattern</h3>
+          </div>
+          <div class="lesson-body">
+            <p>
+              Naively fitting one memory that does both geometry <em>and</em> colour hits a
+              structural wall: geometry needs a <em>soft</em> gather to have a usable gradient,
+              colour needs <em>sharp</em> bins to stay clean, and one shared temperature can't
+              serve both — a free colour table will quietly absorb geometry error at the wrong
+              position, flattening the very signal the ES needs.
+            </p>
+            <div class="callout callout-neg">
+              <span class="callout-label">Negative result, recorded</span>
+              <p>A single combined geometry+colour memory was tried and abandoned — it only
+              reached the bar under hand-staging (stone soup, 3.5). The fix was a different
+              factorization, not more tuning.</p>
+            </div>
+            <p>
+              The recipe that replaced it, now proven three times over: find a representation
+              where the two factors <strong>commute</strong>, fit each factor on a signal the
+              other one cannot touch, then compose forward. Concretely — the colour table is
+              written <em>closed-form</em> from count signatures that are position-free (so
+              geometry can't corrupt them), and the geometry ES then runs on demos already
+              pre-mapped through that fixed colour table.
+            </p>
+            <div class="diagram">
+              <div class="diagram-inner">
+                <svg viewBox="0 0 420 220" role="img" aria-label="commuting composition square">
+                  <text x="60" y="30" text-anchor="middle" font-family="var(--font-mono)" font-size="12" fill="var(--ink)">input</text>
+                  <text x="360" y="30" text-anchor="middle" font-family="var(--font-mono)" font-size="12" fill="var(--ink)">colour(input)</text>
+                  <text x="60" y="200" text-anchor="middle" font-family="var(--font-mono)" font-size="12" fill="var(--ink)">geom(input)</text>
+                  <text x="360" y="200" text-anchor="middle" font-family="var(--font-mono)" font-size="12" fill="var(--ink)">output</text>
+                  <line x1="95" y1="25" x2="310" y2="25" stroke="var(--slow)" stroke-width="1.8" marker-end="url(#arrow4-3)"/>
+                  <text x="200" y="16" text-anchor="middle" font-family="var(--font-mono)" font-size="10" fill="var(--slow-ink)">colour (written, closed-form)</text>
+                  <line x1="95" y1="195" x2="310" y2="195" stroke="var(--slow)" stroke-width="1.8" marker-end="url(#arrow4-3)"/>
+                  <text x="200" y="212" text-anchor="middle" font-family="var(--font-mono)" font-size="10" fill="var(--slow-ink)">colour (same table)</text>
+                  <line x1="55" y1="45" x2="55" y2="175" stroke="var(--fast)" stroke-width="1.8" marker-end="url(#arrow4-3)"/>
+                  <text x="18" y="115" font-family="var(--font-mono)" font-size="10" fill="var(--fast-ink)" transform="rotate(-90 18 115)">geometry (ES-fit)</text>
+                  <line x1="360" y1="45" x2="360" y2="175" stroke="var(--fast)" stroke-width="1.8" marker-end="url(#arrow4-3)"/>
+                  <text x="398" y="115" font-family="var(--font-mono)" font-size="10" fill="var(--fast-ink)" transform="rotate(-90 398 115)">geometry (same fit)</text>
+                  <defs><marker id="arrow4-3" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="var(--ink)"/></marker></defs>
+                </svg>
+              </div>
+              <div class="fig-caption">Fig 4.3 — a commuting square: colour-then-geometry equals geometry-then-colour</div>
+            </div>
+            <p>
+              This composed memory (<code>GeomColorComposedMemory</code>) <strong>emergently
+              retires</strong> the hand-coded structured operator from 3.4: it matches its whole
+              expressible subset held-out 1.0, cold, and additionally solves a composed
+              flip∘recolor task no single memory in the zoo could express alone.
+            </p>
+          </div>
+        </div>
+
+        <div class="lesson" id="l4-4">
+          <div class="lesson-head">
+            <span class="lesson-loc">4.4</span>
+            <h3>Self-modifying memories</h3>
+            <span class="tags"><span class="tag tag-fast">fast</span></span>
+          </div>
+          <div class="lesson-body">
+            <p>
+              A derivative-free ES cannot search a large, coupled fast-weight space directly —
+              there just aren't enough antithetic samples in the world to find a high-dimensional
+              needle by random perturbation. The fix, straight out of Module 1.5: move fast
+              adaptation <em>off</em> the ES entirely. The memory writes its own fast state from
+              the demos in a single forward pass — a <dfn>self-write rule</dfn> — and the ES only
+              ever searches the small, slow vector that shapes <em>how</em> that rule reads.
+            </p>
+            <div class="callout callout-def">
+              <span class="callout-label">The delta rule</span>
+              <p>The self-write updates a state matrix by <code>S ← (1−α)S + η(v − S·k)k</code>,
+              with key <code>k</code>, value <code>v</code>, learning rate <code>η</code>, and
+              retention gate <code>α</code> all <em>self-generated</em> by the memory. On a fresh,
+              arbitrary sequence rule, meta-learning these projections cold lets a new task adapt
+              in <strong>one</strong> pass to ~0.98 held-out — no per-task ES fit at all.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="lesson" id="l4-5">
+          <div class="lesson-head">
+            <span class="lesson-loc">4.5</span>
+            <h3>Self-mod on a grid: three expressivity barriers</h3>
+          </div>
+          <div class="lesson-body">
+            <p>
+              Lifting self-write to 2-D grids happened in three steps, each crossing a barrier the
+              last one provably couldn't:
+            </p>
+            <ul>
+              <li><strong>Context keys</strong> — key on a centre cell combined with its
+              neighbours (an outer product), read linearly. Expresses <em>additive</em>
+              center↔neighbour rules.</li>
+              <li><strong>Neighbourhood histograms</strong> — key on a centre-free count of
+              matching Moore-8 neighbours, read through a sigmoid threshold. A linear read
+              provably cannot express this disjunctive/count class; the nonlinearity is
+              load-bearing, not decoration (measured: linear read 0.61, nonlinear 0.995).</li>
+              <li><strong>Count maps</strong> — an arbitrary, non-monotone count→colour map. The
+              obvious fix (learn a value table by gradient covariance) fails outright here,
+              because identifying <em>which</em> colour to count is a discrete choice, not
+              something a smooth gradient target can express. The working fix is a meta-learned
+              <em>scoring</em> salience over demo statistics — the model learns to weigh
+              variance-reduction over correlation, the one feature that survives non-monotone
+              maps.</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="lesson" id="l4-6">
+          <div class="lesson-head">
+            <span class="lesson-loc">4.6</span>
+            <h3>When output shape is itself unknown</h3>
+          </div>
+          <div class="lesson-body">
+            <p>
+              Every memory so far assumed the output grid is the same size as the input. Real
+              tasks crop, subsample, tile, and upscale. The fix is a parallel <code>ShapeMemory</code>
+              seam: the output size is <em>inferred in-context</em> — a per-axis affine rule
+              <code>out = round(k·in + b)</code>, written closed-form by least-squares over the
+              demo dimension pairs — then the same attention gather (4.2) reads from the input
+              grid into an output-shaped query. A later addition, a symmetric "fold" read instead
+              of a periodic wrap, made mirror-tiling (kaleidoscope) patterns expressible too — the
+              torus wrap alone provably cannot produce that sawtooth.
+            </p>
+          </div>
+        </div>
+
+        <div class="lesson" id="l4-7">
+          <div class="lesson-head">
+            <span class="lesson-loc">4.7</span>
+            <h3>Content-addressed memory</h3>
+          </div>
+          <div class="lesson-body">
+            <p>
+              The stubbornest remaining class of tasks writes output <em>where the input evidence
+              is not</em> — fill an enclosed region, extend a ray, copy the nearest object's
+              colour. No per-cell function of position-aligned context can express that; the
+              output has to be fetched from somewhere else on the grid. A <code>GridSubstrate</code>
+              precomputes reusable representations (connected components, nearest-object BFS, ray
+              sweeps) that a written 16-entry relational action table (keep / copy-fetched /
+              constant) reads from — a genuinely content-addressed gather, composed on top of
+              everything built so far.
+            </p>
+            <div class="callout callout-measured">
+              <span class="callout-label">Measured</span>
+              <div class="stat-row">
+                <div class="stat"><span class="n">0.188 → 0.625</span><span class="l">mean held-out, the 146-task deep floor</span></div>
+                <div class="stat"><span class="n">19 / 146</span><span class="l">now ≥ 0.9 held-out, 0 before</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="lesson" id="l4-8">
+          <div class="lesson-head">
+            <span class="lesson-loc">4.8</span>
+            <h3>Honest scorecard</h3>
+          </div>
+          <div class="lesson-body">
+            <p>
+              Every memory above is measured on the real ARC-AGI-2 corpus, not the synthetic
+              proofs alone. The number that matters is the one on the unseen public-eval split.
+            </p>
+            <div class="callout callout-measured">
+              <span class="callout-label">Measured — v4 corpus re-measure</span>
+              <div class="stat-row">
+                <div class="stat"><span class="n">41 / 1000</span><span class="l">solved, train split</span></div>
+                <div class="stat"><span class="n">0 / 120</span><span class="l">solved, public eval split</span></div>
+                <div class="stat"><span class="n">0.778</span><span class="l">mean held-out, same-shape eval slice</span></div>
+              </div>
+            </div>
+            <p>
+              Train ≈ held-out on nearly every top-performing task — what the memory zoo learns
+              genuinely generalizes. The gap to a full solve is <strong>expressiveness</strong>,
+              not overfitting: most tasks need factors this zoo doesn't have yet, not a better fit
+              of the ones it does. That's the honest state Module 4 leaves things in — the reason
+              the project's live roadmap keeps naming new "rungs" rather than declaring done.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ MODULE 5 ============ -->
+      <section id="m5" class="module">
+        <div class="module-band">
+          <span class="module-num">05</span>
+          <h2>Open-ended mastery</h2>
+        </div>
+        <p class="module-dek">
+          Everything in Module 4 still hands the engine a <em>goal</em> — a task's demonstration
+          pairs are compressed supervision, even without a hand-coded DSL. Vision B asks a
+          stricter question: can the same ES core master an environment with <strong>zero</strong>
+          hand-coded goals at all? Five rungs, each reward-free, each scored through the
+          unchanged generic ES core from Module 2.
+        </p>
+        <div class="module-rule"></div>
+
+        <div class="diagram">
+          <div class="diagram-inner">
+<pre class="mermaid">
+graph LR
+  N["1 · Novelty search<br/>self-generated novelty"] --> R["2 · MAP-Elites<br/>persistent repertoire"]
+  R --> E["2.5 · Empowerment<br/>exact, closed-form"]
+  E --> W["3 · World model<br/>+ learning progress"]
+  W --> T["4 · Transfer<br/>the convergence test"]
+  T --> A["5 · ACCEL<br/>emergent curriculum"]
+</pre>
+          </div>
+          <div class="fig-caption">Fig 5.0 — the five-rung open-endedness ladder, complete</div>
+        </div>
+
+        <div class="lesson" id="l5-1">
+          <div class="lesson-head">
+            <span class="lesson-loc">5.1</span>
+            <h3>The last hand-out</h3>
+          </div>
+          <div class="lesson-body">
+            <p>
+              A demonstration pair is still a goal someone else chose. Vision B replaces it with
+              <dfn>intrinsic motivation</dfn> — self-generated novelty stands in for supervision
+              entirely. This is a stricter reading of the project's founding value than Vision A
+              ever attempted, because it drops the last hand-out: the goal itself.
+            </p>
+          </div>
+        </div>
+
+        <div class="lesson" id="l5-2">
+          <div class="lesson-head">
+            <span class="lesson-loc">5.2</span>
+            <h3>A reward-free world</h3>
+          </div>
+          <div class="lesson-body">
+            <p>
+              The testbed is a deterministic 16×16 gridworld: an avatar with six actions
+              (move × 4, paint, cycle-brush) under one parameterizable dynamics rule (gravity).
+              There is no reward channel — the only thing the world produces is state. A
+              <code>SandboxDomain</code>/<code>SandboxPolicyMemory</code> pair conforms the same
+              generic <code>fit_operator</code> from Module 2 to score whole rollouts, so the ES
+              core needs zero new code to run in this world at all.
+            </p>
+          </div>
+        </div>
+
+        <div class="lesson" id="l5-3">
+          <div class="lesson-head">
+            <span class="lesson-loc">5.3</span>
+            <h3>Novelty search</h3>
+          </div>
+          <div class="lesson-body">
+            <p>
+              An NS-ES meta-population's only fitness signal is how <em>novel</em> its own
+              trajectory is against an archive of everything seen so far — never a task score.
+              Against an equal-budget random-policy baseline, directed novelty search covers
+              distinctly more of the world.
+            </p>
+            <div class="callout callout-measured">
+              <span class="callout-label">Measured</span>
+              <div class="stat-row">
+                <div class="stat"><span class="n">4.9×</span><span class="l">distinct cells vs. random</span></div>
+                <div class="stat"><span class="n">3.0×</span><span class="l">distinct end-states vs. random</span></div>
+              </div>
+            </div>
+            <p>
+              A calibration finding worth keeping: raw novelty deltas are tiny and shrink as the
+              archive fills up, so unit-std fitness shaping of the ES step is load-bearing — an
+              unshaped step barely moves anything.
+            </p>
+          </div>
+        </div>
+
+        <div class="lesson" id="l5-4">
+          <div class="lesson-head">
+            <span class="lesson-loc">5.4</span>
+            <h3>MAP-Elites: a persistent skill repertoire</h3>
+          </div>
+          <div class="lesson-body">
+            <p>
+              Novelty search is transient — it forgets. <dfn>MAP-Elites</dfn> fixes that by
+              keeping a permanent map: one slot per distinct end-state "cell," holding the best
+              (most direct) policy ever found for reaching it. Once a skill is stored, it's
+              replayable forever.
+            </p>
+            <div class="diagram">
+              <div class="diagram-inner">
+                <svg viewBox="0 0 480 170" role="img" aria-label="sandbox and MAP-Elites archive">
+                  <g transform="translate(20,15)">
+                    <rect width="130" height="130" fill="var(--surface-2)" stroke="var(--line-strong)"/>
+                    <g stroke="var(--line)">
+                      <line x1="16.25" y1="0" x2="16.25" y2="130"/><line x1="32.5" y1="0" x2="32.5" y2="130"/><line x1="48.75" y1="0" x2="48.75" y2="130"/>
+                      <line x1="65" y1="0" x2="65" y2="130"/><line x1="81.25" y1="0" x2="81.25" y2="130"/><line x1="97.5" y1="0" x2="97.5" y2="130"/><line x1="113.75" y1="0" x2="113.75" y2="130"/>
+                      <line x1="0" y1="16.25" x2="130" y2="16.25"/><line x1="0" y1="32.5" x2="130" y2="32.5"/><line x1="0" y1="48.75" x2="130" y2="48.75"/>
+                      <line x1="0" y1="65" x2="130" y2="65"/><line x1="0" y1="81.25" x2="130" y2="81.25"/><line x1="0" y1="97.5" x2="130" y2="97.5"/><line x1="0" y1="113.75" x2="130" y2="113.75"/>
+                    </g>
+                    <circle cx="65" cy="65" r="5" fill="var(--fast)"/>
+                    <text x="65" y="-6" text-anchor="middle" font-family="var(--font-mono)" font-size="11" fill="var(--ink)">the sandbox</text>
+                  </g>
+                  <text x="185" y="85" text-anchor="middle" font-family="var(--font-mono)" font-size="16" fill="var(--muted)">→</text>
+                  <g transform="translate(220,15)">
+                    <text x="115" y="-6" text-anchor="middle" font-family="var(--font-mono)" font-size="11" fill="var(--ink)">the repertoire (by end-state)</text>
+                    <g font-family="var(--font-mono)">
+                      <!-- grid of filled/empty archive cells -->
+                    </g>
+                    <g>
+                    </g>
+                    <g id="archiveGrid"></g>
+                  </g>
+                  <g transform="translate(220,15)">
+                    <!-- 8x8 grid, some filled -->
+                    <g fill="var(--slow-soft)" stroke="var(--slow)">
+                      <rect x="0" y="0" width="14" height="14"/><rect x="16.25" y="0" width="14" height="14"/><rect x="48.75" y="0" width="14" height="14"/>
+                      <rect x="0" y="16.25" width="14" height="14"/><rect x="32.5" y="16.25" width="14" height="14"/><rect x="65" y="16.25" width="14" height="14"/><rect x="97.5" y="16.25" width="14" height="14"/>
+                      <rect x="16.25" y="32.5" width="14" height="14"/><rect x="48.75" y="32.5" width="14" height="14"/><rect x="81.25" y="32.5" width="14" height="14"/><rect x="113.75" y="32.5" width="14" height="14"/>
+                      <rect x="0" y="48.75" width="14" height="14"/><rect x="65" y="48.75" width="14" height="14"/><rect x="97.5" y="48.75" width="14" height="14"/>
+                      <rect x="32.5" y="65" width="14" height="14"/><rect x="81.25" y="65" width="14" height="14"/><rect x="16.25" y="65" width="14" height="14"/>
+                      <rect x="0" y="81.25" width="14" height="14"/><rect x="48.75" y="81.25" width="14" height="14"/><rect x="97.5" y="81.25" width="14" height="14"/><rect x="113.75" y="81.25" width="14" height="14"/>
+                      <rect x="65" y="97.5" width="14" height="14"/><rect x="32.5" y="97.5" width="14" height="14"/>
+                      <rect x="16.25" y="113.75" width="14" height="14"/><rect x="81.25" y="113.75" width="14" height="14"/><rect x="0" y="113.75" width="14" height="14"/>
+                    </g>
+                    <rect width="130" height="130" fill="none" stroke="var(--line-strong)"/>
+                  </g>
+                </svg>
+              </div>
+              <div class="fig-caption">Fig 5.4 — each filled cell is one stored, replayable skill, keyed by end-state</div>
+            </div>
+            <div class="callout callout-measured">
+              <span class="callout-label">Measured</span>
+              <div class="stat-row">
+                <div class="stat"><span class="n">3.1×</span><span class="l">skills stored vs. end-states novelty-search ever touched</span></div>
+                <div class="stat"><span class="n">100%</span><span class="l">elites replay to their bin</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="lesson" id="l5-5">
+          <div class="lesson-head">
+            <span class="lesson-loc">5.5</span>
+            <h3>Empowerment, computed exactly</h3>
+          </div>
+          <div class="lesson-body">
+            <p>
+              <dfn>Empowerment</dfn> measures how much an agent's actions control its future
+              states — normally an intractable estimation problem. But the sandbox is fully
+              deterministic, so the usual channel-capacity algorithm collapses to something exact:
+              n-step empowerment is just <code>log₂(number of distinct states reachable in n
+              steps)</code>, computed by brute enumeration. No learned parts, no archive.
+            </p>
+            <div class="callout callout-measured">
+              <span class="callout-label">Measured</span>
+              <p><strong>3.4×</strong> more elites stored than a random-policy baseline. Caveat:
+              empowerment is a <em>concentrating</em> signal — it needs frequent elite-restarts or
+              it parks below random, since routes that stay optionality-rich are a narrow target.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="lesson" id="l5-6">
+          <div class="lesson-head">
+            <span class="lesson-loc">5.6</span>
+            <h3>A world model, and learning progress</h3>
+          </div>
+          <div class="lesson-body">
+            <p>
+              A transition (state, action → next state) is just another <code>ExamplePair</code>,
+              so the same unchanged ES core fits a predictive model of the world's dynamics — no
+              new learning machinery. <dfn>Learning progress</dfn> (LP) is then defined honestly:
+              the ES fitness <em>slope</em>, not the raw error. That distinction matters because a
+              region of pure noise (a "noisy TV") has permanently high error but zero slope — LP
+              correctly ignores it, where a naive novelty-seeking agent would get stuck staring at
+              static forever.
+            </p>
+            <div class="callout callout-measured">
+              <span class="callout-label">Measured</span>
+              <div class="stat-row">
+                <div class="stat"><span class="n">22×</span><span class="l">LP on novel regions vs. mastered/scrambled</span></div>
+                <div class="stat"><span class="n">2.4×</span><span class="l">LP-guided collection vs. uniform (0.362 vs 0.153)</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="lesson" id="l5-7">
+          <div class="lesson-head">
+            <span class="lesson-loc">5.7</span>
+            <h3>The convergence test</h3>
+          </div>
+          <div class="lesson-body">
+            <p>
+              This is the hypothesis the whole ladder was built to test: do skills discovered with
+              <em>zero</em> goals (Vision B) become a reusable vocabulary that few-shot, goal-driven
+              composition (Vision A) can draw on? A held-out goal is a target end-state the
+              repertoire never stored. Seeding the ES fit with the repertoire's <em>nearest</em>
+              stored skill — real indexed retrieval, not a generic warm-init — is compared against
+              starting cold.
+            </p>
+            <div class="callout callout-measured">
+              <span class="callout-label">Measured</span>
+              <div class="stat-row">
+                <div class="stat"><span class="n">7.3×</span><span class="l">closer to goal than cold-start</span></div>
+                <div class="stat"><span class="n">29.6×</span><span class="l">closer than a random-elite control</span></div>
+              </div>
+            </div>
+            <p>
+              Retrieval, specifically — not just "having a warm start" — is the lever: a random
+              elite barely beats cold, but the <em>nearest</em> one wins by an order of magnitude.
+              A composition head over several frozen retrieved primitives does even better on
+              multi-part goals, though its margin is bounded by how dense the repertoire already
+              is nearby.
+            </p>
+          </div>
+        </div>
+
+        <div class="lesson" id="l5-8">
+          <div class="lesson-head">
+            <span class="lesson-loc">5.8</span>
+            <h3>ACCEL: the last hand-coded thing goes too</h3>
+          </div>
+          <div class="lesson-body">
+            <p>
+              One thing was still hand-picked across every rung above: the fixed set of training
+              worlds. ACCEL retires it — mutate a level's config, keep a replay buffer curated by
+              <em>learnability</em> (5.6's honest, noise-immune slope), and never hand-write a
+              curriculum. Compared byte-for-byte against domain randomization (a fresh random
+              level every round) at the identical compute budget:
+            </p>
+            <div class="callout callout-measured">
+              <span class="callout-label">Measured</span>
+              <div class="stat-row">
+                <div class="stat"><span class="n">0.154</span><span class="l">held-out accuracy, curated curriculum</span></div>
+                <div class="stat"><span class="n">0.0</span><span class="l">held-out accuracy, domain randomization</span></div>
+              </div>
+            </div>
+            <p>
+              Domain randomization's difficulty swings churn an incremental learner all the way to
+              zero, while curation holds the world in the moderate-difficulty band where learning
+              actually happens. The honest limit: the sandbox's single dynamics rule (gravity) is
+              the ceiling on this — a richer curriculum needs a richer world. That's exactly what
+              Module 6 builds next.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ MODULE 6 ============ -->
+      <section id="m6" class="module">
+        <div class="module-band">
+          <span class="module-num">06</span>
+          <h2>The frontier: cross-world transfer</h2>
+        </div>
+        <p class="module-dek">
+          The most recent, active direction. This is where the roadmap is being written as this
+          course is — treat it as the current state of an open question, not a settled result.
+        </p>
+        <div class="module-rule"></div>
+
+        <div class="lesson" id="l6-1">
+          <div class="lesson-head">
+            <span class="lesson-loc">6.1</span>
+            <h3>The pivot</h3>
+          </div>
+          <div class="lesson-body">
+            <p>
+              A direction change: solving ARC-AGI is treated as <strong>less important</strong>
+              than learning from diverse problems and worlds — sokoban, tic-tac-toe, tangram,
+              untying knots — and carrying that knowledge from one to the next. This elevates
+              5.7's convergence hypothesis from one interesting result to the project's measured
+              currency: <dfn>transfer</dfn> — what a warm start earns you over a cold one, at
+              equal budget, on the <em>next</em> world, always scored held-out.
+            </p>
+          </div>
+        </div>
+
+        <div class="lesson" id="l6-2">
+          <div class="lesson-head">
+            <span class="lesson-loc">6.2</span>
+            <h3>Walls: a second world</h3>
+          </div>
+          <div class="lesson-body">
+            <p>
+              Before transfer can be measured, there has to be a second world to transfer
+              <em>into</em>. Walls add a topology constraint to the sandbox (5.2): a reserved
+              in-grid value the avatar can't pass and gravity treats specially. Built as a strict
+              superset of the original world — every one of the five-rung ladder's proofs still
+              passes byte-identically — so world 2 doesn't invalidate world 1, it extends it.
+            </p>
+          </div>
+        </div>
+
+        <div class="lesson" id="l6-3">
+          <div class="lesson-head">
+            <span class="lesson-loc">6.3</span>
+            <h3>What carries, what doesn't</h3>
+          </div>
+          <div class="lesson-body">
+            <p>
+              A repertoire built entirely in the open world (world 1) is asked to warm-start goals
+              in the walled world (world 2) it has never seen. Three arms: cold-start, a random
+              stored elite, and nearest-neighbour retrieval by behaviour.
+            </p>
+            <div class="diagram">
+              <div class="diagram-inner">
+<pre class="mermaid">
+graph LR
+  W1["World-1 repertoire<br/>open field, no walls"] -->|"random elite"| RAND["4–8× WORSE than cold"]
+  W1 -->|"BC-nearest retrieval"| NEAR["rescues to ≈ cold-start parity<br/>5.2×–7.6× closer than random"]
+  COLD["cold start in world 2"] --- NEAR
+</pre>
+              </div>
+              <div class="fig-caption">Fig 6.3 — retrieval rescues negative transfer; a random skill actively hurts</div>
+            </div>
+            <div class="callout callout-measured">
+              <span class="callout-label">Measured — T-POC-1</span>
+              <p>A randomly chosen world-1 elite is <strong>4–8× worse than starting cold</strong>
+              in world 2 — strong negative transfer. BC-nearest retrieval rescues that back to
+              roughly cold-start parity, 5–8× closer than the random-elite control across two
+              seeds, and hits the exact goal in 5/24 cases where cold-start managed ≤2/24.</p>
+            </div>
+            <p>
+              Read carefully, that's a specific and slightly humbling finding, distilled as:
+              <strong>the index carries, the warm basin does not.</strong> Knowing <em>which</em>
+              skill is relevant transfers across worlds. The actual learned weights of that
+              skill — tuned for a world without walls — mostly don't; they need to be re-fit
+              in the new world almost from scratch once retrieved.
+            </p>
+          </div>
+        </div>
+
+        <div class="lesson" id="l6-4">
+          <div class="lesson-head">
+            <span class="lesson-loc">6.4</span>
+            <h3>Where this points next</h3>
+          </div>
+          <div class="lesson-body">
+            <p>
+              If the index is what transfers and the weights don't, the natural next question is
+              what a memory would need to make the weights transfer too — perhaps a
+              representation of a skill that's less tied to one world's specific geometry, or a
+              CMS-style (1.4) persistent slow layer that consolidates what's shared across worlds
+              rather than what's specific to one. This is exactly the "rung #6" question Module
+              4.8 named for Vision A, now asked at the level of whole worlds instead of individual
+              tasks — the two visions' open threads are converging on the same shape of problem.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ MODULE 7 ============ -->
+      <section id="m7" class="module">
+        <div class="module-band">
+          <span class="module-num">07</span>
+          <h2>Wrap-up</h2>
+        </div>
+        <p class="module-dek">
+          A last pass over the rules the whole project runs by, a compact glossary, and where to
+          go for the living, evolving version of everything summarized here.
+        </p>
+        <div class="module-rule"></div>
+
+        <div class="lesson" id="l7-1">
+          <div class="lesson-head">
+            <span class="lesson-loc">7.1</span>
+            <h3>The six values</h3>
+          </div>
+          <div class="lesson-body">
+            <ol class="values-list">
+              <li><span class="vn">01</span><span><strong>Emergence over hand-coding.</strong>
+              No symbolic DSL in the runtime path; structural priors are removable training
+              wheels, never the destination.</span></li>
+              <li><span class="vn">02</span><span><strong>Honest measurement.</strong> Held-out
+              generalization is the only currency — uncheatable by memorization. A scaffolded pass
+              is a <em>negative</em> result.</span></li>
+              <li><span class="vn">03</span><span><strong>Build from bare metal.</strong> Pure
+              Mojo, zero external ML libraries, ES instead of backprop — nothing about how it
+              learns is inherited unexamined.</span></li>
+              <li><span class="vn">04</span><span><strong>Domain-agnostic core.</strong> The ES /
+              two-timescale / self-modifying spine stays separable from any one domain — progress
+              must transfer toward the mission, not just move one number.</span></li>
+              <li><span class="vn">05</span><span><strong>Frugal by design.</strong> Every
+              milestone must be provable on commodity hardware with tiny corpora — a claim
+              needing a cluster is a sign the substrate isn't efficient enough yet.</span></li>
+              <li><span class="vn">06</span><span><strong>Narrated evidence trail.</strong> Every
+              direction change carries its <em>why</em>, so the project's turns are auditable, not
+              vibes.</span></li>
+            </ol>
+          </div>
+        </div>
+
+        <div class="lesson" id="l7-2">
+          <div class="lesson-head">
+            <span class="lesson-loc">7.2</span>
+            <h3>Glossary</h3>
+          </div>
+          <div class="lesson-body">
+            <dl class="glossary">
+              <dt>Associative memory</dt><dd>A mapping <code>M</code> from keys to values, fit by minimizing a loss over that mapping. The one atom every other term in this course builds on.</dd>
+              <dt>Fast / slow weights</dt><dd>Esper's two timescales: <code>fast</code> is fit in-context per task; <code>slow</code> is the meta-learned prior, updated only by the outer Reptile loop.</dd>
+              <dt>Evolution Strategy (ES)</dt><dd>A derivative-free optimizer: estimate a gradient by perturbing parameters and observing fitness, rather than backpropagating through a graph.</dd>
+              <dt>Domain / Memory trait</dt><dd>The two seams the ES core is generic over — a problem's shape (Domain) and what gets fit to solve it (Memory) — with no runtime selector between memories.</dd>
+              <dt>Held-out generalization</dt><dd>Fit on a task's demonstration pairs, score the unseen test pair. The project's only success metric.</dd>
+              <dt>Cold-fit bar / stone soup</dt><dd>A result only holds if it clears the bar with no per-task human staging. A staged pass is a documented negative result, not a milestone.</dd>
+              <dt>Composition pattern</dt><dd>Find a commuting representation, fit each factor on a signal invariant to the others, compose forward — the recipe behind every composed memory in Module 4.</dd>
+              <dt>Novelty / empowerment</dt><dd>Two reward-free intrinsic signals: how new a state is (novelty), and how much an agent's actions control its future (empowerment).</dd>
+              <dt>Learning progress (LP)</dt><dd>The <em>slope</em> of prediction error over time, not the error itself — the noise-immune signal behind guided curriculum collection.</dd>
+              <dt>Transfer</dt><dd>What a warm start earns over a cold one, at equal budget, in a new world — the project's current measured currency (Module 6).</dd>
+            </dl>
+          </div>
+        </div>
+
+        <div class="lesson" id="l7-3">
+          <div class="lesson-head">
+            <span class="lesson-loc">7.3</span>
+            <h3>Where to go deeper</h3>
+          </div>
+          <div class="lesson-body">
+            <p>
+              This course is a distillation, not a replacement for the project's own living
+              documents — which are kept current as work continues, where this page is a
+              snapshot.
+            </p>
+            <ul>
+              <li><code>docs/ROADMAP.md</code> — the canonical direction: mission, vision, values, full status log.</li>
+              <li><code>docs/NL-summary.md</code> — the source distillation of the Nested Learning / HOPE paper behind Module 1.</li>
+              <li><code>docs/ARCHITECTURE.md</code> — the per-module map: every data structure, memory family, and test.</li>
+              <li><code>docs/JOURNAL.md</code> — the timestamped narrative behind every step: the why, not just the what.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <footer class="colophon">
+        <p>Written as a standalone teaching artifact from the project's own documentation
+        (ROADMAP, ARCHITECTURE, NL-summary, CLAUDE.md) — a snapshot, not a substitute for those
+        living sources. All figures are original diagrams synthesizing the cited measurements.</p>
+      </footer>
+
+    </div>
+  </main>
+</div>
+
+<script>
+  (function () {
+    var links = Array.prototype.slice.call(document.querySelectorAll('.toc-module-link'));
+    var sections = links
+      .map(function (l) { return document.getElementById(l.dataset.mod); })
+      .filter(Boolean);
+
+    if ('IntersectionObserver' in window && sections.length) {
+      var byId = {};
+      links.forEach(function (l) { byId[l.dataset.mod] = l; });
+
+      var observer = new IntersectionObserver(function (entries) {
+        entries.forEach(function (entry) {
+          var link = byId[entry.target.id];
+          if (!link) return;
+          if (entry.isIntersecting) {
+            links.forEach(function (l) { l.classList.remove('active'); });
+            link.classList.add('active');
+          }
+        });
+      }, { rootMargin: '-10% 0px -75% 0px', threshold: 0 });
+
+      sections.forEach(function (s) { observer.observe(s); });
+    }
+  })();
+</script>
+<script src="assets/mermaid.min.js"></script>
+<script>
+  (function () {
+    var dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    var palette = dark
+      ? { background: '#1B2023', primaryColor: '#20272A', primaryTextColor: '#E7ECED',
+          primaryBorderColor: '#414D51', lineColor: '#9AA6AB', secondaryColor: '#223546',
+          tertiaryColor: '#3B2F1C', secondaryBorderColor: '#2E5A87', tertiaryBorderColor: '#B4711F' }
+      : { background: '#FFFFFF', primaryColor: '#E9EDEE', primaryTextColor: '#171B1D',
+          primaryBorderColor: '#A9B4B8', lineColor: '#56636A', secondaryColor: '#DCE6EE',
+          tertiaryColor: '#F1E3CE', secondaryBorderColor: '#2E5A87', tertiaryBorderColor: '#B4711F' };
+    palette.fontFamily = 'ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace';
+    window.mermaid.initialize({ startOnLoad: true, theme: 'base', themeVariables: palette, securityLevel: 'loose' });
+  })();
+</script>
+</body>
+</html>

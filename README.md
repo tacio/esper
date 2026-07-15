@@ -1,5 +1,13 @@
 # Esper: Neuro-Symbolic Reasoning Engine
 
+## Learn
+
+New to the project? [`docs/course/`](docs/course/index.html) is a self-contained, undergrad-level
+course — the Nested Learning/HOPE theory, Evolution Strategies, the core architecture, the
+emergent memory zoo, the Vision-B open-endedness ladder, and the current cross-world-transfer
+frontier, with diagrams throughout. Open `docs/course/index.html` directly in a browser, or serve
+it via GitHub Pages.
+
 ## Architecture
 Esper is a bare-metal, high-performance Neuro-Symbolic Reasoning Engine designed specifically for logical deduction and pattern recognition (e.g., ARC-AGI).
 
