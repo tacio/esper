@@ -3112,3 +3112,218 @@ same-run unweighted fit) means it cannot drift into a lucky pass the way an abso
 T-POC-2 therefore closes with a booked STOP and a landed asset: the rung's hypothesis is not
 refuted (only *one-step-fitted* imagination is), the identity basin that blocked it is gone, and
 B-POC-3 carries a measured, non-invasive proof of the objective fix that removed it.
+
+---
+
+## 2026-07-16 — Route A begins: the mechanism lands, then a landscape puzzle
+
+**Implementation.** Built the multi-step rollout fit per the pre-registered plan
+(`~/.claude/plans/linear-marinating-scroll.md`): `WMRolloutCase`/`WMRolloutDomain`/
+`WMRolloutMemory` (`world_model.mojo`) — K=8 ticks of `dream_wm_step` + `dream_commit`,
+autoregressive in the grid channel, avatar trajectory held to ground truth (isolates the
+diagnosed grid-model defect from the separately-fit pose model), zero RNG draws inside
+`apply` (it runs under `parallelize`, where the global RNG isn't thread-safe — ruled out
+classic stochastic scheduled-sampling on that basis). `wm_rollout_cases` slices K-tick
+windows straight out of `collect_transitions`'s existing flat per-episode list, no new
+collection code. `rollout_accuracy_curve`/`dream_grid_rollout` — new, since nothing
+before this measured accuracy as a function of TICK under autoregression; it rolls a
+grid forward exactly like the real dream's grid channel and scores changed-cell accuracy
+per tick against `held_out_score`'s own identity-resistant definition. `fit_wm_restarts`
+is reused verbatim as a warm start (curriculum, not a cold restart into the harder K-step
+landscape — same reasoning that made B3/B4 land) before a new K-step fine-tune stage.
+Relocated `dream_commit` from `adapt.mojo` into `world_model.mojo` (it's paired with
+`dream_wm_step`, which `WMRolloutMemory.apply` now also calls) — pure housekeeping, no
+behaviour change. All of this compiled and ran mechanically correct on the first
+end-to-end probe (16 windows from 128 demos at K=8/ep_len=64, exactly as predicted).
+
+**DISCOVERY — the fine-tune stage's first schedule was a dud, and the reason took four
+probes to pin down.** The placeholder single-stage schedule (sigma 0.05→0.01, matching
+nothing in particular) produced **bit-identical** weights before and after fitting —
+not just unchanged downstream accuracy, unchanged to the last printed digit. Ran it down
+methodically rather than guessing:
+
+1. **Weight-delta check** (fast, no held-out scoring): weights DID move (L2 delta
+   ~3e-4, max |Δ| ~2.4e-3) but the continuous K-step fitness was bit-identical
+   (-1.8186365 both before and after) — ruling out "the update never fired" and
+   pointing at "the gradient direction is real noise, not signal."
+2. **Raw fitness-delta trace** (20 raw `evolve_fast_weights` calls at sigma=0.3,
+   printing the undisplayed digits via a ×1e6 scale): fitness DOES move, but by
+   ~2e-6 total over 20 iterations before flattening — a real but minuscule gradient,
+   consistent with the K-step objective already sitting very close to a local optimum
+   *for this specific batch*, not a hard zero.
+3. **Wide-sigma stress test** (sigma=1.0, unannealed, 30 iterations): fitness got
+   MEASURABLY WORSE (-1.8186 → -1.9249 at iteration 9) before partially recovering —
+   proof the landscape isn't flat everywhere, just that an unannealed wide step
+   overshoots into worse regions rather than finding a clean improving direction
+   (the exact ES failure mode M9's "moderate β, not small or huge" lesson and M7's
+   widen-then-anneal fix both already named).
+4. **Moderate two-stage anneal** (sigma 0.15→0.04 then 0.03→0.01, 700 iters total, the
+   textbook "wide explore, narrow settle" recipe every other `fit_operator` call in
+   this codebase uses): STILL bit-identical on the *rounded* `mean_curve` metric, train
+   and held-out both — even though the continuous fitness is known (probe 2) to inch
+   forward at comparable sigma. The discrete round()-based accuracy metric is simply
+   coarser than the tiny continuous gains this batch has left to give.
+
+**Working diagnosis (not yet fully confirmed): the K=8 training windows are drawn from
+literally the SAME 128 demos the one-step warm start already fit to near-saturation**
+(changed 0.93, overall 0.987 on this batch) — so there is very little one-step residual
+left within these specific transitions for a K-step objective built from a 16-window
+slice of them to exploit. Two live hypotheses, not yet distinguished: (a) the training
+batch is simply too thin/redundant (16 non-overlapping windows) for the ES to find
+reliable signal in the noise floor, or (b) K=8 ticks isn't a long enough horizon for the
+model's own autoregressive drift to diverge meaningfully from the training distribution
+within the window itself — the real compounding (per the original STOP) only becomes
+severe well past 8 ticks. Currently probing (b)'s cheaper cousin first: more/overlapping
+windows via `wm_rollout_cases`'s existing `stride` lever (free, no new real ticks) and a
+larger `WM_TRAIN`, to rule out (a) before reaching for a larger `WM_ROLLOUT_K` (a
+compile-time constant, costlier to iterate on). Continuing.
+
+**RESOLVED — hypothesis (a) refuted more sharply than expected, then a methodology bug
+of my own surfaced the real answer.** More data (256 demos, stride=4, 60 windows) did
+NOT help — it made things WORSE: the annealed fine-tune produced an EXACT bit-identical
+fitness (delta 0.0, not just small) before vs after, a stronger null than the thin
+16-window batch's tiny-but-nonzero ~2e-6 movement. That result nearly got booked as
+"more data doesn't fix it either — the mechanism doesn't work," which would have been
+wrong, for a reason worth recording: **the probe script also collected a held-out batch
+via `collect_transitions` BEFORE calling `fit_wm_restarts`, shifting the shared RNG
+stream position relative to a twin script that didn't** — literally the same fragility
+class as B-POC-3's gate-3 collapse (2026-07-15), independently rediscovered in my own
+diagnostic harness a day later. The two "identical" probes landed the one-step warm
+start at completely different points (`f0` -0.20 vs -2.31 — an order of magnitude
+apart), and the -2.31 point happened to be one where the K-step landscape genuinely is
+near-flat at moderate sigma. An apples-to-apples pair (same script, same RNG position,
+one calling `evolve_fast_weights` directly and one wrapping it in `fit_operator`) at the
+-0.20 starting point showed clean, real, substantial movement both ways: a direct
+10-iteration raw loop moved weight L2 by 0.14 (was ~0 at the flat point), and
+`fit_operator` over 100 annealed iterations improved continuous fitness by +0.0012 (was
+exactly 0.0 at the flat point) — **the mechanism works; the earlier nulls were sampling
+a locally-flat point in weight space, not a structurally broken objective.**
+
+Lesson promoted alongside the existing "a margin must survive a different draw"
+principle: it applies to *diagnostic* scripts too, not just gated tests — two probes
+that "should" be identical because they share a `seed(0)` and look like they draw the
+same random numbers can silently diverge if ANY extra RNG-consuming call (even one
+that looks unrelated, like collecting an unused validation batch) is added before a fit.
+Future landscape probes should keep a fixed prefix of RNG-consuming calls across variants
+being compared, or note explicitly when they don't.
+
+**Schedule, pinned from the working recipe (not the failed narrow one).** Two annealed
+stages (`WM_ROLLOUT_ITERS_1/2`, `WM_ROLLOUT_ALPHA0/1_1/2`, `WM_ROLLOUT_SIGMA0/1_1/2` in
+`adapt.mojo`): stage 1 sigma 0.15→0.06 (250 iters), stage 2 sigma 0.05→0.02 (150 iters)
+— narrower than `fit_wm_restarts`'s own cold-start 0.3 (this is a fine-tune off an
+already-good point, not a cold search) but well clear of the 0.05 dead zone that
+produced zero movement. `WM_ROLLOUT_STRIDE=4` (overlapping windows, the free lever) kept
+as the default — it didn't cause the earlier null (RNG position did), but more windows
+at zero data cost is still a reasonable hedge and doesn't cost anything to keep.
+`tests/test_wm_rollout.mojo`'s directional gate (rollout ≥ one-step on held-out,
+mechanism must not regress) PASSES at production scale (`WM_TRAIN=128`): held-out
+`overall`/`changed` genuinely differ between arms (0.9886/0.9271 vs 0.9910/0.875 — the
+fine-tune ran and changed the weights, not a safety-net revert to identical values), but
+`mean rollout-acc(64)` reads bit-identical (0.2994792 both) — the underlying continuous
+movement is real (confirmed above) but too small, on this one 64-transition held-out
+episode, to flip any cell's ROUNDED classification. Honest reading: the cheap probe's
+job was to catch a clear mechanism FAILURE before spending `test_dream_rank.mojo`'s
+budget — it did not (no regression, real continuous movement independently confirmed),
+which per the plan is the signal to proceed to the real gate, not to keep tuning a
+proxy metric that may simply be too coarse to resolve a modest gain at this scale.
+Proceeding to `test_dream_rank.mojo`.
+
+**The real gate, measured (seed 0) — a genuine, striking, but MIXED result, not a clean
+GO.** Swapped `fit_wm_restarts` -> `fit_wm_rollout_restarts` in `fit_dream_models`
+(minimal change; gates left at their ORIGINAL STOP-asserting values to read the raw
+numbers first, per plan discipline — bars are pinned from measurement, not guessed).
+
+```
+                    tau        top-1 regret     (original STOP, for comparison)
+calibration (W1)    0.608      19.4x            was 5.6x  (regret got WORSE here)
+columns              0.600      1.44x            was tau 0.467 / regret 3.93x  <- big win
+room                  0.542      4.64x            was tau 0.55  / regret 1.97-2.17x <- got WORSE
+identity-grid (cols) 0.658      1.07x            (context, not gated)
+scrambled control    0.042      32.4x            (harness-integrity: reads ~nothing, good)
+```
+
+**Columns clears BOTH pre-registered bars with real margin** (tau 0.5 bar, regret 2.0x
+bar) — regret dropped from 3.93x to 1.44x, a decisive, non-hairline pass. This is exactly
+the predicted mechanism working. **Room got WORSE** (regret 1.97-2.17x -> 4.64x) and
+**calibration (W1) got MUCH worse** (regret 5.6x -> 19.4x) — the opposite of columns.
+GO requires BOTH walls worlds; room's regret failing by more than 2x the bar means this
+is NOT a GO under the pre-registered condition.
+
+**A confound the run itself caught, before I had to go looking for it: the room-world
+POSE model's own long-standing validity gate tripped** (`blocked-move` 0.545 against
+its bar of 0.55 — MIN_POSE_BLOCKED, a check that predates Route A and is unrelated to
+the WM fit). `fit_pose_restarts`/`fit_write_restarts` are untouched by Route A, but they
+run AFTER the WM fit in the same `seed(0)` stream, and `fit_wm_rollout_restarts` draws
+far more RNG (an extra 400-iteration K-step stage) than the `fit_wm_restarts` it
+replaced — shifting the stream position the pose fit lands at. This is the EXACT
+fragility class the 2026-07-15 B-POC-3 finding and this same morning's own probe
+methodology bug both already surfaced: "a deterministic seed hides fragility rather than
+removing it." Room's pose model has always been marginal (historically 0.6-1.0 across
+runs per the original header comment) — this run's draw landed it just under the bar,
+plausibly BECAUSE the WM fit upstream got heavier, not because anything about room's
+dynamics changed. This means room's regret number (4.64x) is confounded: part of it may
+be a genuinely worse dream (Route A not helping, or hurting, in room specifically) and
+part may be a coincidentally worse POSE draw this run, and the two are not separable
+from a single seed-0 run.
+
+**Assessment: PARTIAL, not GO — booking honestly, not chasing further without a
+check-in.** The finding is now sharper than before Route A, in a useful way: the fix
+clearly CAN work (columns is a decisive, non-cherry-picked win, tau and regret both
+moved cleanly in the right direction) — the mechanism is real, not illusory. But it does
+not (yet, at this K=8/this schedule/this seed) transfer uniformly across worlds, and
+room's own gate integrity was compromised by an RNG-stream side effect of the very
+change being tested. Per the plan's own decision tree and the project's discipline
+around not over-iterating on a single noisy read: **the gate stays at its ORIGINAL
+values (not flipped to GO)**, this result is booked as the honest partial it is, and
+further tuning (a second seed, isolating the RNG-stream shift, or deciding whether
+room's regression is real or an artifact) is a decision for the next session/user
+check-in rather than more autonomous iteration — this rung has already consumed a full
+day's investigation budget. `tests/test_dream_rank.mojo`'s code changes (the fit swap,
+the new rollout-drift print) are left in place since they are strictly additive
+measurement, not a relaxed gate; the test's assertions are UNCHANGED from before this
+session (still correctly raising on the pose-model validity floor, which is exactly what
+it is supposed to do when a model fails validity — this is not a broken test, it is the
+test doing its job on a genuinely marginal draw).
+
+**A second seed (seed 1, manual/offline check per the `test_cross_world.mojo`
+precedent — the committed test itself stays `seed(0)`), at the user's explicit
+direction: the gate discipline is AND across seeds, not OR — a world only counts as
+fixed if it clears the bar at EVERY draw checked, not just one.** Result, compared
+directly:
+
+```
+                columns tau/regret        room tau/regret
+seed(0)         0.60 / 1.44x  (PASS)      0.54 / 4.64x  (FAIL)
+seed(1)         0.70 / 1.05x  (PASS)      0.60 / 2.39x  (FAIL)
+```
+
+**This resolves the confound cleanly and sharpens the finding.** Room's seed(0)
+pose-model validity trip (blocked-move 0.545, just under the 0.55 floor) did NOT
+recur at seed(1) (0.857, comfortably healthy) — confirming that specific failure was
+exactly the suspected RNG-stream-position artifact, not a real effect. But room's
+REGRET still misses the 2.0x bar at seed(1) too (2.39x — margin shrank a lot from
+4.64x, but did not cross), so the artifact explains the validity-check trip, not the
+regret failure. **Columns passes decisively at both seeds (1.44x, 1.05x); room fails
+at both seeds (4.64x, 2.39x).** Under the AND rule this is unambiguous, not a coin
+flip: Route A robustly fixes columns and robustly does not (yet) fix room.
+
+**A plausible, mechanistically-grounded reason for the split, on record already in
+this file** (`world_model.mojo`'s own comments, from the original weighted-objective
+work): room has the LOWEST transition-event density of the three worlds (0.0027 vs
+columns' 0.0053 vs world 1's 0.0075) — the sparsest per-tick prediction-error signal
+of any world for a fit to learn from, one-step or multi-step. A K-step fine-tune needs
+real per-tick error to chase; it is a coherent hypothesis (not yet tested) that this is
+exactly why the fix lands strongly where signal is denser (columns) and weakly where
+it is thinnest (room), rather than a random draw-dependent fluke.
+
+**Status: PARTIAL, held at STOP, awaiting direction.** Not flipping the gate (columns
+alone is not sufficient; GO needs both worlds, confirmed across seeds per the user's
+own rule). `seed(1)` reverted back to the committed `seed(0)`. Live options for the
+next step, not yet decided: (a) a world-specific lever for room (more room-world
+transitions, since sparse-signal worlds may just need more data to reach the same
+per-tick error density budget as columns; or push `WM_ROLLOUT_K` higher there
+specifically); (b) accept the partial, book columns as a real if incomplete win, and
+move to Route C as planned; (c) investigate whether isolating the RNG-stream shift
+(giving the rollout stage its own substream so it stops perturbing the downstream
+pose/write fits) changes anything material, now that it's confirmed NOT to explain
+room's regret gap on its own.

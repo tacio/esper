@@ -25,9 +25,12 @@ from map_elites import EliteMap, me_emitter_run
 from world_model import (
     SandboxState,
     WorldModelMemory,
+    WMRolloutMemory,
+    WM_ROLLOUT_K,
     WM_DIM,
     collect_transitions,
     held_out_score,
+    rollout_accuracy_curve,
 )
 from transfer import (
     gen_family_s,
@@ -48,6 +51,7 @@ from adapt import (
     pose_held_out,
     dream_score,
     fit_wm_restarts,
+    fit_wm_rollout_restarts,
     fit_pose_restarts,
     fit_write_restarts,
     WeightedWMMemory,
@@ -193,6 +197,7 @@ def fit_dream_models(
     pose_w: UnsafePointer[Float32, MutAnyOrigin],
     write_w: UnsafePointer[Float32, MutAnyOrigin],
     mut wm_ws: ESWorkspace[WeightedWMMemory],
+    mut wm_rollout_ws: ESWorkspace[WMRolloutMemory],
     mut pose_ws: ESWorkspace[PoseStepMemory],
     mut write_ws: ESWorkspace[WriteStepMemory],
     mut wm_overall: Float32,
@@ -200,6 +205,7 @@ def fit_dream_models(
     mut move_acc: Float32,
     mut blocked_acc: Float32,
     mut write_acc: Float32,
+    mut rollout_acc64: Float32,
 ) -> Int:
     var wm_train = List[ExamplePair[SandboxState]]()
     collect_transitions(task, WM_TRAIN, EP_LEN, wm_train)
@@ -210,8 +216,26 @@ def fit_dream_models(
     var pose_hold = List[ExamplePair[SandboxState]]()
     collect_transitions(task, POSE_HOLD, EP_LEN, pose_hold)
 
-    fit_wm_restarts(wm_w, wm_ws, wm_train, WM_N)
+    # Route A: the world model is fit over K ticks of its OWN rollout (a
+    # warm-started fine-tune on top of the proven one-step fit), not one
+    # ground-truth step — see adapt.fit_wm_rollout_restarts and JOURNAL
+    # 2026-07-16. held_out_score stays the UNCHANGED one-step ruler, so
+    # wm_overall/wm_changed stay directly comparable to every prior number.
+    fit_wm_rollout_restarts(
+        wm_w, wm_ws, wm_rollout_ws, wm_train, EP_LEN, WM_N, WM_N
+    )
     held_out_score(wm_w, wm_hold, wm_overall, wm_changed)
+
+    # NEW measurement (not gated): 64-tick held-out rollout accuracy — shows
+    # directly whether the fit actually reduced autoregressive drift,
+    # independent of whether tau/regret clear their bars below.
+    var curve = alloc[Float32](EP_LEN)
+    rollout_accuracy_curve(wm_w, wm_hold, EP_LEN, curve)
+    var racc = Float32(0.0)
+    for t in range(EP_LEN):
+        racc += curve[t]
+    rollout_acc64 = racc / Float32(EP_LEN)
+    curve.free()
 
     var pose_tc = agent_cases(pose_train)
     var pose_hc = agent_cases(pose_hold)
@@ -360,6 +384,9 @@ def main() raises:
     print("  repertoire:", emap.count, "elites (", build_rollouts, "rollouts)")
 
     var wm_ws = ESWorkspace[WeightedWMMemory](SB_CELLS, WM_N)
+    var wm_rollout_ws = ESWorkspace[WMRolloutMemory](
+        WM_ROLLOUT_K * SB_CELLS, WM_N
+    )
     var pose_ws = ESWorkspace[PoseStepMemory](POSE_OUT, POSE_N)
     var write_ws = ESWorkspace[WriteStepMemory](POSE_OUT, POSE_N)
     var wm_w = alloc[Float32](WM_DIM)
@@ -370,6 +397,7 @@ def main() raises:
     var mv = Float32(0.0)
     var bl = Float32(0.0)
     var wr = Float32(0.0)
+    var racc = Float32(0.0)
     var dream_ticks = 0
 
     # ---------- Calibration: world 1, where the WM is known-fittable ----------
@@ -379,6 +407,7 @@ def main() raises:
         pose_w,
         write_w,
         wm_ws,
+        wm_rollout_ws,
         pose_ws,
         write_ws,
         wm_o,
@@ -386,7 +415,9 @@ def main() raises:
         mv,
         bl,
         wr,
+        racc,
     )
+    print("  W1 rollout-drift (64-tick held-out mean changed-cell acc):", racc)
     print(
         "  W1 models: wm overall",
         wm_o,
@@ -457,6 +488,7 @@ def main() raises:
         pose_w,
         write_w,
         wm_ws,
+        wm_rollout_ws,
         pose_ws,
         write_ws,
         wm_o,
@@ -464,6 +496,11 @@ def main() raises:
         mv,
         bl,
         wr,
+        racc,
+    )
+    print(
+        "  columns rollout-drift (64-tick held-out mean changed-cell acc):",
+        racc,
     )
     print(
         "  columns models: wm overall",
@@ -497,6 +534,7 @@ def main() raises:
         pose_b,
         write_b,
         wm_ws,
+        wm_rollout_ws,
         pose_ws,
         write_ws,
         wm_o,
@@ -504,6 +542,10 @@ def main() raises:
         mv,
         bl,
         wr,
+        racc,
+    )
+    print(
+        "  room rollout-drift (64-tick held-out mean changed-cell acc):", racc
     )
     print(
         "  room models: wm overall",

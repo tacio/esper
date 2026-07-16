@@ -518,6 +518,25 @@ def dream_wm_step(
             )
 
 
+# Commit a predicted grid back into a VALID imagined grid: round to the
+# nearest colour and clamp to [wall, 9] — the discretization held_out_score
+# scores through, applied so autoregressive error cannot drift off-lattice.
+# Lives next to dream_wm_step (always paired with it — both the single-tick
+# dream_rollout and the multi-tick WMRolloutMemory.apply below call the two
+# back to back); adapt.mojo imports it rather than redefining it.
+def dream_commit(
+    pred: UnsafePointer[Float32, MutAnyOrigin],
+    grid: UnsafePointer[Float32, MutAnyOrigin],
+):
+    for i in range(SB_CELLS):
+        var v = round(pred[i])
+        if v < -1.0:
+            v = -1.0
+        if v > 9.0:
+            v = 9.0
+        grid[i] = v
+
+
 # ==========================================
 # WeightedWMMemory — the same world model, fit against the identity basin
 # ==========================================
@@ -687,6 +706,286 @@ struct WeightedWMMemory(Memory):
             inp.grav_dir,
             dst,
         )
+
+
+# ==========================================
+# WMRolloutMemory — fit the SAME model against K ticks of its OWN rollout
+# ==========================================
+# T-POC-2 (JOURNAL 2026-07-15) diagnosed a precise objective mismatch:
+# WeightedWMMemory above is fit on ONE-STEP prediction, but dream_rollout
+# (adapt.mojo) consumes it AUTOREGRESSIVELY for SB_T=64 ticks. At ~99%
+# one-step accuracy the model still misplaces ~1% of cells per tick, and
+# that compounds — measured monotonic the WRONG way (better one-step
+# accuracy -> worse 64-tick top-1 regret). ROADMAP Route A: fit over K ticks
+# of the model's OWN rollout instead of one ground-truth step, so the ES
+# sees the compounding error directly rather than inferring it.
+#
+# Design choices, both forced by constraints already paid for elsewhere in
+# this codebase (see the Route A plan):
+#   * NO scheduled-sampling coin flip. apply() runs inside
+#     evolve_fast_weights's parallelize[sample] closure (esper_evolution.mojo)
+#     where the global RNG is NOT thread-safe (that is exactly why epsilons
+#     are pre-drawn serially there) — any per-tick stochastic ground-truth/
+#     own-prediction mix would race it. Going fully autoregressive from tick
+#     0 is also the MORE faithful choice: dream_rollout itself never
+#     re-injects ground truth mid-rollout either.
+#   * Avatar trajectory (r/c/brush/action) is held to the RECORDED
+#     ground-truth sequence, not jointly rolled with the separately-fit pose
+#     model. Jointly rolling grid+pose would conflate the grid model's
+#     diagnosed defect with the pose model's own (already-adequate, not
+#     implicated in the STOP) compounding, and reintroduce the
+#     fit-ordering chicken-and-egg this codebase already avoided by fitting
+#     pose/write as separate factors. This isolates exactly the diagnosed
+#     cause; if the full dream (which DOES use the pose model's own
+#     predicted avatar) still misses after this fix, that is a clean,
+#     separately-actionable finding, not a confound.
+comptime WM_ROLLOUT_K = 8  # must divide EP_LEN cleanly (64 / 8 = 8 windows/episode)
+
+
+# One K-tick window, carrying BOTH sides like WMCase: `apply` reads grid0 +
+# the ground-truth avatar trajectory, `distance` reads post/wts (both
+# concatenated over K ticks, one weight-computation-per-tick, one flat
+# wsum). Heap-owning like WMCase; the trajectory fields are InlineArrays
+# (value types, no separate alloc).
+struct WMRolloutCase(Movable):
+    var grid0: UnsafePointer[Float32, MutAnyOrigin]  # SB_CELLS
+    var post: UnsafePointer[Float32, MutAnyOrigin]  # WM_ROLLOUT_K * SB_CELLS
+    var wts: UnsafePointer[Float32, MutAnyOrigin]  # WM_ROLLOUT_K * SB_CELLS
+    var wsum: Float32
+    var r: InlineArray[Int, WM_ROLLOUT_K]
+    var c: InlineArray[Int, WM_ROLLOUT_K]
+    var brush: InlineArray[Int, WM_ROLLOUT_K]
+    var action: InlineArray[Int, WM_ROLLOUT_K]
+    var grav_dir: Int
+
+    def __init__(out self):
+        self.grid0 = alloc[Float32](SB_CELLS)
+        self.post = alloc[Float32](WM_ROLLOUT_K * SB_CELLS)
+        self.wts = alloc[Float32](WM_ROLLOUT_K * SB_CELLS)
+        memset_zero(self.grid0, SB_CELLS)
+        memset_zero(self.post, WM_ROLLOUT_K * SB_CELLS)
+        memset_zero(self.wts, WM_ROLLOUT_K * SB_CELLS)
+        self.wsum = 0.0
+        self.r = InlineArray[Int, WM_ROLLOUT_K](fill=0)
+        self.c = InlineArray[Int, WM_ROLLOUT_K](fill=0)
+        self.brush = InlineArray[Int, WM_ROLLOUT_K](fill=0)
+        self.action = InlineArray[Int, WM_ROLLOUT_K](fill=0)
+        self.grav_dir = 0
+
+    def __del__(deinit self):
+        self.grid0.free()
+        self.post.free()
+        self.wts.free()
+
+
+# Build one window starting at demos[start] (K consecutive, same-episode
+# transitions — the caller guarantees this). Per-tick weights mirror
+# make_wm_case's changed-cell rule exactly, just concatenated over K ticks
+# into one flat buffer with a single combined wsum.
+def make_wm_rollout_case(
+    demos: List[ExamplePair[SandboxState]], start: Int
+) -> WMRolloutCase:
+    var wc = WMRolloutCase()
+    memcpy(dest=wc.grid0, src=demos[start].input_grid.grid, count=SB_CELLS)
+    var s = Float32(0.0)
+    for k in range(WM_ROLLOUT_K):
+        ref pre = demos[start + k].input_grid
+        ref post = demos[start + k].output_grid
+        memcpy(dest=wc.post + k * SB_CELLS, src=post.grid, count=SB_CELLS)
+        for i in range(SB_CELLS):
+            var w = WM_CH_WEIGHT if round(pre.grid[i]) != round(
+                post.grid[i]
+            ) else Float32(1.0)
+            wc.wts[k * SB_CELLS + i] = w
+            s += w
+        wc.r[k] = pre.r
+        wc.c[k] = pre.c
+        wc.brush[k] = pre.brush
+        wc.action[k] = pre.action
+    wc.wsum = s
+    wc.grav_dir = demos[start].input_grid.grav_dir
+    return wc^
+
+
+# Slice non-overlapping (default) K-tick windows out of collect_transitions's
+# flat, in-order, per-episode list — no new collection code needed, since a
+# fresh episode starts every `ep_len` ticks. `stride < WM_ROLLOUT_K` gives
+# overlapping (more, correlated) windows for free — no new real ticks — the
+# first lever to pull if the window count is too thin, before raising
+# WM_TRAIN or K itself.
+def wm_rollout_cases(
+    demos: List[ExamplePair[SandboxState]],
+    ep_len: Int,
+    stride: Int = WM_ROLLOUT_K,
+) -> List[ExamplePair[WMRolloutCase]]:
+    var out = List[ExamplePair[WMRolloutCase]]()
+    var n = len(demos)
+    var i = 0
+    while i < n:
+        var pos = i % ep_len
+        if pos + WM_ROLLOUT_K <= ep_len and i + WM_ROLLOUT_K <= n:
+            var a = make_wm_rollout_case(demos, i)
+            var b = make_wm_rollout_case(demos, i)
+            out.append(ExamplePair[WMRolloutCase](a^, b^))
+            i += stride
+        else:
+            i += ep_len - pos
+    return out^
+
+
+struct WMRolloutDomain(Domain):
+    comptime Example = WMRolloutCase
+
+    @staticmethod
+    def distance(
+        pred: UnsafePointer[Float32, MutAnyOrigin],
+        target: WMRolloutCase,
+        n: Int,
+    ) -> Float32:
+        # Byte-identical SIMD shape to WeightedWMDomain.distance, just over
+        # n = WM_ROLLOUT_K * SB_CELLS (K ticks concatenated) instead of one.
+        var acc = Float32(0.0)
+        for i in range(0, n - nelts + 1, nelts):
+            var d = pred.load[width=nelts](i) - target.post.load[width=nelts](i)
+            acc += (target.wts.load[width=nelts](i) * d * d).reduce_add()
+        var rem = n % nelts
+        for i in range(n - rem, n):
+            var d = pred[i] - target.post[i]
+            acc += target.wts[i] * d * d
+        return -acc / target.wsum
+
+    @staticmethod
+    def score(
+        pred: UnsafePointer[Float32, MutAnyOrigin],
+        target: WMRolloutCase,
+        n: Int,
+    ) -> Float32:
+        var hits = 0
+        for i in range(n):
+            if round(pred[i]) == round(target.post[i]):
+                hits += 1
+        return Float32(hits) / Float32(n if n > 0 else 1)
+
+    @staticmethod
+    def capacity(ex: WMRolloutCase) -> Int:
+        return WM_ROLLOUT_K * SB_CELLS
+
+
+struct WMRolloutMemory(Memory):
+    comptime Dom = WMRolloutDomain
+
+    @staticmethod
+    def param_dim() -> Int:
+        return WM_DIM
+
+    @staticmethod
+    def seed(weights: UnsafePointer[Float32, MutAnyOrigin]):
+        WorldModelMemory.seed(weights)
+
+    @staticmethod
+    def fill_scale(scale: UnsafePointer[Float32, MutAnyOrigin], n: Int):
+        for i in range(n):
+            scale[i] = 1.0
+
+    @staticmethod
+    def apply(
+        weights: UnsafePointer[Float32, MutAnyOrigin],
+        inp: WMRolloutCase,
+        dst: UnsafePointer[Float32, MutAnyOrigin],
+    ):
+        # Stack scratch only (no hot-loop allocation): K ticks of
+        # dream_wm_step + dream_commit, autoregressive in the grid channel,
+        # ground-truth avatar trajectory, zero RNG draws.
+        var grid_buf = InlineArray[Float32, SB_CELLS](fill=0.0)
+        var grid = grid_buf.unsafe_ptr()
+        memcpy(dest=grid, src=inp.grid0, count=SB_CELLS)
+        for k in range(WM_ROLLOUT_K):
+            var tick_dst = dst + k * SB_CELLS
+            dream_wm_step(
+                weights,
+                grid,
+                inp.r[k],
+                inp.c[k],
+                inp.brush[k],
+                inp.action[k],
+                inp.grav_dir,
+                tick_dst,
+            )
+            dream_commit(tick_dst, grid)
+
+
+# ==========================================
+# Rollout-drift measurement (the mechanism-probe metric)
+# ==========================================
+# held_out_score is one-step only; nothing before Route A measures accuracy
+# as a function of TICK under autoregression. dream_grid_rollout rolls the
+# grid forward exactly like dream_rollout's grid channel (own committed
+# prediction feeds the next tick; ground-truth avatar trajectory — the same
+# scoping as WMRolloutMemory.apply above), scoring changed-cell accuracy at
+# EVERY tick against held_out_score's identity-resistant definition (cells
+# the REAL transition changed, per the ground-truth pre/post pair — not the
+# model's drifted state). This is what makes it possible to see WHERE a fit
+# stops helping the rollout, not just whether the final tick did.
+def dream_grid_rollout(
+    weights: UnsafePointer[Float32, MutAnyOrigin],
+    demos: List[ExamplePair[SandboxState]],
+    start: Int,
+    ep_len: Int,
+    acc_at: UnsafePointer[Float32, MutAnyOrigin],  # out: length ep_len
+):
+    var grid = alloc[Float32](SB_CELLS)
+    memcpy(dest=grid, src=demos[start].input_grid.grid, count=SB_CELLS)
+    var pred = alloc[Float32](SB_CELLS)
+    for t in range(ep_len):
+        ref pre = demos[start + t].input_grid
+        ref post = demos[start + t].output_grid
+        dream_wm_step(
+            weights,
+            grid,
+            pre.r,
+            pre.c,
+            pre.brush,
+            pre.action,
+            pre.grav_dir,
+            pred,
+        )
+        var ch_cells = 0
+        var ch_hits = 0
+        for i in range(SB_CELLS):
+            var p = round(pred[i])
+            var tgt = round(post.grid[i])
+            if round(pre.grid[i]) != tgt:
+                ch_cells += 1
+                if p == tgt:
+                    ch_hits += 1
+        acc_at[t] = Float32(ch_hits) / Float32(ch_cells if ch_cells > 0 else 1)
+        dream_commit(pred, grid)
+    pred.free()
+    grid.free()
+
+
+# Averages dream_grid_rollout's per-tick curve over every whole episode in
+# `demos` (a flat, in-order, ep_len-episoded list — collect_transitions's own
+# layout, no slicing/copy needed since SandboxState isn't Copyable).
+def rollout_accuracy_curve(
+    weights: UnsafePointer[Float32, MutAnyOrigin],
+    demos: List[ExamplePair[SandboxState]],
+    ep_len: Int,
+    acc_at: UnsafePointer[Float32, MutAnyOrigin],  # out: length ep_len
+):
+    memset_zero(acc_at, ep_len)
+    var num_ep = len(demos) // ep_len
+    if num_ep == 0:
+        return
+    var tmp = alloc[Float32](ep_len)
+    for e in range(num_ep):
+        dream_grid_rollout(weights, demos, e * ep_len, ep_len, tmp)
+        for t in range(ep_len):
+            acc_at[t] += tmp[t]
+    var inv = Float32(1.0) / Float32(num_ep)
+    for t in range(ep_len):
+        acc_at[t] *= inv
+    tmp.free()
 
 
 # ==========================================

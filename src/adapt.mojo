@@ -76,8 +76,13 @@ from world_model import (
     WMCase,
     wm_cases,
     dream_wm_step,
+    dream_commit,
     WM_DIM,
     held_out_score,
+    WMRolloutMemory,
+    wm_rollout_cases,
+    rollout_accuracy_curve,
+    WM_ROLLOUT_K,
 )
 from sandbox import SandboxPolicyMemory
 from map_elites import EliteMap
@@ -691,6 +696,131 @@ def fit_wm_restarts(
     best.free()
 
 
+# ==========================================
+# Route A — fit the SAME world model over K ticks of its OWN rollout
+# ==========================================
+# fit_wm_restarts above is a one-step fit; the STOP that ended T-POC-2
+# increment 0 (test_dream_rank, JOURNAL 2026-07-15) diagnosed that as the
+# wrong objective for a 64-tick autoregressive dream. This adds a rollout
+# fine-tune stage on top of it via WMRolloutMemory (world_model.mojo).
+#
+# Curriculum, not a cold restart: fit_wm_restarts already proved it escapes
+# the identity-collapse basin 9/9 restarts (its own header documents two
+# wrong diagnoses before that fix); the K-step objective is plausibly a
+# harder landscape (errors compound across ticks before the ES sees
+# gradient), so starting the rollout stage cold would repeat a risk this
+# codebase already paid to avoid. Warm-starting from the proven one-step fit
+# means the fine-tune only has to correct compounding, not rediscover the
+# dynamics.
+#
+# SCHEDULE, empirically pinned (2026-07-16 probes, not guessed): a single
+# NARROW stage (sigma 0.05->0.01) produced literally bit-identical weights
+# before/after — not just unmeasurable, an exact float32 match across 400+
+# iterations. Root-caused with a raw per-iteration fitness trace: the
+# continuous K-step objective DOES have a real gradient near the one-step
+# optimum, but it is tiny there (~1e-6/iter at sigma=0.3) — the one-step fit
+# already saturates most of what a small perturbation can find. An
+# unannealed WIDE sigma (1.0) made things measurably WORSE before partially
+# recovering (classic overshoot, not a clean ascent) rather than helping.
+# The schedule below (0.15 initial, annealed down, TWO stages like every
+# other fit_operator recipe in this codebase) is the smallest step that
+# reliably produced real, verified movement in a direct apples-to-apples
+# check (delta +0.0012 in continuous fitness over 100 iters, weight L2 up to
+# 0.14 in a raw evolve_fast_weights trace) — narrower than fit_wm_restarts's
+# own cold-start 0.3 (this is a FINE-TUNE off an already-good point, not a
+# cold search) but well clear of the 0.05 dead zone.
+comptime WM_ROLLOUT_ITERS_1 = 250
+comptime WM_ROLLOUT_ALPHA0_1 = Float32(0.12)
+comptime WM_ROLLOUT_ALPHA1_1 = Float32(0.05)
+comptime WM_ROLLOUT_SIGMA0_1 = Float32(0.15)
+comptime WM_ROLLOUT_SIGMA1_1 = Float32(0.06)
+comptime WM_ROLLOUT_ITERS_2 = 150
+comptime WM_ROLLOUT_ALPHA0_2 = Float32(0.04)
+comptime WM_ROLLOUT_ALPHA1_2 = Float32(0.01)
+comptime WM_ROLLOUT_SIGMA0_2 = Float32(0.05)
+comptime WM_ROLLOUT_SIGMA1_2 = Float32(0.02)
+comptime WM_ROLLOUT_N = 16
+# Overlapping windows (stride < K): free — no new real ticks — and the first
+# lever the plan named for a thin batch (WM_TRAIN=128/EP_LEN=64/K=8 gives
+# only 16 NON-overlapping windows). stride=4 roughly quadruples the window
+# count at zero data cost.
+comptime WM_ROLLOUT_STRIDE = 4
+
+
+def fit_wm_rollout_restarts(
+    w: UnsafePointer[Float32, MutAnyOrigin],
+    mut ws_1step: ESWorkspace[WeightedWMMemory],
+    mut ws_rollout: ESWorkspace[WMRolloutMemory],
+    demos: List[ExamplePair[SandboxState]],
+    ep_len: Int,
+    N1: Int,
+    N2: Int,
+):
+    # Stage 0: the proven one-step warm start, unchanged.
+    fit_wm_restarts(w, ws_1step, demos, N1)
+
+    var pre = alloc[Float32](WM_DIM)
+    memcpy(dest=pre, src=w, count=WM_DIM)
+
+    # Stage 1+2: the rollout fine-tune, from the warm start, wide-then-narrow.
+    var cases = wm_rollout_cases(demos, ep_len, WM_ROLLOUT_STRIDE)
+    var slow = alloc[Float32](WM_DIM)
+    memset_zero(slow, WM_DIM)
+    fit_operator[WMRolloutMemory](
+        w,
+        ws_rollout,
+        slow,
+        cases,
+        N2,
+        WM_ROLLOUT_ALPHA0_1,
+        WM_ROLLOUT_ALPHA1_1,
+        WM_ROLLOUT_SIGMA0_1,
+        WM_ROLLOUT_SIGMA1_1,
+        WM_ROLLOUT_ITERS_1,
+        0.0,
+    )
+    fit_operator[WMRolloutMemory](
+        w,
+        ws_rollout,
+        slow,
+        cases,
+        N2,
+        WM_ROLLOUT_ALPHA0_2,
+        WM_ROLLOUT_ALPHA1_2,
+        WM_ROLLOUT_SIGMA0_2,
+        WM_ROLLOUT_SIGMA1_2,
+        WM_ROLLOUT_ITERS_2,
+        0.0,
+    )
+
+    # Safety net: the fine-tune stage is new and uncalibrated — keep
+    # whichever of {pre, post-finetune} has the better TRAIN-batch rollout
+    # accuracy (mean changed-cell accuracy across the full-episode curve),
+    # so a bad draw of the new stage cannot net-regress the proven warm
+    # start. One extra rollout_accuracy_curve call, not a second ES fit —
+    # the appropriately-sized version of fit_wm_restarts's own
+    # best-by-product selection, scaled to this stage's actual risk.
+    var curve = alloc[Float32](ep_len)
+    rollout_accuracy_curve(pre, demos, ep_len, curve)
+    var pre_score = Float32(0.0)
+    for t in range(ep_len):
+        pre_score += curve[t]
+    pre_score = pre_score / Float32(ep_len)
+
+    rollout_accuracy_curve(w, demos, ep_len, curve)
+    var post_score = Float32(0.0)
+    for t in range(ep_len):
+        post_score += curve[t]
+    post_score = post_score / Float32(ep_len)
+
+    if pre_score > post_score:
+        memcpy(dest=w, src=pre, count=WM_DIM)
+
+    curve.free()
+    pre.free()
+    slow.free()
+
+
 def fit_pose_restarts(
     w: UnsafePointer[Float32, MutAnyOrigin],
     mut ws: ESWorkspace[PoseStepMemory],
@@ -801,22 +931,6 @@ def fit_write_restarts(
     memcpy(dest=w, src=best, count=POSE_DIM)
     slow.free()
     best.free()
-
-
-# Commit a predicted grid back into a VALID imagined grid: round to the
-# nearest colour and clamp to [wall, 9] — the discretization held_out_score
-# scores through, applied so autoregressive error cannot drift off-lattice.
-def dream_commit(
-    pred: UnsafePointer[Float32, MutAnyOrigin],
-    grid: UnsafePointer[Float32, MutAnyOrigin],
-):
-    for i in range(SB_CELLS):
-        var v = round(pred[i])
-        if v < -1.0:
-            v = -1.0
-        if v > 9.0:
-            v = 9.0
-        grid[i] = v
 
 
 # ==========================================
