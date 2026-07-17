@@ -630,3 +630,50 @@ the optimizer.
 finding); controls earn their cost (the scrambled tail proved no backdoor, the identity-grid arm
 refuted our own leading hypothesis); and one run is not a reading (tau swung 0.31–0.57 for a single
 world across runs at fixed bars; regret is a heavy-tailed mean of ratios — prefer medians).
+
+## 2026-07-16 addendum (post-measurement) — Routes A and C: multi-step imagination vs. Intelligent Trial and Error
+
+**Route A ran and confirmed the field's prescription is real but not free.** Fitting the world
+model over K=8 ticks of its own rollout (the PlaNet/Dreamer multi-step lesson, §above) fixed the
+measured defect exactly where per-tick error signal is dense: columns' top-1 regret 3.93× →
+1.44×/1.05× across two seeds, both pre-registered bars cleared. Where the signal is thinnest (room,
+transition-event density 0.0027 — the sparsest of the three worlds) it did NOT transfer at either
+seed (4.64×/2.39× vs the 2.0× bar). The literature's multi-step fix presumes there is per-tick
+residual to chase; at low enough event density the K-step objective has almost nothing to grade.
+The gate stays a booked negative; the room-specific data-scale lever is named but unscheduled.
+
+**Route C is Cully, Clune, Tarapore & Mouret 2015 ("Robots that can adapt like animals" —
+Intelligent Trial and Error), mapped one-to-one onto our stack, minus the surrogate.** ITE's
+ingredients: (1) a behaviour-performance map built offline by MAP-Elites = our B-POC-2/4 repertoire
+(`EliteMap`); (2) at deployment, when the world has changed (their broken leg = our walls
+topology), a handful of REAL trials on the robot, ranked by measured performance = our
+`pool_trials` (one deterministic 64-tick rollout per candidate — their Bayesian-optimization
+surrogate exists to handle noisy, expensive trials, and is degenerate at pool size 9 with
+noise-free rollouts, so we drop it); (3) commit to the best-performing behaviour = our few-shot fit
+seeded from the trial winner. Two honest divergences from ITE: we FIT from the winner rather than
+just executing it (ITE is pure selection; we are selection + tuning), and our budget accounting
+overcharges the trials (one full ES iteration dropped from the ITE arm's fit) so the comparison can
+never be won with compute.
+
+**What Route C measured (the durable findings).** (1) **The cross-world index is good but not
+best-of-pool**: in the home world the BC-nearest elite IS the true best of the 9-member pool
+(oracle probe gain exactly 1.0, zero picks changed — a clean control), while across the world gap
+the true best differs from nearest-1 for 67–83% of goals (median pre-fit headroom 1.7–6.2×). BC
+distance ranks the OLD world's behaviours; the new world's dynamics re-shuffle them, and only real
+contact with the new world sees the re-shuffle. (2) **A few real trials reclaim much of that gap,
+and the advantage SURVIVES the few-shot fit** — the first seed-quality effect that does: ITE beats
+cold 1.89–3.49× and a uniform pool pick 2.65–5.23× at both seeds in both walls worlds, and improves
+exact goal hits everywhere (room 6–8/24 vs nearest-1's 4/24). T-POC-1's wash-out finding
+(nearest-vs-cold ~1×) is thereby refined: the fit washes out a MARGINAL seed advantage, not a real
+one — nearest-1's seed was near-parity with cold, the trial-picked seed is not. (3) Still a
+PARTIAL: room's margin over nearest-1 straddles its 1.3× bar across seeds (1.21×/2.07×), so under
+the AND rule the GO is unearned — booked with the positives gated and the GO asserted FALSE.
+
+**The axis-level reading after three rungs (dream STOP → Route A partial → Route C partial).**
+Selection-by-real-contact is cheap, model-free, and insensitive to the event-density axis that
+limits learned models here — but it is bounded by what the pool already contains; it cannot
+re-ground a skill, only find the least-mismatched one. The learned-model route re-grounds in
+principle but pays in event density. The two failure modes are complementary, which is itself
+evidence for the ITE paper's architecture (map + trials + model only where trials are expensive):
+in a world where real ticks are cheap, imagination must beat 576 ticks of ground truth to earn its
+keep — and at this scale it does not.

@@ -3327,3 +3327,174 @@ move to Route C as planned; (c) investigate whether isolating the RNG-stream shi
 (giving the rollout stage its own substream so it stops perturbing the downstream
 pose/write fits) changes anything material, now that it's confirmed NOT to explain
 room's regret gap on its own.
+
+---
+
+## 2026-07-16 18:40 — Direction received: option (b). Route A booked as closed-partial; Route C planned and pre-registered
+
+The user's direction ("Plan Route C") resolves yesterday's open fork as option (b): accept
+Route A's partial (columns robustly fixed at both seeds, 3.93x -> 1.44x/1.05x; room misses at
+both, 4.64x/2.39x — the sparse-event-density hypothesis stays the named unscheduled lever),
+keep `test_dream_rank`'s gate at STOP, and move to the pre-scheduled fallback.
+
+**Route C, planned and pre-registered** (plan: `~/.claude/plans/message-from-the-previous-
+breezy-aho.md`): drop the dream — rollouts are DETERMINISTIC (argmax policy, fixed world), so
+one real 64-tick rollout per candidate scores it EXACTLY; selection by real trial has regret
+1.0 over its pool by construction, at 576 ticks per goal (Cully et al. 2015's Intelligent
+Trial and Error with the BO surrogate degenerate at pool size 9). The honesty caveat rides
+along verbatim: this is SELECTION, not re-grounding. Two increments, both gated BEFORE any
+measurement (user confirmed the bars): increment 0 = an oracle-headroom probe (median
+pre-fit gain of true-best-of-pool over nearest-1 >= 1.3 in both walls worlds — if even ORACLE
+selection can't clear the post-fit bar, the arms never run; rationale: T-POC-1 measured that
+the fit washes seed advantage OUT, never amplifies it); increment 1 = four arms per world
+(cold / nearest-1 / ITE best-of-pool / uniform-pool-pick control), gated on MEDIAN per-goal
+ratios (the Route A lesson: not means of heavy-tailed ratios) at T-POC-2 increment 1's
+inherited bars (ITE >= 1.3x vs nearest-1, >= 1.2x vs cold), plus the control that could
+refute (uniform pick from the SAME pool must lose to the trial pick, else the win is the
+pool's, not the selection's) and room exact-hit non-regression. Budget honesty by
+OVERCHARGE: the ITE arm drops one full ES iteration (4096 ticks) to pay for its 576 trial
+ticks — strictly under the other arms, so a win cannot be bought with compute. Pool = 8
+BC-nearest elites + cold-zero floor (user-confirmed). New machinery is deliberately thin:
+`SEL_*`/`SelectStats`/`pool_trials`/`run_family_select` in `transfer.mojo` (the probe and
+the arm share `pool_trials`, so increment 0 licenses EXACTLY the mechanism increment 1
+runs), one new test `tests/test_trial_select.mojo` (`# suite-tier: full`); `adapt.mojo` and
+the dream machinery untouched — Route C is what replaces them.
+
+(Process note: the plan was produced with the API repeatedly 529-overloaded — the design
+subagent died twice without output, so the design was completed inline from the exploration
+map. No impact on content, recorded only because the plan file's provenance says "Plan
+agent" in fewer places than usual.)
+
+## 2026-07-16 18:52 — Route C, first measurement (seed 0): columns clears EVERYTHING, room fails ONLY the primary bar — a partial, mirror-image of Route A
+
+Built and ran on the first attempt; the whole test (build + 72 goals + probes + 8 arm-fits
+x 24 goals x 2 worlds) takes ~2 min. Board: `scratch/tpoc2c_trial_select_seed0.txt`.
+
+```
+probe (increment 0):   W1 calib   median gain 1.0    pick-changed 0.00   <- nearest-1 IS the best at home
+                       columns    median gain 6.19   pick-changed 0.83   \ license bar 1.3:
+                       room       median gain 1.68   pick-changed 0.67   / PASSES both
+
+arms (increment 1):    nearest/ITE   cold/ITE   uniform/ITE   ITE hits vs nearest hits
+        columns          4.19x        1.89x       4.08x         1/24 vs 0/24
+        room             1.21x        3.11x       5.23x         6/24 vs 4/24
+        bars             >=1.3        >=1.2        >1.0
+```
+
+**The gate STOPs on room's nearest/ITE = 1.21x vs the 1.3x bar — nothing else fails.** What
+passed is substantial and internally consistent: the W1 calibration reading exactly 1.0
+(median AND mean, zero picks changed) is a strong clean control — in the world the index was
+built in, nearest-1 is simply the best of the pool, so real trials change nothing at home
+and everything they buy is a CROSS-WORLD effect. Columns is decisive on every axis. Room is
+directionally positive everywhere (ITE beats nearest, cold, and the uniform control; it
+IMPROVES exact-hits 6/24 vs 4/24) but its median margin over nearest-1 sits under the bar.
+
+Two readings worth writing down before the seed-1 check:
+  * The probe's headroom ORDERED the outcome: columns 6.19 oracle gain -> 4.19 post-fit;
+    room 1.68 -> 1.21. The fit keeps its historical character (it consumes seed advantage,
+    it does not amplify it), and the increment-0 license was measuring the right thing.
+  * Room's failure mode here is the OPPOSITE of Route A's. Route A failed room because the
+    world model couldn't learn from room's sparse events. Route C needs no model at all —
+    room fails only because nearest-1 is ALREADY comparatively good there (probe pick-changed
+    0.67 but small gains): less headroom for selection to reclaim, not a broken mechanism.
+
+Proceeding per the pre-registered discipline: double-run bit-identity, then the manual
+seed-1 re-run (AND rule) before booking anything.
+
+## 2026-07-16 18:58 — Route C booked: PARTIAL, one bar short of GO — and the wash-out finding gets refined
+
+**Bit-identity: confirmed** (two consecutive seed-0 runs byte-identical). **Seed 1: every
+gate PASSES** — which under the AND rule makes the verdict sharper, not laxer:
+
+```
+                 nearest/ITE  cold/ITE  uniform/ITE   ITE hits vs nearest    probe gain
+seed0 columns      4.19x*      1.89x      4.08x         1/24 vs 0/24           6.19
+seed0 room         1.21x       3.11x      5.23x         6/24 vs 4/24           1.68
+seed1 columns      1.55x       2.01x      2.65x         2/24 vs 1/24           2.34
+seed1 room         2.07x       3.49x      2.70x         8/24 vs 4/24           3.57
+bars               >=1.3       >=1.2      >1.0          non-regression         >=1.3
+```
+
+Room's primary margin STRADDLES its bar across seeds (1.21x under, 2.07x over) — the exact
+straddle shape Route A's room regret showed (and T-POC-2's room before that; room is now
+three-for-three at straddling primary bars). Under the AND rule the two-world GO is
+unearned: **booked as a PARTIAL at the ORIGINAL bars, no flipping.**
+
+**What is unambiguous, and it matters:** ITE beats cold (G3) and the uniform-pool control
+(G4) at BOTH seeds in BOTH worlds with real margins, and improves exact hits everywhere.
+This **refines T-POC-1's wash-out finding** rather than contradicting it: the few-shot fit
+washes out a MARGINAL seed advantage (nearest-1 was near-parity with cold), but a genuinely
+better seed — the trial-picked one — SURVIVES the fit. Seed quality carries through the fit
+in both directions after all; T-POC-1 just didn't have a good enough seed to see the
+positive direction.
+
+**The committed test** (`tests/test_trial_select.mojo`, suite-tier full, ~2 min) asserts
+exactly what reproduces at seed 0: the increment-0 license, the columns primary (>=1.3),
+the room DIRECTIONAL floor (>1.0), the cold floor, the uniform-pool control, the room
+exact-hit non-regression — and the full two-world GO asserted FALSE with a loud "re-open
+and re-judge under the seed AND rule" message if room's margin ever firms up (the
+test_dream_rank inverted-gate pattern). Re-run after the gate restructure: green, all
+printed numbers bit-identical to the original measurement (the gate edit touched no
+computation). Boards: `scratch/tpoc2c_trial_select_seed{0,1}.txt`.
+
+**Docs updated** (ROADMAP MVV + Routes list + Phase D entries for Route A and Route C;
+RESEARCH-NOTES 2026-07-16 addendum mapping the rung onto Cully et al. 2015's Intelligent
+Trial and Error — our stack is ITE minus the BO surrogate, which is degenerate at pool
+size 9 with deterministic rollouts, plus a few-shot fit from the winner). The axis-level
+reading after three rungs: selection-by-real-contact is cheap, model-free and insensitive
+to event density, but bounded by the pool; the learned-model route re-grounds in principle
+but pays in event density. Complementary failure modes — the ITE paper's own architecture
+(map + trials, model only where trials are expensive) is what our numbers argue for: here
+real ticks are cheap, so imagination must beat 576 ticks of ground truth to earn its keep,
+and at this scale it does not.
+
+## 2026-07-16 21:02 — Fleshing out the remaining reroute candidate: world-model PRIOR transfer (discussion, not scheduled)
+
+At the user's prompt, expanded the one-line T-POC-2 reroute candidate ("transfer the MODEL
+rather than adapt inside it") into a concrete rung shape, recorded here so the next
+scheduling decision starts from it rather than from the one-liner.
+
+**The idea.** Everything the ladder has moved across worlds so far is BEHAVIOUR — policies
+(T-POC-1 retrieval, Route C selection) or policy adaptation inside a model (T-POC-2/Route
+A). The world model itself has always been fit from scratch, per world. Prior transfer
+flips the object: the thing that carries to world N+1 is the fitted WM weights themselves,
+used as the PRIOR for fitting world N+1's model from far fewer real transitions. The seams
+already exist twice over: `fit_operator`'s caller-prefilled warm-start buffer plus its
+`reg_lambda` L2 anchor toward `slow_weights`, and the Reptile two-timescale meta-loop —
+the Vision-A spine (slow = meta-learned prior, fast = per-task fit) pointed at
+`WeightedWMMemory` instead of the operator.
+
+**Why the last two rungs accidentally built the case for it:**
+  1. Room is a LOW-DATA problem (event density 0.0027, Route A's diagnosed killer), and
+     priors are the low-data tool: gravity is identical across all these worlds and the
+     walls delta is demonstrably easy (pose blocked-move 1.0) — a cold fit relearns
+     physics from room's scarce events; a warm fit only needs the delta. The world that
+     defeated Route A is exactly the world where a prior should pay most.
+  2. It is RE-GROUNDING, not selection — the first rung whose carried object is knowledge
+     about how the world WORKS, unbounded by what a behaviour pool already contains
+     (Route C's booked caveat).
+  3. The axis reading after Route C (models pay where data is sparse/expensive; trials
+     where it's cheap) names this lever: make models cheap in the sparse regime.
+
+**Rung shape (if scheduled).** Increment 0, cheap: fit W1's model, then columns/room two
+ways at several SMALL transition budgets (32/64/128) — cold vs warm-from-W1 — gated on
+held-out `held_out_score` changed-cell at matched budget, margin largest at the smallest
+budgets. The refuting control: a SCRAMBLED-prior arm (permuted W1 weights) separating
+"the right prior transfers" from "any warm init helps" — the random-elite arm's role,
+re-cast. Increment 1, the real claim: Reptile-meta-learn the slow WM prior across a
+FAMILY of worlds (the four walls kinds x variants; `ued.mojo` can generate more), then
+measure few-transition adaptation to a HELD-OUT layout — prior earned across worlds,
+measured in a world it never saw. Metric discipline Route A paid for: gate on one-step
+AND the K-step `rollout_accuracy_curve`, medians, >=2 seeds AND rule. Built-in downstream
+signal: if the prior makes room's model genuinely good, `test_dream_rank`'s booked
+negative starts failing loudly — the re-open wire is already in place.
+
+**Named risks, up front:** (a) negative transfer of the MODEL is live, not hypothetical —
+T-POC-1 measured 4-8x-worse-than-cold for mismatched policies; the W1 basin could trap
+the fit away from the walls delta (this is the refutable hypothesis that makes it a real
+rung); (b) it might be trivially easy — the WM is local-receptive and gravity looks the
+same from every cell, so split the held-out score wall-adjacent vs open cells to see
+where the delta lives; (c) a better model does NOT automatically fix picking (T-POC-2's
+whole finding) — the rung's gate stays in model currency; the dream-rank re-read is
+context. Probably the cheapest unscheduled rung on the board: nearly all measurement,
+almost no new machinery. Not scheduled — the next-rung choice stays with the user.

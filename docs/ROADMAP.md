@@ -87,8 +87,15 @@ learns both *what* to think and, eventually, *how* to learn.
   and the training-wheels ethos (simplified worlds first, removable priors) unchanged. First
   scheduled rung: **T-POC-1** — done 2026-07-14 (the index carries, the basin does not). **T-POC-2**
   (adaptation in a learned dream) followed and **STOPped** at its gate on 2026-07-15: the dream
-  orders but cannot pick, localized to an objective mismatch rather than a capacity limit. Currently
-  scheduled: **Route A** — rollout-level dream fidelity (end of "Next").
+  orders but cannot pick, localized to an objective mismatch rather than a capacity limit.
+  **Route A** (rollout-level dream fidelity) ran 2026-07-16 and booked a **partial**: columns
+  robustly fixed at both seeds (regret 3.93× → 1.44×/1.05×), room misses at both (4.64×/2.39×) —
+  the dream gate stays STOP. **Route C** (ITE-style real-trial selection, the pre-scheduled
+  fallback) ran the same day and booked a **partial one bar short of GO**: real-trial selection
+  over the retrieved pool beats cold and the uniform-pool control at both seeds in both walls
+  worlds, beats nearest-1 decisively in columns (4.19×/1.55×), but room's primary margin straddles
+  its bar across seeds (1.21×/2.07× vs 1.3×) — committed as `tests/test_trial_select.mojo`
+  (Phase D and the Routes list at the end of "Next" for details). Next rung: to be scheduled.
 
 **Values.**
 
@@ -493,6 +500,34 @@ knowledge earned in world N, measured in world N+1.
   Booked as a regression: `tests/test_dream_rank.mojo` asserts the negative and fails loudly if it
   stops reproducing (a GOOD failure = someone fixed rollout fidelity → re-open the rung).
   (JOURNAL 2026-07-15.)
+- **Route A — rollout-level dream fidelity: PARTIAL, gate stays STOP (2026-07-16).**
+  `WMRolloutMemory` fits the world model over K=8 ticks of its own rollout (autoregressive grid
+  channel, pose held to ground truth), warm-started from the one-step fit — the Dreamer/PlaNet
+  prescription aimed at T-POC-2's measured cause. It works exactly where the diagnosis pointed:
+  **columns regret 3.93× → 1.44×/1.05× (seeds 0/1), both bars cleared with margin** — the first
+  confirmed fix of a dream-ranking failure. But room misses at both seeds (4.64×/2.39×) and W1
+  calibration worsens (5.6× → 19.4×), so the two-world GO stays unearned and `test_dream_rank`
+  remains the booked negative. Untested suspect for the split: room's transition-event density
+  (0.0027, the sparsest of the three worlds) starves any per-tick error signal the K-step fit
+  needs. En route, the RNG-stream fragility class was re-confirmed twice (a diagnostic probe pair
+  silently diverged over one extra RNG-consuming call; room's pose-validity trip at seed 0
+  vanished at seed 1). (JOURNAL 2026-07-16.)
+- **Route C — ITE-style real-trial selection: PARTIAL, one bar short of GO
+  (`tests/test_trial_select.mojo`, 2026-07-16).** Selection without the dream: rollouts are
+  deterministic, so one real 64-tick rollout per pool member (8 BC-nearest elites + cold-zero)
+  scores it exactly; the few-shot fit is seeded from the real-trial winner, selection ticks
+  overcharged (ITE's fit drops a full ES iteration). Increment-0 oracle probe licensed the arms
+  (median pre-fit gain 6.19×/1.68× columns/room at seed 0; W1 calibration exactly 1.0 — at home
+  nearest-1 already IS the pool's best, so the pool's headroom is purely a cross-world effect).
+  Post-fit, at both seeds in both walls worlds: ITE beats cold (1.89–3.49×) and the uniform-pool
+  control (2.65–5.23×), improves exact hits everywhere (room 6–8/24 vs nearest's 4/24), and beats
+  nearest-1 decisively in columns (4.19×/1.55×) — but room's primary margin **straddles the 1.3×
+  bar across seeds (1.21×/2.07×)**, so under the AND rule the GO is unearned. Committed with the
+  reproducible positives gated and the full GO asserted FALSE (a pass = re-open + seed-AND
+  re-judge). Durable finding: **across the world gap the index is good but not best-of-pool**
+  (pick-changed 67–83% in walls worlds vs 0% at home), **and a handful of real trials — model-free,
+  event-density-insensitive — reclaims much of what retrieval leaves on the table.**
+  (JOURNAL 2026-07-16.)
 
 ## Next — the path to full ARC-AGI 2 (Vision A)
 
@@ -757,7 +792,8 @@ the pre-registered negative-transfer reading, booked). **The evidence-backed nex
 (adaptation)** — re-ground a retrieved skill in the new world's dynamics via the B-POC-3 world
 model. It ran on 2026-07-15 and **STOPped at its increment-0 gate** (Phase D above).
 
-**2026-07-15 — T-POC-2 STOPped; the axis continues as Route A (scheduled next).** The dream
+**2026-07-15 — T-POC-2 STOPped; the axis continued as Route A, then Route C (both ran 2026-07-16,
+both booked PARTIAL — see their entries below).** The dream
 half-ORDERS candidates (tau ~0.4–0.7, clean against a ~0.1 scrambled control) but **cannot PICK**
 (top-1 regret 3.9× in columns vs a pre-registered 2.0×; room only straddles the bar). Since `fit_dream_policy` follows the
 dream's **argmax**, ordering alone cannot carry the adaptation arm. Crucially the STOP is **not** a
@@ -767,22 +803,40 @@ for a 64-tick autoregressive rollout, and the measured trend is monotonic the wr
 ("a retrieved skill can be re-grounded in imagination") is therefore **not refuted** — what is
 refuted is *one-step-fitted* imagination, a much narrower claim.
 
-- **Route A — rollout-level dream fidelity (the scheduled rung).** Fit the world model to be
-  accurate over K ticks of **its own** rollout (multi-step loss / scheduled sampling — the
-  Dreamer/PlaNet lesson), not one ground-truth step. This attacks the measured cause directly; our
-  own numbers are the argument for it. Cost: K× per fitness eval (K≈8 affordable) plus collecting
-  short episode SEQUENCES rather than single transitions (`collect_transitions` nearly does this).
-  Pre-register the same gate on the same metric — `tests/test_dream_rank.mojo` is the booked
-  negative and will FAIL when this works, which is the intended signal to re-open the rung and
-  license increment 1 (`adapt.run_family_adapt`, already built and compiling but **unrun**).
-  Honest risk: at ~0.5% event density the model may drift regardless; if rollout-fitted imagination
-  still misses the regret bar, the finding upgrades to "imagination does not pay at this scale" —
-  a strong two-rung result — and Route C becomes the graceful fallback.
-- **Route C — ITE-style real-trial selection over `nearest_k` (fallback, deliberately deferred).**
-  Drop the dream: spend a few REAL rollouts to pick among k retrieved elites, then the standard
-  few-shot fit. Cheap, stands on T-POC-1's measured ground (the index carries), budget-honest. But
-  it is *selection*, not re-grounding — it sidesteps the mission's actual question, which is why it
-  is not scheduled first despite being the safer win.
+- **Route A — rollout-level dream fidelity (RAN 2026-07-16; booked PARTIAL, gate stays STOP).**
+  Fit the world model to be accurate over K=8 ticks of **its own** rollout (the Dreamer/PlaNet
+  lesson), warm-started from the one-step fit. The mechanism is real and the fix is decisive
+  exactly where the diagnosis pointed: **columns clears both pre-registered bars at both seeds**
+  (regret 3.93× → 1.44×/1.05×; tau over the bar). But **room misses the regret bar at both seeds**
+  (4.64×/2.39×) and W1 calibration worsened — GO required BOTH walls worlds, so `test_dream_rank`
+  stays the booked negative. The mechanistically-grounded suspect for the split, untested: room has
+  the sparsest transition-event density of the three worlds (0.0027 vs 0.0053/0.0075) — the
+  thinnest per-tick error signal for any WM fit to chase; a room-specific data-scale lever (more
+  transitions, larger `WM_ROLLOUT_K`) is the named follow-up if the dream axis is re-opened. En
+  route the rung also re-confirmed the RNG-stream fragility class TWICE (a diagnostic probe pair
+  silently diverging over one extra collection call; room's pose-validity trip at seed 0 vanishing
+  at seed 1). Increment 1 (`adapt.run_family_adapt`) stays **unrun** scaffolding. (JOURNAL
+  2026-07-16.)
+- **Route C — ITE-style real-trial selection over `nearest_k` (RAN 2026-07-16; booked PARTIAL,
+  one bar short of GO — `tests/test_trial_select.mojo`).** Drop the dream: rollouts are
+  deterministic, so ONE real 64-tick rollout per candidate scores it exactly — real-trial argmin
+  over the pool (8 BC-nearest elites + cold-zero), then the standard few-shot fit seeded from the
+  winner, the selection ticks overcharged (one full ES iteration dropped for 576 ticks used).
+  Cully et al. 2015 (ITE) with the BO surrogate degenerate at pool size 9; *selection*, not
+  re-grounding — the caveat stands. Measured (seed 0 committed / seed 1 manual, AND rule):
+  the increment-0 oracle probe licenses cleanly (median pre-fit gain 6.19×/1.68×; W1 calibration
+  exactly 1.0 — at home nearest-1 IS the pool's best, so everything trials buy is a cross-world
+  effect); post-fit, **ITE beats cold (1.89–3.49×) and the uniform-pool control (2.65–5.23×) at
+  both seeds in both worlds, beats nearest-1 decisively in columns (4.19×/1.55×), and improves
+  exact hits everywhere** (room 6–8/24 vs nearest's 4/24) — but room's primary margin over
+  nearest-1 **straddles the 1.3× bar across seeds (1.21×/2.07×)**, the same straddle shape Route
+  A's room regret showed, so under the AND rule the two-world GO is unearned. Booked per house
+  style: the reproducible positives are gated, the full GO is asserted FALSE (fails loudly to
+  force a re-open + seed-AND re-judge if room's margin firms up). The rung's durable finding:
+  **across the world gap the index is good but not best-of-pool** (probe pick-changed 67–83% in
+  walls worlds vs 0% at home), **and a few real trials reclaim much of what retrieval alone
+  leaves on the table — cheaply, model-free, and insensitive to the event-density axis that
+  defeated the dream in room.**
 - **Route W — migrate B-POC-3 onto the weighted objective (unscheduled, newly evidenced).** T-POC-2
   showed B-POC-3's gates are RNG-position-fragile: shifting the seed(0) stream by one extra fit
   makes gate 3's arms BOTH collapse to identity (0.0106 vs 0.0106 against a calibrated 0.362 vs
@@ -796,14 +850,16 @@ refuted is *one-step-fitted* imagination, a much narrower claim.
   worlds), a new-dynamics world (sokoban-lite pushable blocks), a non-grid domain through the
   `Domain` seam. Rung O stays a live lever on the Vision-A track.
 
-**Route A's pre-registration must apply the three discipline points T-POC-2 paid for** — *match the
-metric to its consumer*, *every claim needs a control that could refute it*, and *a margin must
-survive a different draw* (all now in "Working principles"). Concretely, for Route A: gate on
-**regret** (what the ES actually consumes), not tau; keep the scrambled-tail and identity-grid arms;
-pin bars from ≥ 2 seeds and report **median** regret, not the mean of ratios. And demand
-**headroom** — T-POC-2's room world technically MET the GO (tau 0.55, regret 1.97× vs a 2.0× bar)
-while straddling that bar across runs (1.97× / 2.06× / 2.17×). A pass 1.5% inside a bar, on a metric
-whose seed noise runs to tens of percent, is noise wearing a GO's clothes.
+**The three discipline points T-POC-2 paid for** — *match the metric to its consumer*, *every claim
+needs a control that could refute it*, and *a margin must survive a different draw* (all now in
+"Working principles") — were applied by both follow-on routes: gates on what the consumer actually
+uses (regret for the dream; the fitted arm's held-out distance for selection), refuting controls
+kept (scrambled tail / identity grid; the uniform-pool pick), bars judged under the ≥ 2-seed AND
+rule on **median** ratios, not means. And demand **headroom** — T-POC-2's room world technically
+MET the GO (tau 0.55, regret 1.97× vs a 2.0× bar) while straddling that bar across runs
+(1.97× / 2.06× / 2.17×), and room went on to straddle BOTH follow-on routes' primary bars the same
+way (Route A regret 4.64×/2.39× vs 2.0; Route C margin 1.21×/2.07× vs 1.3). A pass 1.5% inside a
+bar, on a metric whose seed noise runs to tens of percent, is noise wearing a GO's clothes.
 
 ## Beyond ARC-AGI 2
 

@@ -484,6 +484,284 @@ def run_family(
 
 
 # ==========================================
+# Route C — ITE-style real-trial selection (the T-POC-2 fallback rung)
+# ==========================================
+# Drop the dream: spend a few REAL rollouts to pick among the SEL_K BC-nearest
+# retrieved elites (plus a cold-zero floor member), then run the standard
+# few-shot fit seeded from the winner. Rollouts are deterministic (argmax
+# policy, fixed world), so ONE policy_score rollout per candidate IS its exact
+# real score — Cully et al. 2015's Intelligent Trial and Error with the
+# Bayesian-optimization surrogate degenerate at this pool size. Honesty caveat
+# (ROADMAP): this is SELECTION, not re-grounding — it sidesteps the mission's
+# re-grounding question, which is why it was scheduled as the fallback.
+comptime SEL_K = 8  # retrieved pool members (BC-nearest elites)
+comptime SEL_POOL = SEL_K + 1  # + the cold-zero floor member
+# Budget honesty: the ITE arm's SEL_POOL real trials (SEL_POOL * SB_T = 576
+# ticks) are paid for by dropping ONE full ES iteration (2 * FEW_N * SB_T =
+# 4096 ticks) from its fit — a strict overcharge, so a win can never be bought
+# with extra ticks.
+comptime SEL_FIT_ITERS = FEW_ITERS - 1
+
+
+# Retrieve the SEL_K nearest elites and score every pool member (the elites,
+# plus the cold-zero policy as member SEL_K) with one real rollout each;
+# d_out[i] is the member's MSE distance to the goal (lower = closer). Returns
+# the argmin index. ZERO RNG draws — the oracle-headroom probe (increment 0)
+# and the ITE arm (increment 1) both measure the mechanism through this one
+# def, so the probe's licensing claim is about exactly what the arm does.
+def pool_trials(
+    mut emap: EliteMap,
+    task: SandboxTask,
+    tgt: UnsafePointer[Float32, MutAnyOrigin],
+    key: Int64,
+    slots: UnsafePointer[Int, MutAnyOrigin],
+    d_out: UnsafePointer[Float32, MutAnyOrigin],
+    cand: UnsafePointer[Float32, MutAnyOrigin],
+    grid: UnsafePointer[Float32, MutAnyOrigin],
+    obs: UnsafePointer[Float32, MutAnyOrigin],
+    logit: UnsafePointer[Float32, MutAnyOrigin],
+    bc: UnsafePointer[Float32, MutAnyOrigin],
+    cells: UnsafePointer[Int64, MutAnyOrigin],
+) -> Int:
+    emap.nearest_k(tgt, slots, SEL_K)
+    var best = 0
+    for i in range(SEL_POOL):
+        if i == SEL_K:
+            memset_zero(cand, POLICY_DIM)
+        else:
+            memcpy(
+                dest=cand,
+                src=emap.weights + slots[i] * POLICY_DIM,
+                count=POLICY_DIM,
+            )
+        var r = policy_score(cand, task, tgt, key, grid, obs, logit, bc, cells)
+        d_out[i] = -r[0]
+        if d_out[i] < d_out[best]:
+            best = i
+    return best
+
+
+# Aggregate mean fitness (higher = closer) and exact-hit fraction per arm for
+# one goal family, plus the selection diagnostics: how often the real trials
+# picked something other than nearest-1, and the trial-tick ledger.
+struct SelectStats(Copyable, Movable):
+    var cold: Float32
+    var nearest: Float32
+    var ite: Float32
+    var unif: Float32
+    var cold_hit: Float32
+    var nearest_hit: Float32
+    var ite_hit: Float32
+    var unif_hit: Float32
+    var pick_changed: Int
+    var trial_ticks: Int
+    var n: Int
+
+    def __init__(out self):
+        self.cold = 0.0
+        self.nearest = 0.0
+        self.ite = 0.0
+        self.unif = 0.0
+        self.cold_hit = 0.0
+        self.nearest_hit = 0.0
+        self.ite_hit = 0.0
+        self.unif_hit = 0.0
+        self.pick_changed = 0
+        self.trial_ticks = 0
+        self.n = 0
+
+
+# One family of goals through the four Route C arms. Per-goal MSE distances
+# are written to the caller's d_* buffers (length num) so the test can gate on
+# MEDIAN per-goal ratios (the Route A discipline), not means of ratios.
+# RNG draw order per goal, fixed and load-bearing (the B-POC-3 stream-position
+# lesson): cold fit -> nearest fit -> ITE trials (ZERO draws) + fit ->
+# uniform-pool pick (ONE draw) + fit.
+def run_family_select(
+    mut emap: EliteMap,
+    task: SandboxTask,
+    goal_bc: UnsafePointer[Float32, MutAnyOrigin],
+    goal_key: UnsafePointer[Int64, MutAnyOrigin],
+    num: Int,
+    mut pol_ws: ESWorkspace[SandboxPolicyMemory],
+    pol_slow: UnsafePointer[Float32, MutAnyOrigin],
+    d_cold: UnsafePointer[Float32, MutAnyOrigin],
+    d_near: UnsafePointer[Float32, MutAnyOrigin],
+    d_ite: UnsafePointer[Float32, MutAnyOrigin],
+    d_unif: UnsafePointer[Float32, MutAnyOrigin],
+) -> SelectStats:
+    var pol_fast = alloc[Float32](POLICY_DIM)
+    var cand = alloc[Float32](POLICY_DIM)
+    var slots = alloc[Int](SEL_K)
+    var pool_d = alloc[Float32](SEL_POOL)
+    # Scoring scratch.
+    var grid = alloc[Float32](SB_CELLS)
+    var obs = alloc[Float32](OBS_DIM)
+    var logit = alloc[Float32](SB_ACTIONS)
+    var bc = alloc[Float32](BC_DIM)
+    var cells = alloc[Int64](SB_T)
+
+    var stats = SelectStats()
+    stats.n = num
+
+    for g in range(num):
+        var tgt = goal_bc + g * BC_DIM
+        var key = goal_key[g]
+        var demos = make_demos(task, tgt)
+
+        # --- cold: zero seed, full budget.
+        memset_zero(pol_fast, POLICY_DIM)
+        fit_operator[SandboxPolicyMemory](
+            pol_fast,
+            pol_ws,
+            pol_slow,
+            demos,
+            FEW_N,
+            FEW_ALPHA0,
+            FEW_ALPHA1,
+            FEW_SIGMA0,
+            FEW_SIGMA1,
+            FEW_ITERS,
+            Float32(0.0),
+        )
+        var r_cold = policy_score(
+            pol_fast, task, tgt, key, grid, obs, logit, bc, cells
+        )
+        stats.cold += r_cold[0]
+        stats.cold_hit += Float32(r_cold[1])
+        d_cold[g] = -r_cold[0]
+
+        # --- nearest-1: the T-POC-1 transfer arm, full budget.
+        var n_slot = emap.nearest(tgt)
+        memcpy(
+            dest=pol_fast,
+            src=emap.weights + n_slot * POLICY_DIM,
+            count=POLICY_DIM,
+        )
+        fit_operator[SandboxPolicyMemory](
+            pol_fast,
+            pol_ws,
+            pol_slow,
+            demos,
+            FEW_N,
+            FEW_ALPHA0,
+            FEW_ALPHA1,
+            FEW_SIGMA0,
+            FEW_SIGMA1,
+            FEW_ITERS,
+            Float32(0.0),
+        )
+        var r_near = policy_score(
+            pol_fast, task, tgt, key, grid, obs, logit, bc, cells
+        )
+        stats.nearest += r_near[0]
+        stats.nearest_hit += Float32(r_near[1])
+        d_near[g] = -r_near[0]
+
+        # --- ITE: real-trial argmin over the pool (zero RNG), then the fit
+        # at SEL_FIT_ITERS — the selection ticks' overcharge.
+        var best = pool_trials(
+            emap,
+            task,
+            tgt,
+            key,
+            slots,
+            pool_d,
+            cand,
+            grid,
+            obs,
+            logit,
+            bc,
+            cells,
+        )
+        stats.trial_ticks += SEL_POOL * SB_T
+        if best != 0:
+            stats.pick_changed += 1
+        if best == SEL_K:
+            memset_zero(pol_fast, POLICY_DIM)
+        else:
+            memcpy(
+                dest=pol_fast,
+                src=emap.weights + slots[best] * POLICY_DIM,
+                count=POLICY_DIM,
+            )
+        fit_operator[SandboxPolicyMemory](
+            pol_fast,
+            pol_ws,
+            pol_slow,
+            demos,
+            FEW_N,
+            FEW_ALPHA0,
+            FEW_ALPHA1,
+            FEW_SIGMA0,
+            FEW_SIGMA1,
+            SEL_FIT_ITERS,
+            Float32(0.0),
+        )
+        var r_ite = policy_score(
+            pol_fast, task, tgt, key, grid, obs, logit, bc, cells
+        )
+        stats.ite += r_ite[0]
+        stats.ite_hit += Float32(r_ite[1])
+        d_ite[g] = -r_ite[0]
+
+        # --- uniform-pool control: one draw picks a member of the SAME pool,
+        # full budget. Isolates "the trials pick well" from "the pool is
+        # good"; if this arm matches ITE, selection adds nothing.
+        var u = Int(random_float64(0.0, 1.0) * Float64(SEL_POOL))
+        if u >= SEL_POOL:
+            u = SEL_POOL - 1
+        if u == SEL_K:
+            memset_zero(pol_fast, POLICY_DIM)
+        else:
+            memcpy(
+                dest=pol_fast,
+                src=emap.weights + slots[u] * POLICY_DIM,
+                count=POLICY_DIM,
+            )
+        fit_operator[SandboxPolicyMemory](
+            pol_fast,
+            pol_ws,
+            pol_slow,
+            demos,
+            FEW_N,
+            FEW_ALPHA0,
+            FEW_ALPHA1,
+            FEW_SIGMA0,
+            FEW_SIGMA1,
+            FEW_ITERS,
+            Float32(0.0),
+        )
+        var r_unif = policy_score(
+            pol_fast, task, tgt, key, grid, obs, logit, bc, cells
+        )
+        stats.unif += r_unif[0]
+        stats.unif_hit += Float32(r_unif[1])
+        d_unif[g] = -r_unif[0]
+
+    var inv = Float32(1.0) / Float32(num if num > 0 else 1)
+    stats.cold *= inv
+    stats.nearest *= inv
+    stats.ite *= inv
+    stats.unif *= inv
+    stats.cold_hit *= inv
+    stats.nearest_hit *= inv
+    stats.ite_hit *= inv
+    stats.unif_hit *= inv
+
+    pol_fast.free()
+    cand.free()
+    slots.free()
+    pool_d.free()
+    grid.free()
+    obs.free()
+    logit.free()
+    bc.free()
+    cells.free()
+    return stats^
+
+
+# ==========================================
 # Goal generators
 # ==========================================
 # Family S: end-states of fresh random single policies (RNG stream disjoint from
