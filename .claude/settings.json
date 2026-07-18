@@ -1,0 +1,43 @@
+{
+  "$comment": "Esper governance — committed project settings. Discipline guardrails (CLAUDE.md) made mechanical. Per-machine overrides go in settings.local.json.",
+  "permissions": {
+    "allow": [
+      "Bash(./esper run *)",
+      "Bash(./esper test *)",
+      "Bash(./esper fmt *)",
+      "Bash(./esper suite *)",
+      "Bash(./esper fast)",
+      "Bash(./esper main)",
+      "Bash(./esper solve *)",
+      "Bash(./run_tests.sh *)",
+      "Bash(.claude/hooks/journal_check.sh)",
+      "WebSearch",
+      "WebFetch(domain:arxiv.org)",
+      "Bash(rtk git *)",
+      "Bash(rtk wc *)",
+      "Bash(rtk grep *)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/mojo_lint.py\""
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/git_guard.sh\""
+          }
+        ]
+      }
+    ]
+  }
+}

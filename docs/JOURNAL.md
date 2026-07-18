@@ -3498,3 +3498,56 @@ where the delta lives; (c) a better model does NOT automatically fix picking (T-
 whole finding) — the rung's gate stays in model currency; the dream-rank re-read is
 context. Probably the cheapest unscheduled rung on the board: nearly all measurement,
 almost no new machinery. Not scheduled — the next-rung choice stays with the user.
+
+## 2026-07-18 08:50 — Governance tooling: the discipline in CLAUDE.md, made mechanical (meta, but load-bearing)
+
+A meta-task, but one that shapes every future session, so it earns an entry: built an
+in-repo Claude Code governance layer under `.claude/` that turns the prose rules of
+CLAUDE.md / ROADMAP.md into automation. The motivation is that all of Esper's discipline
+— the Mojo 1.0.0b2 idiom pin, pure-Mojo `src/`, no hot-loop alloc, no runtime DSL,
+commit-to-master-never-push, journal-every-step — has until now been enforced only by
+me reading and remembering it. On a tired day a `fn` or a `from math import` or an
+errant `git push` slips through, and nothing catches it until CI (or worse, never). The
+governance layer is the same "honest by construction" instinct the gate discipline
+applies to experiments, turned on the development process itself.
+
+**What landed** (all untracked until a deliberate commit): PreToolUse hooks
+(`hooks/mojo_lint.py`, `hooks/git_guard.sh`) wired in a committed `.claude/settings.json`;
+commands `/commit-esper`, `/journal`, `/gate`, `/status`, `/next`, `/mojo-check`; skills
+`esper-discipline-review` (with a `references/rules.md` catalog of the judgment-level
+rules and a `mojo-idioms.md` cheat-sheet) and `esper-gate`; five model-pinned agents
+(`mojo-linter`/`esper-explorer` on Haiku, `roadmap-scribe` on Sonnet,
+`discipline-reviewer`/`gate-designer` on Opus) plus `docs/MODELS.md` explaining the
+per-task model heuristic. A "Governance tooling" pointer was added to CLAUDE.md.
+
+**Design decisions worth recording (the *why* behind the shape):**
+  1. **Block only the deterministic hard rules; warn on everything context-dependent.**
+     `mojo_lint.py` DENYs `fn`/`alias`/`Tensor`/`__moveinit__`/non-`std.` imports/Python
+     ·ML-libs-in-`src/` (regex-decidable, near-zero false positive), but only WARNs on
+     the SIMD-remainder / hot-loop-alloc / SIMD-`.round()` smells, which a regex can
+     misjudge. A false DENY is worse than a missed WARN — it would block legitimate work
+     and train me to fight the hook.
+  2. **Deviation from the approved plan:** the `if self.data:`-guard-in-`__del__` rule
+     was planned as a block but shipped as a WARN. Reliably bounding the `__del__` scope
+     from an edit *snippet* (Edit sends only `new_string`, often without the enclosing
+     def) isn't regex-safe, so blocking it risked denying edits that were actually fine.
+  3. **Lint only ADDED lines** (`new_string`/`content`), never the whole file, so an Edit
+     to a file that already contains a pre-existing pattern elsewhere isn't blocked on
+     code the user isn't touching.
+  4. **Warnings ride `hookSpecificOutput.additionalContext`** (non-blocking, visible to
+     the model), DENYs ride `permissionDecision:"deny"` — so advisory notes inform
+     without gating.
+
+**A discovery mid-build, worth flagging as a live gotcha:** once `.claude/settings.json`
+existed, the hooks went live *in the running session* — my own test harness Bash call,
+which contained the literal string `git push origin master` as a `printf` argument, was
+denied by `git_guard.sh`. Good proof the wiring works, but it means testing the git guard
+requires keeping the trigger words out of the parent command line: the fix was a driver
+script that assembles `"git"+" push"` at runtime, so the Bash tool call itself reads
+clean. The Mojo linter was likewise confirmed live by attempting a real `Write` of an
+`fn`-containing `src/*.mojo` and watching the tool call get blocked with the exact reason.
+All hooks verified (9 linter cases incl. a clean-code pass and a non-`.mojo` pass; 5
+git-guard cases incl. a chained `&&`); `settings.json` parses; every command/agent/skill
+has valid frontmatter. Left uncommitted — committing is a user-initiated step, and doing
+so should itself dogfood `/commit-esper`. One operational note for future me: fresh
+sessions need a reload to pick up the committed `settings.json` hooks.

@@ -30,6 +30,15 @@ Maintain a running, timestamped development narrative in **`docs/JOURNAL.md`**. 
 
 This is a local-first repo. When asked to commit, commit **directly to `master`** — no feature branch, no PR — and **never push to the remote**. (The standard `Co-Authored-By` commit-message trailer still applies.)
 
+## Governance tooling (`.claude/`)
+
+The discipline in this file is made mechanical by an in-repo Claude Code layer under `.claude/`:
+
+- **Hooks** (PreToolUse, active automatically): `hooks/mojo_lint.py` blocks hard Mojo 1.0.0b2 idiom violations on edit (`fn`/`alias`/`Tensor`/`__moveinit__`/non-`std.` imports/Python·ML-libs in `src/`) and warns on hot-loop/SIMD smells; `hooks/git_guard.sh` blocks `git push` and commits off `master`.
+- **Commands:** `/commit-esper` (fmt → `./esper fast` → journal-check → commit to master), `/journal`, `/gate` (register/eval pre-registered GO·STOP gates in `docs/gates/`), `/status`, `/next`, `/mojo-check` (local CI parity).
+- **Skills:** `esper-discipline-review` (judgment-level rules a regex can't catch — see its `references/rules.md` + `mojo-idioms.md`) and `esper-gate` (honest measurement).
+- **Agents + model policy:** `agents/*` are pinned per task (Haiku for scans/exploration, Sonnet for scoped builds, Opus for discipline review / gate design). The rationale lives in **`docs/MODELS.md`**.
+
 ## Toolchain (important)
 
 Core/runtime code targets **Mojo 1.0.0b2** (1.0 beta). This is a hard pin: the 1.0 line removed `fn` (use `def`), renamed `alias`→`comptime`, requires `std.`-qualified stdlib imports, removed the stdlib `Tensor` type, and changed the `UnsafePointer`/argument conventions. Code written for older nightlies will not compile. Mojo is installed from **PyPI** (`uv pip install "mojo==1.0.0b2" --prerelease allow`), not the Modular wheel index.
